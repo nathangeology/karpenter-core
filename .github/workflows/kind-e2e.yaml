@@ -16,7 +16,7 @@ jobs:
     steps:
     - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
     - name: Set up Python 3.10
-      uses: actions/setup-python@v3
+      uses: actions/setup-python@82c7e631bb3cdc910f68e0081d67478d79c6982d # v5.1
       with:
         python-version: "3.10"
     - uses: ./.github/actions/install-deps
@@ -50,9 +50,11 @@ jobs:
         kubectl get nodepools
         kubectl get pods -A
         kubectl describe nodes
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
       with:
         repository: nathangeology/karpenter_evaluate
+        ref: main/42340d4
+        fetch-depth: 0
         path: ./karpenter_eval/ # Installs to a folder in the Karpenter repo for the test
     - name: install KPI report dependencies
       shell: bash
