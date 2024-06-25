@@ -147,7 +147,7 @@ var _ = Describe("Performance", func() {
 			deployments := []*appsv1.Deployment{}
 			// TODO: Adjust pod options to be a fixed set of option (maybe update the ones I get from the k8s test api)
 			fmt.Printf("Debug printing of pod options so I can make adjustments:\n")
-			podOptions := test.MakeDiversePodOptions()
+			podOptions := simpleStdScenarioInstanceSpreadPodOptions(750, 1500)
 			fmt.Printf("%#v\n", podOptions)
 			for _, option := range podOptions {
 				deployments = append(deployments, test.Deployment(
@@ -163,7 +163,7 @@ var _ = Describe("Performance", func() {
 			}
 
 			env.ExpectCreated(nodePool, nodeClass)
-			env.EventuallyExpectHealthyPodCountWithTimeout(10*time.Minute, labelSelector, len(deployments)*replicas)
+			env.EventuallyExpectHealthyPodCountWithTimeout(15*time.Minute, labelSelector, len(deployments)*replicas)
 
 			env.TimeIntervalCollector.Start("Drift")
 			nodePool.Spec.Template.ObjectMeta.Labels = lo.Assign(nodePool.Spec.Template.ObjectMeta.Labels, map[string]string{
