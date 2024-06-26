@@ -161,7 +161,7 @@ var _ = Describe("Performance", func() {
 				time.Sleep(2 * time.Second)
 				env.ExpectCreated(dep)
 			}
-
+			// NOTE: To update replicas update in the object and then call expect updated
 			env.ExpectCreated(nodePool, nodeClass)
 			env.EventuallyExpectHealthyPodCountWithTimeout(15*time.Minute, labelSelector, len(deployments)*replicas)
 
