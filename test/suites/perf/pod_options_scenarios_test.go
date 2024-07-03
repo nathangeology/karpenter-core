@@ -9,16 +9,19 @@ import (
 	"sigs.k8s.io/karpenter/pkg/test"
 )
 
-func MakeFixedResourceTopologySpreadPodOptions(key string, cpu int, memory int) test.PodOptions {
+func MakeFixedResourceTopologySpreadPodOptions(key string, cpu int, memory int, deployment_label string) test.PodOptions {
+	deploy_labels := map[string]string{
+		"my-label": deployment_label,
+	}
 	return test.PodOptions{
-		ObjectMeta: metav1.ObjectMeta{Labels: lo.Assign(test.RandomLabels(), map[string]string{test.DiscoveryLabel: "owned"})},
+		ObjectMeta: metav1.ObjectMeta{Labels: lo.Assign(deploy_labels, map[string]string{test.DiscoveryLabel: "owned"})},
 		TopologySpreadConstraints: []v1.TopologySpreadConstraint{
 			{
 				MaxSkew:           1,
 				TopologyKey:       key,
 				WhenUnsatisfiable: v1.DoNotSchedule,
 				LabelSelector: &metav1.LabelSelector{
-					MatchLabels: test.RandomLabels(),
+					MatchLabels: deploy_labels,
 				},
 			},
 		},
@@ -30,9 +33,12 @@ func MakeFixedResourceTopologySpreadPodOptions(key string, cpu int, memory int) 
 		}}
 }
 
-func MakeFixedResourceNoConstraintsPodOptions(cpu int, memory int) test.PodOptions {
+func MakeFixedResourceNoConstraintsPodOptions(cpu int, memory int, deployment_label string) test.PodOptions {
+	deploy_labels := map[string]string{
+		"my-label": deployment_label,
+	}
 	return test.PodOptions{
-		ObjectMeta: metav1.ObjectMeta{Labels: lo.Assign(test.RandomLabels(), map[string]string{test.DiscoveryLabel: "owned"})},
+		ObjectMeta: metav1.ObjectMeta{Labels: lo.Assign(deploy_labels, map[string]string{test.DiscoveryLabel: "owned"})},
 		ResourceRequirements: v1.ResourceRequirements{
 			Requests: v1.ResourceList{
 				v1.ResourceCPU:    resource.MustParse(fmt.Sprintf("%dm", cpu)),
@@ -42,8 +48,8 @@ func MakeFixedResourceNoConstraintsPodOptions(cpu int, memory int) test.PodOptio
 }
 func simpleStdScenarioInstanceSpreadPodOptions(cpu int, memory int) []test.PodOptions {
 	var pods []test.PodOptions
-	pods = append(pods, MakeFixedResourceTopologySpreadPodOptions(v1.LabelHostname, cpu, memory))
-	pods = append(pods, MakeFixedResourceTopologySpreadPodOptions(v1.LabelHostname, cpu, memory))
-	pods = append(pods, MakeFixedResourceNoConstraintsPodOptions(cpu, memory))
+	pods = append(pods, MakeFixedResourceTopologySpreadPodOptions(v1.LabelHostname, cpu, memory, "A"))
+	pods = append(pods, MakeFixedResourceTopologySpreadPodOptions(v1.LabelHostname, cpu, memory, "B"))
+	pods = append(pods, MakeFixedResourceNoConstraintsPodOptions(cpu, memory, "C"))
 	return []test.PodOptions{}
 }

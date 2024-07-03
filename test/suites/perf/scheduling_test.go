@@ -22,7 +22,6 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"github.com/samber/lo"
 	appsv1 "k8s.io/api/apps/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -31,7 +30,6 @@ import (
 )
 
 var replicas int = 10
-
 var _ = Describe("Performance", func() {
 	Context("Provisioning", func() {
 		//It("should do simple provisioning", func() {
@@ -144,6 +142,7 @@ var _ = Describe("Performance", func() {
 		//	env.TimeIntervalCollector.End("Drift")
 		//})
 		It("should do staggered multi-deployment provisioning and drift", func() {
+			var scaleInReplicas int32 = 1
 			deployments := []*appsv1.Deployment{}
 			// TODO: Adjust pod options to be a fixed set of option (maybe update the ones I get from the k8s test api)
 			fmt.Printf("Debug printing of pod options so I can make adjustments:\n")
@@ -158,18 +157,22 @@ var _ = Describe("Performance", func() {
 				))
 			}
 			for _, dep := range deployments {
-				time.Sleep(2 * time.Second)
+				time.Sleep(3 * time.Second)
 				env.ExpectCreated(dep)
 			}
 			// NOTE: To update replicas update in the object and then call expect updated
 			env.ExpectCreated(nodePool, nodeClass)
 			env.EventuallyExpectHealthyPodCountWithTimeout(15*time.Minute, labelSelector, len(deployments)*replicas)
 
-			env.TimeIntervalCollector.Start("Drift")
-			nodePool.Spec.Template.ObjectMeta.Labels = lo.Assign(nodePool.Spec.Template.ObjectMeta.Labels, map[string]string{
-				"test-drift": "true",
-			})
-			env.ExpectUpdated(nodePool)
+			env.TimeIntervalCollector.Start("Scale-in")
+			for _, dep := range deployments {
+				dep.Spec.Replicas = &scaleInReplicas
+				env.ExpectUpdated(dep)
+			}
+			//nodePool.Spec.Template.ObjectMeta.Labels = lo.Assign(nodePool.Spec.Template.ObjectMeta.Labels, map[string]string{
+			//	"test-drift": "true",
+			//})
+			//env.ExpectUpdated(nodePool)
 			// Eventually expect one node to be drifted
 			Eventually(func(g Gomega) {
 				nodeClaims := &v1beta1.NodeClaimList{}
@@ -182,7 +185,7 @@ var _ = Describe("Performance", func() {
 				g.Expect(env.Client.List(env, nodeClaims, client.MatchingFields{"status.conditions[*].type": v1beta1.ConditionTypeDrifted})).To(Succeed())
 				g.Expect(len(nodeClaims.Items)).To(Equal(0))
 			}).WithTimeout(10 * time.Minute).Should(Succeed())
-			env.TimeIntervalCollector.End("Drift")
+			env.TimeIntervalCollector.End("Scale-in")
 		})
 	})
 })
