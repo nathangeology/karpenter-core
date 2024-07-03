@@ -18,14 +18,13 @@ package perf_test
 
 import (
 	"fmt"
-	"time"
-
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
-	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/karpenter/pkg/controllers/disruption"
+	"sigs.k8s.io/karpenter/pkg/test/expectations"
+	"time"
 
-	"sigs.k8s.io/karpenter/pkg/apis/v1beta1"
 	"sigs.k8s.io/karpenter/pkg/test"
 )
 
@@ -143,6 +142,7 @@ var _ = Describe("Performance", func() {
 		//})
 		It("should do staggered multi-deployment provisioning and drift", func() {
 			var scaleInReplicas int32 = 1
+			var consolidationTypes = []string{"empty", "single", "multi"}
 			deployments := []*appsv1.Deployment{}
 			// TODO: Adjust pod options to be a fixed set of option (maybe update the ones I get from the k8s test api)
 			fmt.Printf("Debug printing of pod options so I can make adjustments:\n")
@@ -175,16 +175,37 @@ var _ = Describe("Performance", func() {
 			//env.ExpectUpdated(nodePool)
 			// Eventually expect one node to be drifted
 			Eventually(func(g Gomega) {
-				nodeClaims := &v1beta1.NodeClaimList{}
-				g.Expect(env.Client.List(env, nodeClaims, client.MatchingFields{"status.conditions[*].type": v1beta1.ConditionTypeDrifted})).To(Succeed())
-				g.Expect(len(nodeClaims.Items)).ToNot(Equal(0))
-			}).WithTimeout(5 * time.Second).Should(Succeed())
-			// Then eventually expect no nodes to be drifted
-			Eventually(func(g Gomega) {
-				nodeClaims := &v1beta1.NodeClaimList{}
-				g.Expect(env.Client.List(env, nodeClaims, client.MatchingFields{"status.conditions[*].type": v1beta1.ConditionTypeDrifted})).To(Succeed())
-				g.Expect(len(nodeClaims.Items)).To(Equal(0))
-			}).WithTimeout(10 * time.Minute).Should(Succeed())
+				for _, ct := range consolidationTypes {
+					expectations.ExpectMetricGaugeValue(disruption.EligibleNodesGauge, 1, map[string]string{
+						"method":             "consolidation",
+						"consolidation_type": ct,
+					})
+				}
+			}).WithTimeout(5 * time.Minute).Should(Succeed())
+			//Eventually(func(g Gomega) {
+			//	for _, ct := range consolidationTypes {
+			//		expectations.ExpectMetricGaugeValue(disruption.EligibleNodesGauge, 0, map[string]string{
+			//			"method":             "consolidation",
+			//			"consolidation_type": ct,
+			//		})
+			//	}
+			//}).WithTimeout(10 * time.Minute).Should(Succeed())
+			//for _, ct := range consolidationTypes {
+			//	expectations.ExpectMetricGaugeValue(disruption.EligibleNodesGauge, 1, map[string]string{
+			//		"method":             "consolidation",
+			//		"consolidation_type": ct,
+			//	})
+			//Eventually(func(g Gomega) {
+			//	nodeClaims := &v1beta1.NodeClaimList{}
+			//	g.Expect(env.Client.List(env, nodeClaims, client.MatchingFields{"status.conditions[*].type": v1beta1.ConditionTypeDrifted})).To(Succeed())
+			//	g.Expect(len(nodeClaims.Items)).ToNot(Equal(0))
+			//}).WithTimeout(5 * time.Minute).Should(Succeed())
+			//// Then eventually expect no nodes to be drifted
+			//Eventually(func(g Gomega) {
+			//	nodeClaims := &v1beta1.NodeClaimList{}
+			//	g.Expect(env.Client.List(env, nodeClaims, client.MatchingFields{"status.conditions[*].type": v1beta1.ConditionTypeDrifted})).To(Succeed())
+			//	g.Expect(len(nodeClaims.Items)).To(Equal(0))
+			//}).WithTimeout(10 * time.Minute).Should(Succeed())
 			env.TimeIntervalCollector.End("Scale-in")
 		})
 	})

@@ -18,13 +18,14 @@ package perf_test
 
 import (
 	"fmt"
+	//clock "k8s.io/utils/clock/testing"
 	"testing"
 	"time"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
-
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/karpenter/pkg/controllers/disruption"
 
 	"sigs.k8s.io/karpenter/kwok/apis/v1alpha1"
 	"sigs.k8s.io/karpenter/pkg/apis/v1beta1"
@@ -37,6 +38,7 @@ import (
 	"github.com/samber/lo"
 )
 
+var disruptionController *disruption.Controller
 var nodePool *v1beta1.NodePool
 var nodeClass *v1alpha1.KWOKNodeClass
 var env *common.Environment
@@ -65,6 +67,9 @@ var _ = BeforeEach(func() {
 	env.BeforeEach()
 	nodeClass = env.DefaultNodeClass()
 	nodePool = env.DefaultNodePool(nodeClass)
+	//fakeClock = clock.NewFakeClock(time.Now())
+	//disruptionController = disruption.NewController(fakeClock, env.Client, prov, cloudProvider, recorder, cluster, queue)
+
 	test.ReplaceRequirements(nodePool, v1beta1.NodeSelectorRequirementWithMinValues{
 		NodeSelectorRequirement: v1.NodeSelectorRequirement{
 			Key:      v1alpha1.InstanceSizeLabelKey,

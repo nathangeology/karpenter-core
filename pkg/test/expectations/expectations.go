@@ -554,6 +554,14 @@ func ExpectMetricGaugeValue(collector prometheus.Collector, expectedValue float6
 	Expect(lo.FromPtr(metric.Gauge.Value)).To(Equal(expectedValue), "Metric "+metricName+" should have the expected value")
 }
 
+//func ExpectMetricGaugeGreaterThanValue(collector prometheus.Collector, expectedValue float64, labels map[string]string) {
+//	GinkgoHelper()
+//	metricName := ExpectMetricName(collector)
+//	metric, ok := FindMetricWithLabelValues(metricName, labels)
+//	Expect(ok).To(BeTrue(), "Metric "+metricName+" should be available")
+//	Expect(lo.FromPtr(metric.Gauge.Value)).To(lo.FromPtr(metric.Gauge.Value) > expectedValue, "Metric "+metricName+" should have the expected value")
+//}
+
 func ExpectMetricCounterValue(collector prometheus.Collector, expectedValue float64, labels map[string]string) {
 	GinkgoHelper()
 	metricName := ExpectMetricName(collector)
