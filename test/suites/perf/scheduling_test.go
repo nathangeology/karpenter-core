@@ -20,6 +20,7 @@ import (
 	"fmt"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/samber/lo"
 	appsv1 "k8s.io/api/apps/v1"
 	"sigs.k8s.io/karpenter/pkg/controllers/disruption"
 	"sigs.k8s.io/karpenter/pkg/test/expectations"
@@ -168,6 +169,7 @@ var _ = Describe("Performance", func() {
 			for _, dep := range deployments {
 				dep.Spec.Replicas = &scaleInReplicas
 				env.ExpectUpdated(dep)
+				time.Sleep(2 * time.Second)
 			}
 			//nodePool.Spec.Template.ObjectMeta.Labels = lo.Assign(nodePool.Spec.Template.ObjectMeta.Labels, map[string]string{
 			//	"test-drift": "true",
@@ -176,10 +178,16 @@ var _ = Describe("Performance", func() {
 			// Eventually expect one node to be drifted
 			Eventually(func(g Gomega) {
 				for _, ct := range consolidationTypes {
-					expectations.ExpectMetricGaugeValue(disruption.EligibleNodesGauge, 1, map[string]string{
+					metricName := expectations.ExpectMetricName(disruption.EligibleNodesGauge)
+					metric, ok := expectations.FindMetricWithLabelValues(metricName, map[string]string{
 						"method":             "consolidation",
 						"consolidation_type": ct,
 					})
+					fmt.Printf("%#v\n", ok)
+					fmt.Printf("%#v\n", metric)
+					fmt.Printf("%#v\n", lo.FromPtr(metric.Gauge.Value))
+					g.Expect(ok).To(BeTrue(), "Metric "+metricName+" should be available")
+					g.Expect(lo.FromPtr(metric.Gauge.Value)).To(Equal(1), "Metric "+metricName+" should have the expected value")
 				}
 			}).WithTimeout(5 * time.Minute).Should(Succeed())
 			//Eventually(func(g Gomega) {

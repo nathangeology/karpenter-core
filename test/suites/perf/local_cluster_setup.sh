@@ -61,6 +61,7 @@ export OUTPUT_DIR
 for node in $(kubectl get nodes -o name -n kube-system); do
   kubectl taint nodes $node key1=value1:NoSchedule
 done
+sleep 15
 make e2etests
 read -p "press enter to delete cluster" temp_var
 kind delete cluster --name ${context_name}

@@ -69,5 +69,5 @@ func simpleStdScenarioInstanceSpreadPodOptions(cpu int, memory int) []test.PodOp
 	pods = append(pods, MakeFixedResourceTopologySpreadPodOptions(v1.LabelHostname, cpu, memory, "A"))
 	pods = append(pods, MakeFixedResourceTopologySpreadPodOptions(v1.LabelHostname, cpu, memory, "B"))
 	pods = append(pods, MakeFixedResourceNoConstraintsPodOptions(cpu, memory, "C"))
-	return []test.PodOptions{}
+	return pods
 }
