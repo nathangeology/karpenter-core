@@ -1,5 +1,8 @@
 # This is the format of an AWS ECR Public Repo as an example.
-export KWOK_REPO ?= ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com
+export AWS_DEFAULT_REGION=us-east-1
+export AWS_ACCOUNT_ID="480091713227"
+
+export KWOK_REPO ?= ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/karpenter/
 export KARPENTER_NAMESPACE=kube-system
 
 HELM_OPTS ?= --set logLevel=debug \
@@ -53,7 +56,7 @@ e2etests: ## Run the e2e suite against your local cluster
 
 # Run make install-kwok to install the kwok controller in your cluster first
 # Webhooks are currently not supported in the kwok provider.
-apply: verify build ## Deploy the kwok controller from the current state of your git repository into your ~/.kube/config cluster
+apply: build ## verify Deploy the kwok controller from the current state of your git repository into your ~/.kube/config cluster
 	kubectl apply -f kwok/charts/crds
 	helm upgrade --install karpenter kwok/charts --namespace $(KARPENTER_NAMESPACE) --skip-crds \
 		$(HELM_OPTS) \
