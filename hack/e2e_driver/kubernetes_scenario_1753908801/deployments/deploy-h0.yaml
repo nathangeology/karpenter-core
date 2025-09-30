@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: deploy-h0
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: deploy-h0
+  template:
+    metadata:
+      labels:
+        app: deploy-h0
+    spec:
+      terminationGracePeriodSeconds: 45
+      containers:
+      - name: deploy-h0-container
+        image: nginx:latest
+        resources:
+          requests:
+            cpu: '2.0'
+            memory: 1024Mi
+      affinity:
+        podAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 31
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - web
+              topologyKey: kubernetes.azure.com/rack
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - api
+            topologyKey: kubernetes.io/hostname
+      nodeSelector:
+        kubernetes.io/arch: arm

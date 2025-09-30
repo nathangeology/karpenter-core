@@ -1,0 +1,9 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: deploy-if-pdb
+spec:
+  minAvailable: 50%
+  selector:
+    matchLabels:
+      app: deploy-if

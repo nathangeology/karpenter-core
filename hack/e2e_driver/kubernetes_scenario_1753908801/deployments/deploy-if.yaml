@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: deploy-if
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: deploy-if
+  template:
+    metadata:
+      labels:
+        app: deploy-if
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+      - name: deploy-if-container
+        image: nginx:latest
+        resources:
+          requests:
+            cpu: '1.0'
+            memory: 4096Mi
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - frontend
+            topologyKey: kubernetes.io/hostname
+      topologySpreadConstraints:
+      - maxSkew: 2
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            environment: staging
+      - maxSkew: 2
+        topologyKey: topology.kubernetes.io/zone
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            tier: backend
+      nodeSelector:
+        kubernetes.io/arch: arm64

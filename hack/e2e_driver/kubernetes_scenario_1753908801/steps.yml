@@ -1,0 +1,473 @@
+scenario:
+- step:
+    name: 1
+    actions:
+    - action:
+        comment: Scales deployment deploy-if to 12 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-if,replicas=12
+    - action:
+        comment: Scales deployment deploy-ov to 40 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-ov,replicas=40
+    - action:
+        comment: Scales deployment deploy-h0 to 16 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-h0,replicas=16
+- step:
+    name: 2
+    actions: []
+- step:
+    name: 3
+    actions:
+    - action:
+        comment: Scales deployment deploy-h0 to 17 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-h0,replicas=17
+- step:
+    name: 4
+    actions: []
+- step:
+    name: 5
+    actions:
+    - action:
+        comment: Scales deployment deploy-ov to 43 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-ov,replicas=43
+    - action:
+        comment: Scales deployment deploy-h0 to 18 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-h0,replicas=18
+- step:
+    name: 6
+    actions:
+    - action:
+        comment: Scales deployment deploy-if to 13 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-if,replicas=13
+    - action:
+        comment: Scales deployment deploy-ov to 44 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-ov,replicas=44
+- step:
+    name: 7
+    actions: []
+- step:
+    name: 8
+    actions:
+    - action:
+        comment: Scales deployment deploy-h0 to 22 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-h0,replicas=22
+- step:
+    name: 9
+    actions:
+    - action:
+        comment: Scales deployment deploy-ov to 68 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-ov,replicas=68
+    - action:
+        comment: Scales deployment deploy-h0 to 20 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-h0,replicas=20
+- step:
+    name: 10
+    actions:
+    - action:
+        comment: Scales deployment deploy-ov to 62 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-ov,replicas=62
+- step:
+    name: 11
+    actions:
+    - action:
+        comment: Scales deployment deploy-ov to 57 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-ov,replicas=57
+- step:
+    name: 12
+    actions:
+    - action:
+        comment: Scales deployment deploy-ov to 53 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-ov,replicas=53
+- step:
+    name: 13
+    actions:
+    - action:
+        comment: Scales deployment deploy-if to 14 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-if,replicas=14
+    - action:
+        comment: Scales deployment deploy-ov to 48 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-ov,replicas=48
+- step:
+    name: 14
+    actions:
+    - action:
+        comment: Scales deployment deploy-h0 to 21 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-h0,replicas=21
+- step:
+    name: 15
+    actions:
+    - action:
+        comment: Scales deployment deploy-h0 to 29 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-h0,replicas=29
+- step:
+    name: 16
+    actions:
+    - action:
+        comment: Scales deployment deploy-h0 to 27 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-h0,replicas=27
+- step:
+    name: 17
+    actions:
+    - action:
+        comment: Scales deployment deploy-h0 to 25 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-h0,replicas=25
+- step:
+    name: 18
+    actions:
+    - action:
+        comment: Scales deployment deploy-h0 to 24 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-h0,replicas=24
+- step:
+    name: 19
+    actions:
+    - action:
+        comment: Scales deployment deploy-h0 to 22 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-h0,replicas=22
+- step:
+    name: 20
+    actions:
+    - action:
+        comment: Scales deployment deploy-if to 16 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-if,replicas=16
+    - action:
+        comment: Scales deployment deploy-ov to 47 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-ov,replicas=47
+    - action:
+        comment: Scales deployment deploy-h0 to 20 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-h0,replicas=20
+- step:
+    name: 21
+    actions:
+    - action:
+        comment: Scales deployment deploy-if to 15 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-if,replicas=15
+- step:
+    name: 22
+    actions:
+    - action:
+        comment: Scales deployment deploy-ov to 46 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-ov,replicas=46
+- step:
+    name: 23
+    actions:
+    - action:
+        comment: Scales deployment deploy-if to 14 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-if,replicas=14
+    - action:
+        comment: Scales deployment deploy-h0 to 19 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-h0,replicas=19
+- step:
+    name: 24
+    actions:
+    - action:
+        comment: Scales deployment deploy-if to 13 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-if,replicas=13
+    - action:
+        comment: Scales deployment deploy-ov to 45 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-ov,replicas=45
+- step:
+    name: 25
+    actions:
+    - action:
+        comment: Scales deployment deploy-ov to 44 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-ov,replicas=44
+    - action:
+        comment: Scales deployment deploy-h0 to 18 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-h0,replicas=18
+- step:
+    name: 26
+    actions: []
+- step:
+    name: 27
+    actions:
+    - action:
+        comment: Scales deployment deploy-if to 12 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-if,replicas=12
+    - action:
+        comment: Scales deployment deploy-h0 to 17 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-h0,replicas=17
+- step:
+    name: 28
+    actions:
+    - action:
+        comment: Scales deployment deploy-ov to 42 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-ov,replicas=42
+- step:
+    name: 29
+    actions:
+    - action:
+        comment: Scales deployment deploy-if to 19 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-if,replicas=19
+- step:
+    name: 30
+    actions:
+    - action:
+        comment: Scales deployment deploy-ov to 71 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-ov,replicas=71
+    - action:
+        comment: Scales deployment deploy-h0 to 16 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-h0,replicas=16
+- step:
+    name: 31
+    actions:
+    - action:
+        comment: Scales deployment deploy-if to 16 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-if,replicas=16
+    - action:
+        comment: Scales deployment deploy-ov to 39 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-ov,replicas=39
+    - action:
+        comment: Scales deployment deploy-h0 to 15 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-h0,replicas=15
+- step:
+    name: 32
+    actions:
+    - action:
+        comment: Scales deployment deploy-ov to 38 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-ov,replicas=38
+- step:
+    name: 33
+    actions:
+    - action:
+        comment: Scales deployment deploy-if to 13 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-if,replicas=13
+    - action:
+        comment: Scales deployment deploy-ov to 37 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-ov,replicas=37
+    - action:
+        comment: Scales deployment deploy-h0 to 14 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-h0,replicas=14
+- step:
+    name: 34
+    actions:
+    - action:
+        comment: Scales deployment deploy-if to 12 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-if,replicas=12
+    - action:
+        comment: Scales deployment deploy-ov to 36 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-ov,replicas=36
+- step:
+    name: 35
+    actions:
+    - action:
+        comment: Scales deployment deploy-if to 11 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-if,replicas=11
+    - action:
+        comment: Scales deployment deploy-ov to 35 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-ov,replicas=35
+    - action:
+        comment: Scales deployment deploy-h0 to 13 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-h0,replicas=13
+- step:
+    name: 36
+    actions:
+    - action:
+        comment: Scales deployment deploy-if to 10 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-if,replicas=10
+- step:
+    name: 37
+    actions:
+    - action:
+        comment: Scales deployment deploy-ov to 34 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-ov,replicas=34
+    - action:
+        comment: Scales deployment deploy-h0 to 12 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-h0,replicas=12
+- step:
+    name: 38
+    actions: []
+- step:
+    name: 39
+    actions:
+    - action:
+        comment: Scales deployment deploy-ov to 33 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-ov,replicas=33
+    - action:
+        comment: Scales deployment deploy-h0 to 11 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-h0,replicas=11
+- step:
+    name: 40
+    actions:
+    - action:
+        comment: Scales deployment deploy-ov to 32 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-ov,replicas=32
+- step:
+    name: 41
+    actions: []
+- step:
+    name: 42
+    actions:
+    - action:
+        comment: Scales deployment deploy-if to 9 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-if,replicas=9
+    - action:
+        comment: Scales deployment deploy-ov to 31 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-ov,replicas=31
+    - action:
+        comment: Scales deployment deploy-h0 to 10 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-h0,replicas=10
+- step:
+    name: 43
+    actions: []
+- step:
+    name: 44
+    actions: []
+- step:
+    name: 45
+    actions: []
+- step:
+    name: 46
+    actions: []
+- step:
+    name: 47
+    actions: []
+- step:
+    name: 48
+    actions: []
+- step:
+    name: 49
+    actions:
+    - action:
+        comment: Scales deployment deploy-if to 10 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-if,replicas=10
+    - action:
+        comment: Scales deployment deploy-h0 to 11 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-h0,replicas=11
+- step:
+    name: 50
+    actions: []
+- step:
+    name: 51
+    actions:
+    - action:
+        comment: Scales deployment deploy-ov to 32 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-ov,replicas=32
+- step:
+    name: 52
+    actions:
+    - action:
+        comment: Scales deployment deploy-ov to 33 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-ov,replicas=33
+- step:
+    name: 53
+    actions: []
+- step:
+    name: 54
+    actions:
+    - action:
+        comment: Scales deployment deploy-ov to 34 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-ov,replicas=34
+- step:
+    name: 55
+    actions:
+    - action:
+        comment: Scales deployment deploy-h0 to 13 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-h0,replicas=13
+- step:
+    name: 56
+    actions:
+    - action:
+        comment: Scales deployment deploy-if to 11 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-if,replicas=11
+    - action:
+        comment: Scales deployment deploy-ov to 36 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-ov,replicas=36
+- step:
+    name: 57
+    actions:
+    - action:
+        comment: Scales deployment deploy-ov to 37 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-ov,replicas=37
+- step:
+    name: 58
+    actions:
+    - action:
+        comment: Scales deployment deploy-ov to 38 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-ov,replicas=38
+    - action:
+        comment: Scales deployment deploy-h0 to 14 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-h0,replicas=14
+- step:
+    name: 59
+    actions: []
+- step:
+    name: 60
+    actions:
+    - action:
+        comment: Scales deployment deploy-if to 12 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-if,replicas=12
+    - action:
+        comment: Scales deployment deploy-h0 to 15 replicas
+        action_type: K8S_SCALE
+        action_data: name=deploy-h0,replicas=15

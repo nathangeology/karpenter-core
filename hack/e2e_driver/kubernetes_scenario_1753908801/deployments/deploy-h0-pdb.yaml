@@ -1,0 +1,9 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: deploy-h0-pdb
+spec:
+  minAvailable: 50%
+  selector:
+    matchLabels:
+      app: deploy-h0

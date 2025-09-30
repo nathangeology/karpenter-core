@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: deploy-ov
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: deploy-ov
+  template:
+    metadata:
+      labels:
+        app: deploy-ov
+    spec:
+      terminationGracePeriodSeconds: 45
+      containers:
+      - name: deploy-ov-container
+        image: nginx:latest
+        resources:
+          requests:
+            cpu: '0.25'
+            memory: 768Mi
+      affinity:
+        podAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 81
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: environment
+                  operator: In
+                  values:
+                  - test
+              topologyKey: kubernetes.azure.com/rack
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: ''
