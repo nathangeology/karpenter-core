@@ -130,4 +130,11 @@ toolchain: ## Install developer toolchain
 gen_instance_types:
 	go run kwok/tools/gen_instance_types.go > kwok/cloudprovider/instance_types.json
 
-.PHONY: help presubmit install-kwok uninstall-kwok build apply delete test deflake vulncheck licenses verify download toolchain gen_instance_types
+##@ Scenario Driver
+scenario-driver-build: ## Build the scenario driver
+	cd hack/e2e_driver && make build
+
+scenario-driver-run: scenario-driver-build ## Run a scenario with environment variables: SCENARIO, NAMESPACE, LOG_DIR, KUBECONFIG, S3_BUCKET, S3_REGION
+	./hack/scenario-driver.sh
+
+.PHONY: help presubmit install-kwok uninstall-kwok build apply delete test deflake vulncheck licenses verify download toolchain gen_instance_types scenario-driver-build scenario-driver-run
