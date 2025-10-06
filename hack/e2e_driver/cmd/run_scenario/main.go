@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"sigs.k8s.io/karpenter/hack/e2e_driver/pkg/driver"
 )
@@ -81,7 +83,17 @@ func main() {
 	// Run the scenario
 	ctx := context.Background()
 	if err := drv.Run(ctx); err != nil {
-		log.Fatalf("Failed to run scenario: %v", err)
+		// Format the error for better readability
+		errorMsg := fmt.Sprintf("Failed to run scenario: %v", err)
+
+		// Log the error with line breaks to make it more readable in logs
+		errorLines := strings.Split(errorMsg, "\n")
+		for _, line := range errorLines {
+			log.Println(line)
+		}
+
+		// Exit with error
+		os.Exit(1)
 	}
 
 	log.Println("Scenario completed successfully!")

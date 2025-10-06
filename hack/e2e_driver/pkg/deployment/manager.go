@@ -257,14 +257,129 @@ func (m *Manager) AreDeploymentsStable(ctx context.Context) (bool, error) {
 		return false, fmt.Errorf("failed to list deployments: %w", err)
 	}
 
+	allStable := true
 	// Check if each deployment is stable
 	for _, deployment := range deployments.Items {
 		if deployment.Status.ReadyReplicas != *deployment.Spec.Replicas {
-			return false, nil
+			allStable = false
+			fmt.Printf("Deployment %s is not stable: Ready=%d, Desired=%d, Updated=%d, Available=%d\n",
+				deployment.Name,
+				deployment.Status.ReadyReplicas,
+				*deployment.Spec.Replicas,
+				deployment.Status.UpdatedReplicas,
+				deployment.Status.AvailableReplicas)
 		}
 	}
 
-	return true, nil
+	return allStable, nil
+}
+
+// GetDeploymentDiagnostics returns detailed diagnostic information for all deployments
+func (m *Manager) GetDeploymentDiagnostics(ctx context.Context) (string, error) {
+	// Get all deployments with our managed-by label
+	deployments, err := m.client.AppsV1().Deployments(m.namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: "managed-by=k8s-sim-driver",
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to list deployments: %w", err)
+	}
+
+	var diagnostics string
+	diagnostics += fmt.Sprintf("=== DEPLOYMENT DIAGNOSTICS (Namespace: %s) ===\n", m.namespace)
+
+	// Get all pods
+	pods, err := m.client.CoreV1().Pods(m.namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: "managed-by=k8s-sim-driver",
+	})
+	if err != nil {
+		diagnostics += fmt.Sprintf("Error fetching pods: %v\n", err)
+	}
+
+	// Get all events
+	events, err := m.client.CoreV1().Events(m.namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		diagnostics += fmt.Sprintf("Error fetching events: %v\n", err)
+	}
+
+	// Report on each deployment
+	for _, deployment := range deployments.Items {
+		diagnostics += fmt.Sprintf("\n[Deployment] %s\n", deployment.Name)
+		diagnostics += fmt.Sprintf("  Ready: %d/%d\n", deployment.Status.ReadyReplicas, *deployment.Spec.Replicas)
+		diagnostics += fmt.Sprintf("  Updated: %d\n", deployment.Status.UpdatedReplicas)
+		diagnostics += fmt.Sprintf("  Available: %d\n", deployment.Status.AvailableReplicas)
+		diagnostics += fmt.Sprintf("  Observed Generation: %d\n", deployment.Status.ObservedGeneration)
+		diagnostics += fmt.Sprintf("  Conditions:\n")
+
+		for _, condition := range deployment.Status.Conditions {
+			diagnostics += fmt.Sprintf("    - %s: %s (Reason: %s, Message: %s)\n",
+				condition.Type, condition.Status, condition.Reason, condition.Message)
+		}
+
+		// Find related pods
+		diagnostics += fmt.Sprintf("  Pods:\n")
+		for _, pod := range pods.Items {
+			for _, ownerRef := range pod.OwnerReferences {
+				if ownerRef.Name == deployment.Name || pod.Labels["app"] == deployment.Name {
+					phase := string(pod.Status.Phase)
+					ready := "Not Ready"
+					for _, condition := range pod.Status.Conditions {
+						if condition.Type == "Ready" {
+							if condition.Status == "True" {
+								ready = "Ready"
+							} else {
+								ready = fmt.Sprintf("Not Ready (%s: %s)", condition.Reason, condition.Message)
+							}
+							break
+						}
+					}
+					diagnostics += fmt.Sprintf("    - %s: %s, %s\n", pod.Name, phase, ready)
+
+					// Check container statuses
+					for _, containerStatus := range pod.Status.ContainerStatuses {
+						if containerStatus.State.Waiting != nil {
+							diagnostics += fmt.Sprintf("      Container %s: Waiting - %s (%s)\n",
+								containerStatus.Name, containerStatus.State.Waiting.Reason,
+								containerStatus.State.Waiting.Message)
+						}
+						if containerStatus.State.Terminated != nil {
+							diagnostics += fmt.Sprintf("      Container %s: Terminated - %s (Exit Code: %d, %s)\n",
+								containerStatus.Name, containerStatus.State.Terminated.Reason,
+								containerStatus.State.Terminated.ExitCode,
+								containerStatus.State.Terminated.Message)
+						}
+						if !containerStatus.Ready {
+							diagnostics += fmt.Sprintf("      Container %s: Not Ready\n", containerStatus.Name)
+						}
+					}
+
+					// Include node name
+					diagnostics += fmt.Sprintf("      Node: %s\n", pod.Spec.NodeName)
+					break
+				}
+			}
+		}
+
+		// Find related events
+		diagnostics += fmt.Sprintf("  Recent Events:\n")
+		for _, event := range events.Items {
+			if (event.InvolvedObject.Kind == "Deployment" && event.InvolvedObject.Name == deployment.Name) ||
+				(event.InvolvedObject.Kind == "ReplicaSet" && event.InvolvedObject.Name[:len(deployment.Name)] == deployment.Name) {
+				diagnostics += fmt.Sprintf("    - [%s] %s: %s\n",
+					event.Type, event.Reason, event.Message)
+			}
+		}
+	}
+
+	// Add pod-specific events
+	diagnostics += fmt.Sprintf("\n[Pod Events]\n")
+	for _, event := range events.Items {
+		if event.InvolvedObject.Kind == "Pod" {
+			diagnostics += fmt.Sprintf("  - Pod %s: [%s] %s: %s\n",
+				event.InvolvedObject.Name, event.Type, event.Reason, event.Message)
+		}
+	}
+
+	return diagnostics, nil
 }
 
 // GetClientset returns the Kubernetes clientset

@@ -193,10 +193,30 @@ func (d *Driver) waitForStableDeployments(ctx context.Context) error {
 		}
 
 		if time.Now().After(deadline) {
-			return fmt.Errorf("timed out waiting for deployments to stabilize after %v", maxWaitTime)
+			// Get comprehensive diagnostics about the deployments before failing
+			diagnostics, diagErr := d.deploymentMgr.GetDeploymentDiagnostics(ctx)
+			if diagErr != nil {
+				fmt.Printf("WARNING: Failed to get deployment diagnostics: %v\n", diagErr)
+			} else {
+				// Print diagnostics to the logs
+				fmt.Println("\n=== DEPLOYMENT STABILITY TIMEOUT DIAGNOSTICS ===")
+				fmt.Println(diagnostics)
+				fmt.Println("=== END DIAGNOSTICS ===\n")
+			}
+
+			return fmt.Errorf("timed out waiting for deployments to stabilize after %v\n\nDiagnostics:%s",
+				maxWaitTime, diagnostics)
 		}
 
 		fmt.Println("Deployments not yet stable, waiting...")
+		// Print a status update every minute (12 iterations)
+		if int(time.Since(d.startTime).Seconds()/checkInterval.Seconds())%12 == 0 {
+			fmt.Println("Status update: Still waiting for deployments to stabilize...")
+			stable, _ := d.deploymentMgr.AreDeploymentsStable(ctx)
+			if !stable {
+				fmt.Println("Time remaining before timeout:", time.Until(deadline).Round(time.Second))
+			}
+		}
 		time.Sleep(checkInterval)
 	}
 }
