@@ -31,8 +31,8 @@ fi
 # Create bin directory if it doesn't exist
 mkdir -p ./bin
 
-# Build the driver if it doesn't exist
-if [[ ! -f "./bin/scenario-driver" ]]; then
+# Always rebuild in GitHub Actions environment, or build if doesn't exist
+if [[ -n "${GITHUB_ACTIONS:-}" ]] || [[ ! -f "./bin/scenario-driver" ]]; then
   echo "Building scenario driver..."
   cd hack/e2e_driver && make build && cd ../../
 fi

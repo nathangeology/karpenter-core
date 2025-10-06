@@ -3,7 +3,7 @@
 # Build target - creates the scenario driver binary
 .PHONY: build
 build:
-	go build -o ../../bin/scenario-driver ./cmd/run_scenario/main.go
+	go build -v -a -o ../../bin/scenario-driver ./cmd/run_scenario/main.go
 
 # Clean target - removes the built binary
 .PHONY: clean
