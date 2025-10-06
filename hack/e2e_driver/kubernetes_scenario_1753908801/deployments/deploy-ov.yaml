@@ -20,17 +20,5 @@ spec:
           requests:
             cpu: '0.25'
             memory: 768Mi
-      affinity:
-        podAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-          - weight: 81
-            podAffinityTerm:
-              labelSelector:
-                matchExpressions:
-                - key: environment
-                  operator: In
-                  values:
-                  - test
-              topologyKey: kubernetes.azure.com/rack
       nodeSelector:
-        node-role.kubernetes.io/control-plane: ''
+        karpenter.sh/nodepool: default

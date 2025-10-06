@@ -21,17 +21,6 @@ spec:
             cpu: '2.0'
             memory: 1024Mi
       affinity:
-        podAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-          - weight: 31
-            podAffinityTerm:
-              labelSelector:
-                matchExpressions:
-                - key: app
-                  operator: In
-                  values:
-                  - web
-              topologyKey: kubernetes.azure.com/rack
         podAntiAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
           - labelSelector:
@@ -42,4 +31,4 @@ spec:
                 - api
             topologyKey: kubernetes.io/hostname
       nodeSelector:
-        kubernetes.io/arch: arm
+        karpenter.sh/nodepool: default

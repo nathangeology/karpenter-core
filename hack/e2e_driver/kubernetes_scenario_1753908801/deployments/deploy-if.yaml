@@ -44,4 +44,4 @@ spec:
           matchLabels:
             tier: backend
       nodeSelector:
-        kubernetes.io/arch: arm64
+        karpenter.sh/nodepool: default
