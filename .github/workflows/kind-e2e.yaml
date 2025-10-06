@@ -70,10 +70,10 @@ jobs:
     - name: Run Scenario Driver
       env:
         SCENARIO: hack/e2e_driver/kubernetes_scenario_1753908801
-        NAMESPACE: karpenter-test
+        NAMESPACE: default
         LOG_DIR: ./scenario-logs
         S3_BUCKET: ${{ secrets.S3_BUCKET }}
-        S3_REGION: us-west-2
+        S3_REGION: us-east-1
         AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
         AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       run: |
