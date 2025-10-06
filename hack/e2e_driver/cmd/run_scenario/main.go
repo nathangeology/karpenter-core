@@ -7,7 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/aws/k8s-sim-driver/pkg/driver"
+	"sigs.k8s.io/karpenter/hack/e2e_driver/pkg/driver"
 )
 
 func main() {

@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/aws/k8s-sim-driver/pkg/audit"
-	"github.com/aws/k8s-sim-driver/pkg/config"
-	"github.com/aws/k8s-sim-driver/pkg/deployment"
-	"github.com/aws/k8s-sim-driver/pkg/s3"
+	"sigs.k8s.io/karpenter/hack/e2e_driver/pkg/audit"
+	"sigs.k8s.io/karpenter/hack/e2e_driver/pkg/config"
+	"sigs.k8s.io/karpenter/hack/e2e_driver/pkg/deployment"
+	"sigs.k8s.io/karpenter/hack/e2e_driver/pkg/s3"
 )
 
 // Driver orchestrates the scenario execution

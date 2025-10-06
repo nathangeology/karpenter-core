@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/aws/k8s-sim-driver/pkg/config"
+	"sigs.k8s.io/karpenter/hack/e2e_driver/pkg/config"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
