@@ -40,6 +40,61 @@ fi
 # Create log directory if it doesn't exist
 mkdir -p "$LOG_DIR"
 
+# Apply nodepool if it exists
+if [ -d "${SCENARIO}/nodepools" ]; then
+  # First ensure Karpenter is ready
+  echo "Checking if Karpenter is ready before applying NodePools..."
+  
+  # Wait for Karpenter controller to be running
+  MAX_RETRIES=10
+  RETRY_COUNT=0
+  KARPENTER_READY=false
+
+  while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+    if kubectl get pods -n kube-system -l app.kubernetes.io/name=karpenter 2>/dev/null | grep -q "Running"; then
+      KARPENTER_READY=true
+      break
+    fi
+    echo "Waiting for Karpenter controller to be ready (attempt $((RETRY_COUNT+1))/$MAX_RETRIES)..."
+    RETRY_COUNT=$((RETRY_COUNT+1))
+    sleep 5
+  done
+
+  if [ "$KARPENTER_READY" = false ]; then
+    echo "WARNING: Karpenter controller is not ready, but attempting to apply NodePools anyway"
+  else
+    echo "Karpenter controller is running, proceeding to apply NodePools"
+  fi
+
+  # Check for required CRDs
+  if kubectl get crd nodepools.karpenter.sh &>/dev/null && kubectl get crd kwoknodeclasses.karpenter.kwok.sh &>/dev/null; then
+    echo "Required CRDs are present, proceeding to apply NodePools"
+  else
+    echo "WARNING: Required CRDs for NodePools or KWOKNodeClass may not be present!"
+    kubectl get crds | grep -E 'karpenter|kwok' || true
+  fi
+  
+  echo "Applying NodePool resources from ${SCENARIO}/nodepools"
+  kubectl apply -f "${SCENARIO}/nodepools/" || echo "Warning: Failed to apply NodePool resources"
+  
+  # Wait a moment for the NodePool to be processed
+  echo "Waiting for NodePool to be processed..."
+  sleep 10
+  
+  # Show applied NodePools and their details
+  echo -e "\n=== NodePool Resources ==="
+  kubectl get nodepools -A || echo "No NodePools found"
+  kubectl describe nodepools || echo "Could not describe NodePools"
+  
+  # Check if the KWOKNodeClass was applied
+  echo -e "\n=== KWOKNodeClass Resources ==="
+  kubectl get kwoknodeclasses.karpenter.kwok.sh -A || echo "No KWOKNodeClass found"
+  
+  # Check for any CRD-related issues
+  echo -e "\n=== CRD Status ==="
+  kubectl get crds | grep -E 'karpenter|kwok' || echo "No Karpenter or KWOK CRDs found"
+fi
+
 # Run the scenario driver
 echo "Running scenario: $SCENARIO"
 
@@ -110,6 +165,21 @@ else
   
   echo -e "\n=== General Cluster Health ==="
   kubectl get componentstatuses || echo "Failed to get component statuses"
+  
+  echo -e "\n=== Karpenter Resources ==="
+  kubectl get nodepools -A || echo "No NodePools found"
+  kubectl get kwoknodeclasses.karpenter.kwok.sh -A || echo "No KWOKNodeClass found"
+  kubectl get nodeclass -A 2>/dev/null || echo "No NodeClasses found"
+  kubectl get nodeclaims -A 2>/dev/null || echo "No NodeClaims found"
+  
+  # Check Karpenter controller logs
+  echo -e "\n=== Karpenter Controller Logs ==="
+  KARPENTER_POD=$(kubectl get pods -n kube-system -l app.kubernetes.io/name=karpenter -o name 2>/dev/null | head -n 1)
+  if [ -n "$KARPENTER_POD" ]; then
+    kubectl logs "$KARPENTER_POD" -n kube-system --tail=100 || echo "Failed to get Karpenter controller logs"
+  else
+    echo "Karpenter controller pod not found"
+  fi
   
   echo -e "\n============ END DIAGNOSTIC INFORMATION ============"
   echo "Log files saved to: $LOG_DIR"

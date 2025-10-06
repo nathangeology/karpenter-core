@@ -6,12 +6,6 @@ spec:
   template:
     spec:
       requirements:
-        - key: kubernetes.io/arch
-          operator: In
-          values: ["x86_64"]
-        - key: kubernetes.io/os
-          operator: In
-          values: ["linux", "windows"]
         - key: karpenter.sh/capacity-type
           operator: In
           values: ["on-demand"]
