@@ -1,0 +1,47 @@
+apiVersion: audit.k8s.io/v1
+kind: Policy
+rules:
+# Log pod changes at RequestResponse level
+- level: RequestResponse
+  resources:
+  - group: ""
+    resources: ["pods"]
+  verbs: ["create", "delete", "update", "patch"]
+
+# Log node changes at RequestResponse level
+- level: RequestResponse
+  resources:
+  - group: ""
+    resources: ["nodes"]
+  verbs: ["create", "delete", "update", "patch"]
+    
+# Log deployment changes at RequestResponse level  
+- level: RequestResponse
+  resources:
+  - group: "apps"
+    resources: ["deployments", "replicasets"]
+  verbs: ["create", "delete", "update", "patch", "scale"]
+    
+# Log Karpenter-specific resources
+- level: RequestResponse
+  resources:
+  - group: "karpenter.sh"
+    resources: ["*"]
+  verbs: ["create", "delete", "update", "patch"]
+    
+- level: RequestResponse
+  resources:
+  - group: "karpenter.kwok.sh"
+    resources: ["*"]
+  verbs: ["create", "delete", "update", "patch"]
+
+# Log events
+- level: RequestResponse
+  resources:
+  - group: ""
+    resources: ["events"]
+
+# Default catch-all rule
+- level: Metadata
+  omitStages:
+  - "RequestReceived"
