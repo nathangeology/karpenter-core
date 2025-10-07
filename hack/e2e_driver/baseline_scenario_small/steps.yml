@@ -110,3 +110,6 @@ scenario:
  - step:
      name: 29
      actions: [ ]
+ - step:
+     name: 30
+     actions: [ ]
