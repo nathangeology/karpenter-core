@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"sigs.k8s.io/karpenter/hack/e2e_driver/pkg/tracking"
+	"sigs.k8s.io/karpenter/hack/e2e_driver/pkg/snapshots"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -18,11 +18,11 @@ import (
 
 // Logger handles audit log configuration and collection
 type Logger struct {
-	client          *kubernetes.Clientset
-	auditLogDir     string
-	runID           string
-	collectedLogs   []byte
-	resourceHistory map[string]*tracking.ResourceHistory
+	client        *kubernetes.Clientset
+	auditLogDir   string
+	runID         string
+	collectedLogs []byte
+	snapshots     []snapshots.ClusterSnapshot
 }
 
 // NewLogger creates a new audit logger
@@ -115,57 +115,22 @@ rules:
 
 // CollectLogs retrieves the audit logs from the cluster
 func (l *Logger) CollectLogs(ctx context.Context) error {
-	// In a real implementation, this would copy logs from the KIND node container
-	// or access them via the API if the cluster exposes them.
-
-	// For this implementation, we'll collect:
-	// 1. Deployment information
-	// 2. Node information
-	// 3. Pod information
-
-	// Create a log collection structure
+	// Create a log collection structure that includes the snapshots
 	type LogCollection struct {
-		RunID           string                               `json:"run_id"`
-		Timestamp       string                               `json:"timestamp"`
-		Deployments     interface{}                          `json:"deployments"`
-		Nodes           interface{}                          `json:"nodes"`
-		Pods            interface{}                          `json:"pods"`
-		ResourceHistory map[string]*tracking.ResourceHistory `json:"resource_history,omitempty"`
+		RunID     string                      `json:"run_id"`
+		Timestamp string                      `json:"timestamp"`
+		Snapshots []snapshots.ClusterSnapshot `json:"cluster_snapshots,omitempty"`
 	}
 
-	// Collect deployment data
-	deployments, err := l.client.AppsV1().Deployments("").List(ctx, metav1.ListOptions{
-		LabelSelector: "managed-by=k8s-sim-driver",
-	})
-	if err != nil {
-		return fmt.Errorf("failed to collect deployment logs: %w", err)
-	}
-
-	// Collect node data - this is the addition you requested
-	nodes, err := l.client.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to collect node logs: %w", err)
-	}
-
-	// Collect pod data
-	pods, err := l.client.CoreV1().Pods("").List(ctx, metav1.ListOptions{
-		LabelSelector: "managed-by=k8s-sim-driver",
-	})
-	if err != nil {
-		return fmt.Errorf("failed to collect pod logs: %w", err)
-	}
-
-	// Create the log collection object
+	// Create the log collection object with snapshots
 	logCollection := LogCollection{
-		RunID:           l.runID,
-		Timestamp:       time.Now().UTC().Format(time.RFC3339),
-		Deployments:     deployments,
-		Nodes:           nodes,
-		Pods:            pods,
-		ResourceHistory: l.resourceHistory,
+		RunID:     l.runID,
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Snapshots: l.snapshots,
 	}
 
 	// Marshal to JSON
+	var err error
 	l.collectedLogs, err = json.MarshalIndent(logCollection, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal log data: %w", err)
@@ -198,9 +163,9 @@ func (l *Logger) SaveLogs(ctx context.Context) (string, error) {
 	return fullPath, nil
 }
 
-// AddResourceHistory adds resource tracking history to the audit logs
-func (l *Logger) AddResourceHistory(history map[string]*tracking.ResourceHistory) {
-	l.resourceHistory = history
+// AddSnapshots adds cluster snapshots to the audit logs
+func (l *Logger) AddSnapshots(clusterSnapshots []snapshots.ClusterSnapshot) {
+	l.snapshots = clusterSnapshots
 }
 
 // GetLogs returns the collected logs

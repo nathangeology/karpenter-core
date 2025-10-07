@@ -9,25 +9,25 @@ import (
 	"sigs.k8s.io/karpenter/hack/e2e_driver/pkg/config"
 	"sigs.k8s.io/karpenter/hack/e2e_driver/pkg/deployment"
 	"sigs.k8s.io/karpenter/hack/e2e_driver/pkg/s3"
-	"sigs.k8s.io/karpenter/hack/e2e_driver/pkg/tracking"
+	"sigs.k8s.io/karpenter/hack/e2e_driver/pkg/snapshots"
 )
 
 // Driver orchestrates the scenario execution
 type Driver struct {
-	config        *config.SimulatorConfig
-	steps         *config.ScenarioConfig
-	deploymentMgr *deployment.Manager
-	auditLogger   *audit.Logger
-	tracker       *tracking.ResourceTracker
-	s3Uploader    *s3.Uploader
-	timestep      time.Duration
-	auditLogDir   string
-	s3BucketName  string
-	s3Region      string
-	scenarioDir   string // Path to the scenario directory
-	logResults    bool
-	stepsExecuted int
-	startTime     time.Time
+	config            *config.SimulatorConfig
+	steps             *config.ScenarioConfig
+	deploymentMgr     *deployment.Manager
+	auditLogger       *audit.Logger
+	snapshotCollector *snapshots.SnapshotCollector
+	s3Uploader        *s3.Uploader
+	timestep          time.Duration
+	auditLogDir       string
+	s3BucketName      string
+	s3Region          string
+	scenarioDir       string // Path to the scenario directory
+	logResults        bool
+	stepsExecuted     int
+	startTime         time.Time
 }
 
 // DriverConfig holds the configuration for the driver
@@ -49,33 +49,34 @@ func NewDriver(cfg DriverConfig) (*Driver, error) {
 		return nil, fmt.Errorf("failed to load scenario: %w", err)
 	}
 
-	// Create resource tracker
-	tracker := tracking.NewResourceTracker()
-
 	// Create deployment manager
 	deploymentMgr, err := deployment.NewManager(cfg.Namespace, cfg.KubeconfigPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create deployment manager: %w", err)
 	}
 
-	// Set the tracker in the deployment manager
-	deploymentMgr.SetTracker(tracker)
+	// Create snapshot collector (30 second intervals)
+	snapshotCollector := snapshots.NewSnapshotCollector(
+		deploymentMgr.GetClientset(),
+		cfg.Namespace,
+		30*time.Second,
+	)
 
 	// Create audit logger
 	auditLogger := audit.NewLogger(deploymentMgr.GetClientset(), cfg.AuditLogDir, simConfig.Simulator.RunID)
 
 	return &Driver{
-		config:        simConfig,
-		steps:         steps,
-		deploymentMgr: deploymentMgr,
-		auditLogger:   auditLogger,
-		tracker:       tracker,
-		timestep:      time.Duration(simConfig.Simulator.Timestep) * time.Second,
-		auditLogDir:   cfg.AuditLogDir,
-		s3BucketName:  cfg.S3BucketName,
-		s3Region:      cfg.S3Region,
-		scenarioDir:   cfg.ScenarioDir,
-		logResults:    cfg.LogResults,
+		config:            simConfig,
+		steps:             steps,
+		deploymentMgr:     deploymentMgr,
+		auditLogger:       auditLogger,
+		snapshotCollector: snapshotCollector,
+		timestep:          time.Duration(simConfig.Simulator.Timestep) * time.Second,
+		auditLogDir:       cfg.AuditLogDir,
+		s3BucketName:      cfg.S3BucketName,
+		s3Region:          cfg.S3Region,
+		scenarioDir:       cfg.ScenarioDir,
+		logResults:        cfg.LogResults,
 	}, nil
 }
 
@@ -83,6 +84,11 @@ func NewDriver(cfg DriverConfig) (*Driver, error) {
 func (d *Driver) Run(ctx context.Context) error {
 	d.startTime = time.Now()
 	fmt.Printf("Starting scenario: %s\n", d.config.Simulator.RunID)
+
+	// Start snapshot collection
+	fmt.Println("Starting periodic cluster snapshots...")
+	d.snapshotCollector.Start(ctx)
+	defer d.snapshotCollector.Stop()
 
 	// Configure audit logging
 	if err := d.auditLogger.ConfigureAuditPolicy(ctx); err != nil {
@@ -239,16 +245,14 @@ func (d *Driver) collectAndUploadLogs(ctx context.Context) error {
 		return fmt.Errorf("failed to collect logs: %w", err)
 	}
 
-	// Add tracked resource history to audit logs
-	if d.tracker != nil {
-		fmt.Printf("Adding resource tracking data to audit logs...\n")
-		fmt.Printf("Tracked resources: %d resources, %d events, %d types\n",
-			d.tracker.GetResourceCount(),
-			d.tracker.GetEventCount(),
-			len(d.tracker.GetResourceTypes()))
+	// Add snapshot data to audit logs
+	if d.snapshotCollector != nil {
+		fmt.Printf("Adding cluster snapshot data to audit logs...\n")
+		summary := d.snapshotCollector.GetSnapshotSummary()
+		fmt.Printf("Collected snapshots: %v\n", summary)
 
-		// Add the resource history to the audit logger
-		d.auditLogger.AddResourceHistory(d.tracker.GetHistory())
+		// Add the snapshots to the audit logger
+		d.auditLogger.AddSnapshots(d.snapshotCollector.GetSnapshots())
 	}
 
 	// Save logs locally
