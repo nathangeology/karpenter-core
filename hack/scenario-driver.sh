@@ -39,6 +39,7 @@ fi
 
 # Create log directory if it doesn't exist
 mkdir -p "$LOG_DIR"
+echo "Using log directory: $LOG_DIR for scenario: $SCENARIO"
 
 # Apply nodepool if it exists
 if [ -d "${SCENARIO}/nodepools" ]; then

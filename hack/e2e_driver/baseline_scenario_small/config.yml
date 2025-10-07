@@ -1,0 +1,21 @@
+simulator:
+  run_id: 'baseline_small'
+  run_description: 'Standard configuration for testing'
+  associated_scenario: 'baseline' # Scenario Name in library info
+  timestep: 30 # seconds per step (good values are between 1-120/secs)
+  start_step: 1 # What step of the scenario to start on
+  limit: 30 # How many steps to take, if this number is higher that the scenario steps file, it will loop over the scenario
+  instance_pool_size: 1000 # How many instances of a given instance type that can be provisioned
+  logging: 1 # The logging level, higher numbers will give more debug messages, 100 should include any message emitted
+  clusters:
+    - KubernetesCluster:
+        type: KubernetesCluster
+        name: default
+        node_count: 3
+        node_type: c5.large
+        autoscaling: true
+        nodepool_directory: nodepools
+  deployments_directory: deployments
+  deployments:
+    - a1
+    - a2

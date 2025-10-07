@@ -1,0 +1,112 @@
+scenario:
+ - step:
+     name: 1
+     actions:
+       - action:
+           comment: 'Scales service A1 to 50'
+           action_type: K8S_SCALE
+           action_data: name=a1,replicas=50
+       - action:
+           comment: 'Scales service A2 to 50'
+           action_type: K8S_SCALE
+           action_data: name=a2,replicas=50
+ - step:
+     name: 2
+     actions: [ ]
+ - step:
+     name: 3
+     actions: []
+ - step:
+     name: 4
+     actions: [ ]
+ - step:
+     name: 5
+     actions: [ ]
+ - step:
+     name: 6
+     actions: [ ]
+ - step:
+     name: 7
+     actions: [ ]
+ - step:
+     name: 8
+     actions: [ ]
+ - step:
+     name: 9
+     actions: [ ]
+ - step:
+     name: 10
+     actions:
+       - action:
+           comment: 'Scales service A1 to 35'
+           action_type: K8S_SCALE
+           action_data: name=a1,replicas=35
+       - action:
+           comment: 'Scales service A2 to 35'
+           action_type: K8S_SCALE
+           action_data: name=a2,replicas=35
+ - step:
+     name: 11
+     actions: [ ]
+ - step:
+     name: 12
+     actions: [ ]
+ - step:
+     name: 13
+     actions: [ ]
+ - step:
+     name: 14
+     actions: [ ]
+ - step:
+     name: 15
+     actions: [ ]
+ - step:
+     name: 16
+     actions: [ ]
+ - step:
+     name: 17
+     actions: [ ]
+ - step:
+     name: 18
+     actions: [ ]
+ - step:
+     name: 19
+     actions: [ ]
+ - step:
+     name: 20
+     actions:
+       - action:
+           comment: 'Scales service A1 to 1'
+           action_type: K8S_SCALE
+           action_data: name=a1,replicas=1
+       - action:
+           comment: 'Scales service A2 to 1'
+           action_type: K8S_SCALE
+           action_data: name=a2,replicas=1
+ - step:
+     name: 21
+     actions: [ ]
+ - step:
+     name: 22
+     actions: [ ]
+ - step:
+     name: 23
+     actions: [ ]
+ - step:
+     name: 24
+     actions: [ ]
+ - step:
+     name: 25
+     actions: [ ]
+ - step:
+     name: 26
+     actions: [ ]
+ - step:
+     name: 27
+     actions: [ ]
+ - step:
+     name: 28
+     actions: [ ]
+ - step:
+     name: 29
+     actions: [ ]

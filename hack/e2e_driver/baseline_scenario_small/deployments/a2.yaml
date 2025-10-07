@@ -1,0 +1,28 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: a2
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: a2
+  template:
+    metadata:
+      labels:
+        app: a2
+    spec:
+      terminationGracePeriodSeconds: 15
+      containers:
+        - name: deploy-a2-container
+          image: nginx:latest
+          resources:
+            requests:
+              cpu: '0.95'
+              memory: 7500Mi
+      topologySpreadConstraints:
+        - maxSkew: 4
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+      nodeSelector:
+        karpenter.sh/nodepool: default
