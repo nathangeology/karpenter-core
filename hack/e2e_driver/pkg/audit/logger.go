@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"sigs.k8s.io/karpenter/hack/e2e_driver/pkg/tracking"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -16,10 +18,11 @@ import (
 
 // Logger handles audit log configuration and collection
 type Logger struct {
-	client        *kubernetes.Clientset
-	auditLogDir   string
-	runID         string
-	collectedLogs []byte
+	client          *kubernetes.Clientset
+	auditLogDir     string
+	runID           string
+	collectedLogs   []byte
+	resourceHistory map[string]*tracking.ResourceHistory
 }
 
 // NewLogger creates a new audit logger
@@ -122,11 +125,12 @@ func (l *Logger) CollectLogs(ctx context.Context) error {
 
 	// Create a log collection structure
 	type LogCollection struct {
-		RunID       string      `json:"run_id"`
-		Timestamp   string      `json:"timestamp"`
-		Deployments interface{} `json:"deployments"`
-		Nodes       interface{} `json:"nodes"`
-		Pods        interface{} `json:"pods"`
+		RunID           string                               `json:"run_id"`
+		Timestamp       string                               `json:"timestamp"`
+		Deployments     interface{}                          `json:"deployments"`
+		Nodes           interface{}                          `json:"nodes"`
+		Pods            interface{}                          `json:"pods"`
+		ResourceHistory map[string]*tracking.ResourceHistory `json:"resource_history,omitempty"`
 	}
 
 	// Collect deployment data
@@ -153,11 +157,12 @@ func (l *Logger) CollectLogs(ctx context.Context) error {
 
 	// Create the log collection object
 	logCollection := LogCollection{
-		RunID:       l.runID,
-		Timestamp:   time.Now().UTC().Format(time.RFC3339),
-		Deployments: deployments,
-		Nodes:       nodes,
-		Pods:        pods,
+		RunID:           l.runID,
+		Timestamp:       time.Now().UTC().Format(time.RFC3339),
+		Deployments:     deployments,
+		Nodes:           nodes,
+		Pods:            pods,
+		ResourceHistory: l.resourceHistory,
 	}
 
 	// Marshal to JSON
@@ -191,6 +196,11 @@ func (l *Logger) SaveLogs(ctx context.Context) (string, error) {
 	}
 
 	return fullPath, nil
+}
+
+// AddResourceHistory adds resource tracking history to the audit logs
+func (l *Logger) AddResourceHistory(history map[string]*tracking.ResourceHistory) {
+	l.resourceHistory = history
 }
 
 // GetLogs returns the collected logs

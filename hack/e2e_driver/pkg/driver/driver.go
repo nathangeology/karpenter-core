@@ -9,6 +9,7 @@ import (
 	"sigs.k8s.io/karpenter/hack/e2e_driver/pkg/config"
 	"sigs.k8s.io/karpenter/hack/e2e_driver/pkg/deployment"
 	"sigs.k8s.io/karpenter/hack/e2e_driver/pkg/s3"
+	"sigs.k8s.io/karpenter/hack/e2e_driver/pkg/tracking"
 )
 
 // Driver orchestrates the scenario execution
@@ -17,6 +18,7 @@ type Driver struct {
 	steps         *config.ScenarioConfig
 	deploymentMgr *deployment.Manager
 	auditLogger   *audit.Logger
+	tracker       *tracking.ResourceTracker
 	s3Uploader    *s3.Uploader
 	timestep      time.Duration
 	auditLogDir   string
@@ -47,11 +49,17 @@ func NewDriver(cfg DriverConfig) (*Driver, error) {
 		return nil, fmt.Errorf("failed to load scenario: %w", err)
 	}
 
+	// Create resource tracker
+	tracker := tracking.NewResourceTracker()
+
 	// Create deployment manager
 	deploymentMgr, err := deployment.NewManager(cfg.Namespace, cfg.KubeconfigPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create deployment manager: %w", err)
 	}
+
+	// Set the tracker in the deployment manager
+	deploymentMgr.SetTracker(tracker)
 
 	// Create audit logger
 	auditLogger := audit.NewLogger(deploymentMgr.GetClientset(), cfg.AuditLogDir, simConfig.Simulator.RunID)
@@ -61,6 +69,7 @@ func NewDriver(cfg DriverConfig) (*Driver, error) {
 		steps:         steps,
 		deploymentMgr: deploymentMgr,
 		auditLogger:   auditLogger,
+		tracker:       tracker,
 		timestep:      time.Duration(simConfig.Simulator.Timestep) * time.Second,
 		auditLogDir:   cfg.AuditLogDir,
 		s3BucketName:  cfg.S3BucketName,
@@ -228,6 +237,18 @@ func (d *Driver) collectAndUploadLogs(ctx context.Context) error {
 	// Collect logs
 	if err := d.auditLogger.CollectLogs(ctx); err != nil {
 		return fmt.Errorf("failed to collect logs: %w", err)
+	}
+
+	// Add tracked resource history to audit logs
+	if d.tracker != nil {
+		fmt.Printf("Adding resource tracking data to audit logs...\n")
+		fmt.Printf("Tracked resources: %d resources, %d events, %d types\n",
+			d.tracker.GetResourceCount(),
+			d.tracker.GetEventCount(),
+			len(d.tracker.GetResourceTypes()))
+
+		// Add the resource history to the audit logger
+		d.auditLogger.AddResourceHistory(d.tracker.GetHistory())
 	}
 
 	// Save logs locally

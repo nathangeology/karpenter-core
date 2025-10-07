@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"sigs.k8s.io/karpenter/hack/e2e_driver/pkg/config"
+	"sigs.k8s.io/karpenter/hack/e2e_driver/pkg/tracking"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -23,6 +24,7 @@ type Manager struct {
 	namespace     string
 	labels        map[string]string
 	manifests     map[string][]byte // Stores loaded Kubernetes manifests by name
+	tracker       *tracking.ResourceTracker
 }
 
 // NewManager creates a new deployment manager
@@ -218,9 +220,14 @@ func (m *Manager) CreateDeployment(ctx context.Context, workload config.Workload
 	}
 
 	// Create the deployment in Kubernetes
-	_, err := m.client.AppsV1().Deployments(m.namespace).Create(ctx, deployment, metav1.CreateOptions{})
+	createdDeployment, err := m.client.AppsV1().Deployments(m.namespace).Create(ctx, deployment, metav1.CreateOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to create deployment %s: %w", name, err)
+	}
+
+	// Track the deployment creation
+	if m.tracker != nil {
+		m.tracker.TrackResource("deployment", name, m.namespace, "create", createdDeployment)
 	}
 
 	return nil
@@ -239,9 +246,14 @@ func (m *Manager) ScaleDeployment(ctx context.Context, name string, replicas int
 	deployment.Spec.Replicas = &replicaCount
 
 	// Update the deployment
-	_, err = m.client.AppsV1().Deployments(m.namespace).Update(ctx, deployment, metav1.UpdateOptions{})
+	updatedDeployment, err := m.client.AppsV1().Deployments(m.namespace).Update(ctx, deployment, metav1.UpdateOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to scale deployment %s to %d replicas: %w", name, replicas, err)
+	}
+
+	// Track the deployment scaling
+	if m.tracker != nil {
+		m.tracker.TrackResource("deployment", name, m.namespace, "scale", updatedDeployment)
 	}
 
 	return nil
@@ -380,6 +392,11 @@ func (m *Manager) GetDeploymentDiagnostics(ctx context.Context) (string, error) 
 	}
 
 	return diagnostics, nil
+}
+
+// SetTracker sets the resource tracker for this manager
+func (m *Manager) SetTracker(tracker *tracking.ResourceTracker) {
+	m.tracker = tracker
 }
 
 // GetClientset returns the Kubernetes clientset
