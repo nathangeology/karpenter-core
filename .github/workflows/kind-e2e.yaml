@@ -34,16 +34,53 @@ jobs:
           k8sVersion: ${{ matrix.k8sVersion }}
     - name: Setup audit directories
       run: |
-        sudo mkdir -p /etc/kubernetes/audit/
-        sudo chmod 777 /etc/kubernetes/audit/
-        sudo mkdir -p /var/log/kubernetes/audit/
-        sudo chmod 777 /var/log/kubernetes/audit/
-        cp .github/audit-policy.yaml /etc/kubernetes/audit/audit-policy.yaml
+        sudo mkdir -p /tmp/audit-logs
+        sudo chmod 777 /tmp/audit-logs
+        sudo mkdir -p /tmp/audit-policy
+        sudo chmod 777 /tmp/audit-policy
+        cp .github/audit-policy.yaml /tmp/audit-policy/audit-policy.yaml
         
     - name: Kind Cluster
       uses: helm/kind-action@a1b0e391336a6ee6713a0583f8c6240d70863de3 # v1.12.0
       with:
         config: .github/kind-config.yaml
+        
+    - name: Configure API server for audit logging
+      run: |
+        echo "Setting up audit logging on API server..."
+        # Wait for the API server to be fully up
+        kubectl wait --for=condition=Ready nodes/chart-testing-control-plane --timeout=60s || true
+        sleep 5
+        
+        # Modify the API server configuration to enable audit logging
+        kubectl exec -it chart-testing-control-plane -- bash -c '
+          echo "Setting up audit policy..."
+          mkdir -p /etc/kubernetes/audit
+          cat > /etc/kubernetes/audit/audit-policy.yaml << "EOF"
+          apiVersion: audit.k8s.io/v1
+          kind: Policy
+          rules:
+          - level: RequestResponse
+            resources:
+              - group: ""
+                resources: ["pods", "nodes", "events"]
+              - group: "apps"
+                resources: ["deployments", "replicasets"]
+              - group: "karpenter.sh"
+                resources: ["*"]
+            verbs: ["create", "delete", "update", "patch"]
+          - level: Metadata
+            omitStages:
+              - "RequestReceived"
+          EOF
+          
+          echo "Updating API server configuration..."
+          sed -i "s#- kube-apiserver#- kube-apiserver\n    - --audit-log-path=/var/log/kubernetes/audit/audit.log\n    - --audit-policy-file=/etc/kubernetes/audit/audit-policy.yaml#g" /etc/kubernetes/manifests/kube-apiserver.yaml
+        '
+        
+        echo "Waiting for API server to restart..."
+        sleep 30
+        kubectl wait --for=condition=Ready nodes/chart-testing-control-plane --timeout=90s
     - name: check kind cluster and taint nodes
       shell: bash
       run: |
