@@ -14,8 +14,7 @@ spec:
       - 'True'
   delay:
     durationMilliseconds: 1000
-    durationFrom:
-      expressionFrom: '.metadata.annotations["node-not-ready.stage.kwok.x-k8s.io/delay"]'
+    jitterDurationMilliseconds: 500
   next:
     statusTemplate: |
       {{ $now := Now }}
