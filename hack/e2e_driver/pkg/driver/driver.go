@@ -10,6 +10,8 @@ import (
 	"sigs.k8s.io/karpenter/hack/e2e_driver/pkg/deployment"
 	"sigs.k8s.io/karpenter/hack/e2e_driver/pkg/s3"
 	"sigs.k8s.io/karpenter/hack/e2e_driver/pkg/snapshots"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // Driver orchestrates the scenario execution
@@ -134,6 +136,16 @@ func (d *Driver) Run(ctx context.Context) error {
 	fmt.Println("Taking baseline snapshot after deployment stabilization...")
 	d.snapshotCollector.TakeStepSnapshot(ctx, "baseline", 0)
 
+	// Print baseline resource counts
+	podCount, kwokNodeCount, err := d.getResourceCounts(ctx)
+	if err != nil {
+		fmt.Printf("WARNING: Failed to get baseline resource counts: %v\n", err)
+	} else {
+		fmt.Printf("Baseline cluster state:\n")
+		fmt.Printf("  └─ Pods in default namespace: %d\n", podCount)
+		fmt.Printf("  └─ KWOK nodes: %d\n", kwokNodeCount)
+	}
+
 	// Execute scenario steps
 	fmt.Println("Starting scenario step execution...")
 	startStep := d.config.Simulator.StartStep
@@ -194,7 +206,72 @@ func (d *Driver) executeStep(ctx context.Context, step config.ScenarioStep) erro
 	fmt.Printf("Taking snapshot for step %s (step %d)\n", step.Step.Name, d.stepsExecuted+1)
 	d.snapshotCollector.TakeStepSnapshot(ctx, step.Step.Name, d.stepsExecuted+1)
 
+	// Get and print resource counts
+	podCount, kwokNodeCount, err := d.getResourceCounts(ctx)
+	if err != nil {
+		fmt.Printf("WARNING: Failed to get resource counts: %v\n", err)
+	} else {
+		fmt.Printf("  └─ Pods in default namespace: %d\n", podCount)
+		fmt.Printf("  └─ KWOK nodes: %d\n", kwokNodeCount)
+	}
+
 	return nil
+}
+
+// getResourceCounts returns the count of pods in default namespace and KWOK nodes
+func (d *Driver) getResourceCounts(ctx context.Context) (int, int, error) {
+	client := d.deploymentMgr.GetClientset()
+
+	// Count pods in default namespace
+	pods, err := client.CoreV1().Pods("default").List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to list pods in default namespace: %w", err)
+	}
+	podCount := len(pods.Items)
+
+	// Count KWOK nodes (nodes with kwok-related labels or annotations)
+	nodes, err := client.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return podCount, 0, fmt.Errorf("failed to list nodes: %w", err)
+	}
+
+	kwokNodeCount := 0
+	for _, node := range nodes.Items {
+		// Check for KWOK-related labels or annotations
+		if isKwokNode(node.Labels, node.Annotations) {
+			kwokNodeCount++
+		}
+	}
+
+	return podCount, kwokNodeCount, nil
+}
+
+// isKwokNode determines if a node is a KWOK node based on labels and annotations
+func isKwokNode(labels, annotations map[string]string) bool {
+	// Check common KWOK identifiers
+	if labels != nil {
+		// Check for kwok instance type
+		if instanceType, exists := labels["node.kubernetes.io/instance-type"]; exists && instanceType == "kwok" {
+			return true
+		}
+		// Check for kwok provider
+		if provider, exists := labels["kubernetes.io/hostname"]; exists && provider == "kwok" {
+			return true
+		}
+		// Check for kwok node label
+		if _, exists := labels["kwok.x-k8s.io/node"]; exists {
+			return true
+		}
+	}
+
+	if annotations != nil {
+		// Check for kwok annotations
+		if _, exists := annotations["kwok.x-k8s.io/node"]; exists {
+			return true
+		}
+	}
+
+	return false
 }
 
 // waitForStableDeployments waits until all deployments are stable
