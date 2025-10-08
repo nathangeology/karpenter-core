@@ -51,7 +51,7 @@ jobs:
         export KWOK_REPO=kind.local
         export KIND_CLUSTER_NAME=chart-testing
         make apply-with-kind
-        ./.hack/e2e_driver/kwok-config/pod_container_init_completed.sh
+        ./hack/e2e_driver/kwok-config/pod_container_init_completed.sh
         ./hack/e2e_driver/kwok-config/pod_create_stage.sh
         ./hack/e2e_driver/kwok-config/pod_delete_stage.sh
         ./hack/e2e_driver/kwok-config/pod_init_container_running.sh
