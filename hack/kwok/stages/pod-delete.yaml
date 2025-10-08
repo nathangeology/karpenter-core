@@ -4,8 +4,8 @@ metadata:
   name: pod-delete
 spec:
   delay:
-    durationFrom:
-      expressionFrom: .metadata.annotations["pod-delete.stage.kwok.x-k8s.io/delay"]
+    durationMilliseconds: 5000
+    jitterDurationMilliseconds: 1000
   next:
     delete: true
     finalizers:
