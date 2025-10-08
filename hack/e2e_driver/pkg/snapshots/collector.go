@@ -147,7 +147,7 @@ func (sc *SnapshotCollector) takeSnapshotWithContext(ctx context.Context, stepNa
 	}
 	// Filter events to recent ones only
 	recentEvents := &corev1.EventList{}
-	cutoff := time.Now().Add(-10 * time.Minute)
+	cutoff := time.Now().Add(-2 * time.Minute)
 	for _, event := range events.Items {
 		if event.LastTimestamp.Time.After(cutoff) || event.FirstTimestamp.Time.After(cutoff) {
 			recentEvents.Items = append(recentEvents.Items, event)

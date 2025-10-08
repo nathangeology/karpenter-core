@@ -42,7 +42,7 @@ jobs:
         kubectl taint nodes chart-testing-control-plane CriticalAddonsOnly:NoSchedule
     - name: install prometheus 
       uses: ./.github/actions/install-prometheus
-    - name: install pyroscope 
+    - name: install pyroscope
       uses: ./.github/actions/install-pyroscope
     - name: install kwok and controller
       shell: bash
@@ -51,6 +51,13 @@ jobs:
         export KWOK_REPO=kind.local
         export KIND_CLUSTER_NAME=chart-testing
         make apply-with-kind
+        ./.github/actions/kwok-config/pod_container_init_completed.sh
+        ./.github/actions/kwok-config/pod_create_stage.sh
+        ./.github/actions/kwok-config/pod_delete_stage.sh
+        ./.github/actions/kwok-config/pod_init_container_running.sh
+        ./.github/actions/kwok-config/pod_ready_stage.sh
+        kubectl apply ./.github/actions/kwok-config/fast_node.yaml
+        kubectl apply ./.github/actions/kwok-config/node-heartbeat-with-lease.yml
 
     - name: ping cluster
       shell: bash
