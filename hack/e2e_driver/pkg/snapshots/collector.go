@@ -13,12 +13,15 @@ import (
 
 // ClusterSnapshot represents a complete snapshot of the cluster state at a specific time
 type ClusterSnapshot struct {
-	Timestamp   time.Time              `json:"timestamp"`
-	Nodes       *corev1.NodeList       `json:"nodes"`
-	Pods        *corev1.PodList        `json:"pods"`
-	Deployments *appsv1.DeploymentList `json:"deployments"`
-	ReplicaSets *appsv1.ReplicaSetList `json:"replicasets"`
-	Events      *corev1.EventList      `json:"events"`
+	Timestamp    time.Time              `json:"timestamp"`
+	StepName     string                 `json:"step_name,omitempty"`
+	StepNumber   int                    `json:"step_number,omitempty"`
+	SnapshotType string                 `json:"snapshot_type"` // "periodic" or "step"
+	Nodes        *corev1.NodeList       `json:"nodes"`
+	Pods         *corev1.PodList        `json:"pods"`
+	Deployments  *appsv1.DeploymentList `json:"deployments"`
+	ReplicaSets  *appsv1.ReplicaSetList `json:"replicasets"`
+	Events       *corev1.EventList      `json:"events"`
 }
 
 // SnapshotCollector periodically captures cluster state snapshots
@@ -86,10 +89,23 @@ func (sc *SnapshotCollector) Stop() {
 	close(sc.stopCh)
 }
 
-// takeSnapshot captures a complete cluster state snapshot
+// TakeStepSnapshot captures a snapshot for a specific scenario step
+func (sc *SnapshotCollector) TakeStepSnapshot(ctx context.Context, stepName string, stepNumber int) {
+	sc.takeSnapshotWithContext(ctx, stepName, stepNumber, "step")
+}
+
+// takeSnapshot captures a complete cluster state snapshot (periodic)
 func (sc *SnapshotCollector) takeSnapshot(ctx context.Context) {
+	sc.takeSnapshotWithContext(ctx, "", 0, "periodic")
+}
+
+// takeSnapshotWithContext captures a complete cluster state snapshot with context
+func (sc *SnapshotCollector) takeSnapshotWithContext(ctx context.Context, stepName string, stepNumber int, snapshotType string) {
 	snapshot := ClusterSnapshot{
-		Timestamp: time.Now(),
+		Timestamp:    time.Now(),
+		StepName:     stepName,
+		StepNumber:   stepNumber,
+		SnapshotType: snapshotType,
 	}
 
 	// Collect all nodes

@@ -130,6 +130,10 @@ func (d *Driver) Run(ctx context.Context) error {
 		return err
 	}
 
+	// Take a baseline snapshot after deployments are stable
+	fmt.Println("Taking baseline snapshot after deployment stabilization...")
+	d.snapshotCollector.TakeStepSnapshot(ctx, "baseline", 0)
+
 	// Execute scenario steps
 	fmt.Println("Starting scenario step execution...")
 	startStep := d.config.Simulator.StartStep
@@ -185,6 +189,10 @@ func (d *Driver) executeStep(ctx context.Context, step config.ScenarioStep) erro
 			fmt.Printf("  Unsupported action type: %s\n", actionType)
 		}
 	}
+
+	// Take a snapshot at the end of this step to capture the resulting cluster state
+	fmt.Printf("Taking snapshot for step %s (step %d)\n", step.Step.Name, d.stepsExecuted+1)
+	d.snapshotCollector.TakeStepSnapshot(ctx, step.Step.Name, d.stepsExecuted+1)
 
 	return nil
 }
