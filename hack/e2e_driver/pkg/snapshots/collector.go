@@ -3,6 +3,7 @@ package snapshots
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -140,20 +141,26 @@ func (sc *SnapshotCollector) takeSnapshotWithContext(ctx context.Context, stepNa
 	}
 	snapshot.ReplicaSets = replicasets
 
-	// Collect recent events (last 10 minutes)
+	// Collect events from the entire scenario duration (not just 10 minutes)
 	events, err := sc.client.CoreV1().Events("").List(ctx, metav1.ListOptions{})
 	if err != nil {
 		events = &corev1.EventList{}
 	}
-	// Filter events to recent ones only
-	recentEvents := &corev1.EventList{}
-	cutoff := time.Now().Add(-2 * time.Minute)
+
+	// Filter events to include deletion/termination events and recent events
+	relevantEvents := &corev1.EventList{}
+	cutoff := time.Now().Add(-60 * time.Minute) // Extended to 60 minutes to capture more history
+
 	for _, event := range events.Items {
-		if event.LastTimestamp.Time.After(cutoff) || event.FirstTimestamp.Time.After(cutoff) {
-			recentEvents.Items = append(recentEvents.Items, event)
+		// Include recent events OR deletion/termination related events
+		isRecent := event.LastTimestamp.Time.After(cutoff) || event.FirstTimestamp.Time.After(cutoff)
+		isDeletionEvent := isDeletionRelatedEvent(event.Reason, event.Message)
+
+		if isRecent || isDeletionEvent {
+			relevantEvents.Items = append(relevantEvents.Items, event)
 		}
 	}
-	snapshot.Events = recentEvents
+	snapshot.Events = relevantEvents
 
 	// Store the snapshot
 	sc.mutex.Lock()
@@ -214,4 +221,41 @@ func (sc *SnapshotCollector) GetSnapshotSummary() map[string]interface{} {
 		"latest_pod_count":        podCount,
 		"latest_deployment_count": deploymentCount,
 	}
+}
+
+// isDeletionRelatedEvent checks if an event is related to resource deletion or termination
+func isDeletionRelatedEvent(reason, message string) bool {
+	// Pod deletion/termination events
+	deletionReasons := []string{
+		"Killing", "Preempting", "Evicted", "SuccessfulDelete", "Deleted",
+		"Terminating", "FailedDelete", "DeletingPod", "RemovingPod",
+		// Node deletion/termination events
+		"DeletingNode", "RemovingNode", "TerminatingNode", "NodeNotReady",
+		// Karpenter-specific events
+		"Disrupting", "Deprovisioning", "Consolidating", "Drifted",
+		// Container/Pod lifecycle events
+		"Created", "Started", "Stopped", "Completed", "Failed",
+	}
+
+	// Check if the reason matches any deletion-related reasons
+	for _, deletionReason := range deletionReasons {
+		if strings.Contains(reason, deletionReason) {
+			return true
+		}
+	}
+
+	// Check message content for deletion indicators
+	deletionMessages := []string{
+		"deleted", "terminating", "evicted", "killing", "stopping",
+		"removed", "deprovisioning", "disrupting", "consolidating",
+	}
+
+	lowerMessage := strings.ToLower(message)
+	for _, deletionMsg := range deletionMessages {
+		if strings.Contains(lowerMessage, deletionMsg) {
+			return true
+		}
+	}
+
+	return false
 }

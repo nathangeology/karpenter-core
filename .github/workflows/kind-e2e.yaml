@@ -51,13 +51,15 @@ jobs:
         export KWOK_REPO=kind.local
         export KIND_CLUSTER_NAME=chart-testing
         make apply-with-kind
+        # Make KWOK stage scripts executable
+        chmod +x ./hack/e2e_driver/kwok-config/*.sh
         ./hack/e2e_driver/kwok-config/pod_container_init_completed.sh
         ./hack/e2e_driver/kwok-config/pod_create_stage.sh
         ./hack/e2e_driver/kwok-config/pod_delete_stage.sh
         ./hack/e2e_driver/kwok-config/pod_init_container_running.sh
         ./hack/e2e_driver/kwok-config/pod_ready_stage.sh
-        kubectl apply ./hack/e2e_driver/kwok-config/fast_node.yaml
-        kubectl apply ./hack/e2e_driver/kwok-config/node-heartbeat-with-lease.yml
+        kubectl apply -f ./hack/e2e_driver/kwok-config/fast_node.yaml
+        kubectl apply -f ./hack/e2e_driver/kwok-config/node-heartbeat-with-lease.yml
 
     - name: ping cluster
       shell: bash
