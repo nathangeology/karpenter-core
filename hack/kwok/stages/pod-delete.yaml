@@ -7,6 +7,10 @@ spec:
     durationMilliseconds: 5000
     jitterDurationMilliseconds: 1000
   next:
+    event:
+      type: Normal
+      reason: Killing
+      message: "Stopping container"
     delete: true
     finalizers:
       empty: true

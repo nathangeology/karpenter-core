@@ -1,0 +1,57 @@
+apiVersion: kwok.x-k8s.io/v1alpha1
+kind: Stage
+metadata:
+  name: pod-terminating
+spec:
+  resourceRef:
+    apiGroup: v1
+    kind: Pod
+  selector:
+    matchExpressions:
+    - key: .metadata.deletionTimestamp
+      operator: Exists
+    - key: .status.phase
+      operator: In
+      values:
+      - "Running"
+      - "Pending"
+  weight: 50
+  delay:
+    durationMilliseconds: 1000
+  next:
+    event:
+      type: Normal
+      reason: Terminating
+      message: "Pod is terminating"
+    statusTemplate: |
+      {{ $now := Now }}
+      conditions:
+      - lastProbeTime: null
+        lastTransitionTime: {{ $now | Quote }}
+        status: "False"
+        type: Ready
+        reason: "PodCompleted"
+        message: "Pod is terminating"
+      - lastProbeTime: null
+        lastTransitionTime: {{ $now | Quote }}
+        status: "False"
+        type: ContainersReady
+        reason: "PodCompleted"
+        message: "Pod is terminating"
+
+      containerStatuses:
+      {{ range .spec.containers }}
+      - image: {{ .image | Quote }}
+        name: {{ .name | Quote }}
+        ready: false
+        restartCount: 0
+        started: false
+        state:
+          terminated:
+            exitCode: 0
+            finishedAt: {{ $now | Quote }}
+            reason: Completed
+            startedAt: {{ $now | Quote }}
+      {{ end }}
+
+      phase: Succeeded

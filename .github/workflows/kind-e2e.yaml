@@ -51,6 +51,11 @@ jobs:
         export KWOK_REPO=kind.local
         export KIND_CLUSTER_NAME=chart-testing
         make apply-with-kind
+        # Apply enhanced KWOK stages for better event generation
+        kubectl apply -f ./hack/kwok/stages/pod-complete-lifecycle.yaml
+        kubectl apply -f ./hack/kwok/stages/pod-container-events.yaml
+        kubectl apply -f ./hack/kwok/stages/pod-terminating.yaml
+        kubectl apply -f ./hack/kwok/stages/node-terminating.yaml
         # Apply additional KWOK node configuration
         kubectl apply -f ./hack/e2e_driver/kwok-config/fast_node.yaml
         kubectl apply -f ./hack/e2e_driver/kwok-config/node-heartbeat-with-lease.yml
