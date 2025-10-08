@@ -18,15 +18,9 @@ spec:
     - key: '.status.initContainerStatuses.[].state.running.startedAt'
       operator: 'Exists'
   weight: 1
-  weightFrom:
-    expressionFrom: '.metadata.annotations["pod-init-container-completed.stage.kwok.x-k8s.io/weight"]'
   delay:
     durationMilliseconds: 1000
-    durationFrom:
-      expressionFrom: '.metadata.annotations["pod-init-container-completed.stage.kwok.x-k8s.io/delay"]'
     jitterDurationMilliseconds: 5000
-    jitterDurationFrom:
-      expressionFrom: '.metadata.annotations["pod-init-container-completed.stage.kwok.x-k8s.io/jitter-delay"]'
   next:
     statusTemplate: |
       {{ $now := Now }}

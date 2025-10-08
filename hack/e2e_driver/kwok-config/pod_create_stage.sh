@@ -14,15 +14,9 @@ spec:
     - key: '.status.podIP'
       operator: 'DoesNotExist'
   weight: 1
-  weightFrom:
-    expressionFrom: '.metadata.annotations["pod-create.stage.kwok.x-k8s.io/weight"]'
   delay:
     durationMilliseconds: 1000
-    durationFrom:
-      expressionFrom: '.metadata.annotations["pod-create.stage.kwok.x-k8s.io/delay"]'
     jitterDurationMilliseconds: 1000
-    jitterDurationFrom:
-      expressionFrom: '.metadata.annotations["pod-create.stage.kwok.x-k8s.io/jitter-delay"]'
   next:
     event:
       type: Normal

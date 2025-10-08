@@ -14,14 +14,9 @@ spec:
     - key: '.metadata.finalizers'
       operator: 'DoesNotExist'
   weight: 1
-  weightFrom:
-    expressionFrom: '.metadata.annotations["pod-delete.stage.kwok.x-k8s.io/weight"]'
   delay:
     durationMilliseconds: 5000
-    durationFrom:
-      expressionFrom: '.metadata.annotations["pod-delete.stage.kwok.x-k8s.io/delay"]'
-    jitterDurationFrom:
-      expressionFrom: '.metadata.deletionTimestamp'
+    jitterDurationMilliseconds: 1000
   next:
     delete: true
 EOF
