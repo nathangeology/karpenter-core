@@ -122,6 +122,8 @@ func (l *Logger) CollectLogs(ctx context.Context) error {
 		Snapshots []snapshots.ClusterSnapshot `json:"cluster_snapshots,omitempty"`
 	}
 
+	fmt.Printf("DEBUG: CollectLogs called with %d snapshots in logger\n", len(l.snapshots))
+
 	// Create the log collection object with snapshots
 	logCollection := LogCollection{
 		RunID:     l.runID,
@@ -129,12 +131,16 @@ func (l *Logger) CollectLogs(ctx context.Context) error {
 		Snapshots: l.snapshots,
 	}
 
+	fmt.Printf("DEBUG: LogCollection created with %d snapshots\n", len(logCollection.Snapshots))
+
 	// Marshal to JSON
 	var err error
 	l.collectedLogs, err = json.MarshalIndent(logCollection, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal log data: %w", err)
 	}
+
+	fmt.Printf("DEBUG: JSON marshaled successfully, size: %d bytes\n", len(l.collectedLogs))
 
 	return nil
 }
@@ -166,6 +172,12 @@ func (l *Logger) SaveLogs(ctx context.Context) (string, error) {
 // AddSnapshots adds cluster snapshots to the audit logs
 func (l *Logger) AddSnapshots(clusterSnapshots []snapshots.ClusterSnapshot) {
 	l.snapshots = clusterSnapshots
+	fmt.Printf("DEBUG: AddSnapshots called with %d snapshots\n", len(clusterSnapshots))
+	for i, snapshot := range clusterSnapshots {
+		fmt.Printf("DEBUG: Snapshot %d - Type: %s, Step: %s, Nodes: %d, Pods: %d\n",
+			i, snapshot.SnapshotType, snapshot.StepName,
+			len(snapshot.Nodes.Items), len(snapshot.Pods.Items))
+	}
 }
 
 // GetLogs returns the collected logs

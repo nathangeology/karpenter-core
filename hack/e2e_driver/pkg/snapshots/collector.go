@@ -2,6 +2,7 @@ package snapshots
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -91,7 +92,9 @@ func (sc *SnapshotCollector) Stop() {
 
 // TakeStepSnapshot captures a snapshot for a specific scenario step
 func (sc *SnapshotCollector) TakeStepSnapshot(ctx context.Context, stepName string, stepNumber int) {
+	fmt.Printf("DEBUG: TakeStepSnapshot called for step '%s' (number %d)\n", stepName, stepNumber)
 	sc.takeSnapshotWithContext(ctx, stepName, stepNumber, "step")
+	fmt.Printf("DEBUG: Step snapshot completed, total snapshots: %d\n", sc.GetSnapshotCount())
 }
 
 // takeSnapshot captures a complete cluster state snapshot (periodic)

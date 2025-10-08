@@ -248,19 +248,25 @@ func (d *Driver) waitForStableDeployments(ctx context.Context) error {
 func (d *Driver) collectAndUploadLogs(ctx context.Context) error {
 	fmt.Println("Collecting audit logs...")
 
-	// Collect logs
-	if err := d.auditLogger.CollectLogs(ctx); err != nil {
-		return fmt.Errorf("failed to collect logs: %w", err)
-	}
-
-	// Add snapshot data to audit logs
+	// Add snapshot data to audit logs BEFORE collecting logs
 	if d.snapshotCollector != nil {
 		fmt.Printf("Adding cluster snapshot data to audit logs...\n")
 		summary := d.snapshotCollector.GetSnapshotSummary()
 		fmt.Printf("Collected snapshots: %v\n", summary)
 
+		snapshots := d.snapshotCollector.GetSnapshots()
+		fmt.Printf("Retrieved %d snapshots from collector\n", len(snapshots))
+
 		// Add the snapshots to the audit logger
-		d.auditLogger.AddSnapshots(d.snapshotCollector.GetSnapshots())
+		d.auditLogger.AddSnapshots(snapshots)
+		fmt.Printf("Added snapshots to audit logger\n")
+	} else {
+		fmt.Printf("WARNING: No snapshot collector available\n")
+	}
+
+	// Collect logs (this will now include the snapshots)
+	if err := d.auditLogger.CollectLogs(ctx); err != nil {
+		return fmt.Errorf("failed to collect logs: %w", err)
 	}
 
 	// Save logs locally
