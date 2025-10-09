@@ -11,6 +11,7 @@ import (
 	"sigs.k8s.io/karpenter/hack/e2e_driver/pkg/s3"
 	"sigs.k8s.io/karpenter/hack/e2e_driver/pkg/snapshots"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -236,10 +237,50 @@ func (d *Driver) getResourceCounts(ctx context.Context) (int, int, error) {
 	}
 
 	kwokNodeCount := 0
+	var firstKwokNode *corev1.Node
 	for _, node := range nodes.Items {
 		// Check for KWOK-related labels or annotations
 		if isKwokNode(node.Labels, node.Annotations) {
 			kwokNodeCount++
+			if firstKwokNode == nil {
+				nodeCopy := node
+				firstKwokNode = &nodeCopy
+			}
+		}
+	}
+
+	// Print detailed information about the first KWOK node for debugging
+	if firstKwokNode != nil {
+		fmt.Printf("  └─ Sample KWOK node details:\n")
+		fmt.Printf("     Name: %s\n", firstKwokNode.Name)
+
+		// Print key topology labels
+		if firstKwokNode.Labels != nil {
+			if hostname, exists := firstKwokNode.Labels["topology.kubernetes.io/hostname"]; exists {
+				fmt.Printf("     topology.kubernetes.io/hostname: %s\n", hostname)
+			} else {
+				fmt.Printf("     topology.kubernetes.io/hostname: MISSING\n")
+			}
+
+			if zone, exists := firstKwokNode.Labels["topology.kubernetes.io/zone"]; exists {
+				fmt.Printf("     topology.kubernetes.io/zone: %s\n", zone)
+			} else {
+				fmt.Printf("     topology.kubernetes.io/zone: MISSING\n")
+			}
+
+			if nodepool, exists := firstKwokNode.Labels["karpenter.sh/nodepool"]; exists {
+				fmt.Printf("     karpenter.sh/nodepool: %s\n", nodepool)
+			}
+		}
+
+		// Print node capacity
+		if firstKwokNode.Status.Capacity != nil {
+			if cpu, exists := firstKwokNode.Status.Capacity["cpu"]; exists {
+				fmt.Printf("     CPU capacity: %s\n", cpu.String())
+			}
+			if memory, exists := firstKwokNode.Status.Capacity["memory"]; exists {
+				fmt.Printf("     Memory capacity: %s\n", memory.String())
+			}
 		}
 	}
 
