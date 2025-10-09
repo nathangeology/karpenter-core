@@ -256,10 +256,10 @@ func (d *Driver) getResourceCounts(ctx context.Context) (int, int, error) {
 
 		// Print key topology labels
 		if firstKwokNode.Labels != nil {
-			if hostname, exists := firstKwokNode.Labels["topology.kubernetes.io/hostname"]; exists {
-				fmt.Printf("     topology.kubernetes.io/hostname: %s\n", hostname)
+			if hostname, exists := firstKwokNode.Labels["kubernetes.io/hostname"]; exists {
+				fmt.Printf("     kubernetes.io/hostname: %s\n", hostname)
 			} else {
-				fmt.Printf("     topology.kubernetes.io/hostname: MISSING\n")
+				fmt.Printf("     kubernetes.io/hostname: MISSING\n")
 			}
 
 			if zone, exists := firstKwokNode.Labels["topology.kubernetes.io/zone"]; exists {
