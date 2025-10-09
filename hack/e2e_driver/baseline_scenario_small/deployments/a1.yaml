@@ -22,10 +22,16 @@ spec:
             memory: 1800Mi
       topologySpreadConstraints:
         - maxSkew: 2
-          topologyKey: kubernetes.io/hostname
+          topologyKey: topology.kubernetes.io/hostname
           whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: a1
         - maxSkew: 4
           topologyKey: topology.kubernetes.io/zone
           whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: a1
       nodeSelector:
         karpenter.sh/nodepool: default

@@ -24,5 +24,8 @@ spec:
         - maxSkew: 4
           topologyKey: topology.kubernetes.io/zone
           whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: a2
       nodeSelector:
         karpenter.sh/nodepool: default
