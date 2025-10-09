@@ -31,7 +31,7 @@ spec:
               app: a1
         - maxSkew: 4
           topologyKey: topology.kubernetes.io/zone
-          whenUnsatisfiable: ScheduleAnyway
+          whenUnsatisfiable: DoNotSchedule
           labelSelector:
             matchLabels:
               app: a1
