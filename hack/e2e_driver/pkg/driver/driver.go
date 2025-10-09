@@ -230,6 +230,22 @@ func (d *Driver) getResourceCounts(ctx context.Context) (int, int, error) {
 	}
 	podCount := len(pods.Items)
 
+	// Count pods by phase
+	podsByPhase := make(map[corev1.PodPhase]int)
+	podsByNode := make(map[string][]string)
+
+	for _, pod := range pods.Items {
+		// Count by phase
+		podsByPhase[pod.Status.Phase]++
+
+		// Count by node
+		nodeName := pod.Spec.NodeName
+		if nodeName == "" {
+			nodeName = "unscheduled"
+		}
+		podsByNode[nodeName] = append(podsByNode[nodeName], pod.Name)
+	}
+
 	// Count KWOK nodes (nodes with kwok-related labels or annotations)
 	nodes, err := client.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -238,10 +254,13 @@ func (d *Driver) getResourceCounts(ctx context.Context) (int, int, error) {
 
 	kwokNodeCount := 0
 	var firstKwokNode *corev1.Node
+	kwokNodes := make([]corev1.Node, 0)
+
 	for _, node := range nodes.Items {
 		// Check for KWOK-related labels or annotations
 		if isKwokNode(node.Labels, node.Annotations) {
 			kwokNodeCount++
+			kwokNodes = append(kwokNodes, node)
 			if firstKwokNode == nil {
 				nodeCopy := node
 				firstKwokNode = &nodeCopy
@@ -249,38 +268,51 @@ func (d *Driver) getResourceCounts(ctx context.Context) (int, int, error) {
 		}
 	}
 
-	// Print detailed information about the first KWOK node for debugging
-	if firstKwokNode != nil {
-		fmt.Printf("  └─ Sample KWOK node details:\n")
-		fmt.Printf("     Name: %s\n", firstKwokNode.Name)
+	// Print pod phase breakdown
+	fmt.Printf("  └─ Pod breakdown by phase:\n")
+	for phase, count := range podsByPhase {
+		fmt.Printf("     %s: %d\n", phase, count)
+	}
+
+	// Print pod distribution across nodes
+	fmt.Printf("  └─ Pod distribution across nodes:\n")
+	for nodeName, podNames := range podsByNode {
+		fmt.Printf("     %s: %d pods (%v)\n", nodeName, len(podNames), podNames)
+	}
+
+	// Print detailed information about KWOK nodes
+	fmt.Printf("  └─ KWOK node details (%d total):\n", kwokNodeCount)
+	for i, node := range kwokNodes {
+		fmt.Printf("     Node %d - Name: %s\n", i+1, node.Name)
 
 		// Print key topology labels
-		if firstKwokNode.Labels != nil {
-			if hostname, exists := firstKwokNode.Labels["kubernetes.io/hostname"]; exists {
-				fmt.Printf("     kubernetes.io/hostname: %s\n", hostname)
+		if node.Labels != nil {
+			if hostname, exists := node.Labels["kubernetes.io/hostname"]; exists {
+				fmt.Printf("       kubernetes.io/hostname: %s\n", hostname)
 			} else {
-				fmt.Printf("     kubernetes.io/hostname: MISSING\n")
+				fmt.Printf("       kubernetes.io/hostname: MISSING\n")
 			}
 
-			if zone, exists := firstKwokNode.Labels["topology.kubernetes.io/zone"]; exists {
-				fmt.Printf("     topology.kubernetes.io/zone: %s\n", zone)
-			} else {
-				fmt.Printf("     topology.kubernetes.io/zone: MISSING\n")
-			}
-
-			if nodepool, exists := firstKwokNode.Labels["karpenter.sh/nodepool"]; exists {
-				fmt.Printf("     karpenter.sh/nodepool: %s\n", nodepool)
+			if zone, exists := node.Labels["topology.kubernetes.io/zone"]; exists {
+				fmt.Printf("       topology.kubernetes.io/zone: %s\n", zone)
 			}
 		}
 
 		// Print node capacity
-		if firstKwokNode.Status.Capacity != nil {
-			if cpu, exists := firstKwokNode.Status.Capacity["cpu"]; exists {
-				fmt.Printf("     CPU capacity: %s\n", cpu.String())
+		if node.Status.Capacity != nil {
+			if cpu, exists := node.Status.Capacity["cpu"]; exists {
+				fmt.Printf("       CPU capacity: %s\n", cpu.String())
 			}
-			if memory, exists := firstKwokNode.Status.Capacity["memory"]; exists {
-				fmt.Printf("     Memory capacity: %s\n", memory.String())
+			if memory, exists := node.Status.Capacity["memory"]; exists {
+				fmt.Printf("       Memory capacity: %s\n", memory.String())
 			}
+		}
+
+		// Show how many pods are on this node
+		if podNames, exists := podsByNode[node.Name]; exists {
+			fmt.Printf("       Pods on this node: %d (%v)\n", len(podNames), podNames)
+		} else {
+			fmt.Printf("       Pods on this node: 0\n")
 		}
 	}
 
