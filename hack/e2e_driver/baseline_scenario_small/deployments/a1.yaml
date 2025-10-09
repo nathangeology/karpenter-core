@@ -23,7 +23,7 @@ spec:
             cpu: '0.95'
             memory: 1800Mi
       topologySpreadConstraints:
-        - maxSkew: 2
+        - maxSkew: 1
           topologyKey: topology.kubernetes.io/hostname
           whenUnsatisfiable: DoNotSchedule
           labelSelector:
