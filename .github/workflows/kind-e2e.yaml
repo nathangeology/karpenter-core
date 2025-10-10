@@ -11,7 +11,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        k8sVersion: ["1.31.x"] # 1.30.x", "1.31.x",
+        k8sVersion: ["1.34.0"] # 1.30.x", "1.31.x",
         scenario: ["hack/e2e_driver/baseline_scenario_small"] # "hack/e2e_driver/kubernetes_scenario_1753908801",
         include:
 #          - k8sVersion: "1.30.x"
