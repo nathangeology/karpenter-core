@@ -68,7 +68,8 @@ jobs:
         export KIND_CLUSTER_NAME=chart-testing
         make apply-with-kind
         # Fix kube-scheduler RBAC permissions for topology spread constraints
-        kubectl apply -f ./hack/e2e_driver/kwok-config/scheduler-rbac.yaml
+        chmod +x ./hack/e2e_driver/kwok-config/patch-scheduler-rbac.sh
+        ./hack/e2e_driver/kwok-config/patch-scheduler-rbac.sh
         
         # Debug: Comprehensive Scheduler RBAC Diagnosis
         echo "=== Scheduler RBAC Diagnosis ==="
