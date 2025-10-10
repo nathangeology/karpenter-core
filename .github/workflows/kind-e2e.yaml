@@ -53,6 +53,8 @@ jobs:
         export KWOK_REPO=kind.local
         export KIND_CLUSTER_NAME=chart-testing
         make apply-with-kind
+        # Fix kube-scheduler RBAC permissions for topology spread constraints
+        kubectl apply -f ./hack/e2e_driver/kwok-config/scheduler-rbac.yaml
         # Apply enhanced KWOK stages for better event generation
         kubectl apply -f ./hack/kwok/stages/pod-complete-lifecycle.yaml
         kubectl apply -f ./hack/kwok/stages/pod-container-events.yaml
@@ -61,6 +63,8 @@ jobs:
         # Apply additional KWOK node configuration
         kubectl apply -f ./hack/e2e_driver/kwok-config/fast_node.yaml
         kubectl apply -f ./hack/e2e_driver/kwok-config/node-heartbeat-with-lease.yml
+        # Restart kube-scheduler to pick up new permissions
+        kubectl delete pod -n kube-system -l component=kube-scheduler
 
     - name: ping cluster
       shell: bash
