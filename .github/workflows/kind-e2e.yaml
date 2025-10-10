@@ -71,7 +71,16 @@ jobs:
         chmod +x ./hack/e2e_driver/kwok-config/patch-scheduler-rbac.sh
         chmod +x ./hack/e2e_driver/kwok-config/fix-scheduler-auth.sh
         ./hack/e2e_driver/kwok-config/patch-scheduler-rbac.sh
+        
+        # Check scheduler logs after ClusterRole patch
+        echo "=== Scheduler Logs After ClusterRole Patch ==="
+        kubectl logs -n kube-system -l component=kube-scheduler --tail=20 | grep -E "(forbidden|Failed to watch|Starting Kubernetes Scheduler)" || echo "No scheduler error logs found"
+        
         ./hack/e2e_driver/kwok-config/fix-scheduler-auth.sh
+        
+        # Check scheduler logs after authentication fix
+        echo "=== Scheduler Logs After Authentication Fix ==="
+        kubectl logs -n kube-system -l component=kube-scheduler --tail=20 | grep -E "(forbidden|Failed to watch|authentication)" || echo "No authentication-related logs"
         
         # Nuclear option: Restart API server to clear authentication caches
         echo "=== Restarting API Server to Clear Caches ==="
@@ -79,6 +88,10 @@ jobs:
         echo "Waiting for API server to restart..."
         sleep 30
         kubectl get pods -n kube-system -l component=kube-apiserver
+        
+        # Check scheduler logs after API server restart
+        echo "=== Scheduler Logs After API Server Restart ==="
+        kubectl logs -n kube-system -l component=kube-scheduler --tail=20 | grep -E "(forbidden|Failed to watch|Caches are synced)" || echo "No cache-related logs"
         
         # Verify the authentication fix worked
         echo "=== Post-Fix Authentication Test ==="
@@ -151,6 +164,14 @@ jobs:
         sleep 10
         kubectl get pods -n kube-system -l component=kube-scheduler
         kubectl describe pod -n kube-system -l component=kube-scheduler
+        
+        # Check scheduler logs after scheduler restart
+        echo "=== Scheduler Logs After Scheduler Restart ==="
+        kubectl logs -n kube-system -l component=kube-scheduler --tail=30 | grep -E "(forbidden|Failed to watch|Starting Kubernetes Scheduler|successfully)" || echo "No relevant scheduler logs"
+        
+        # Final scheduler status check before scenario
+        echo "=== Final Scheduler Status Before Scenario ==="
+        kubectl logs -n kube-system -l component=kube-scheduler --tail=50 | grep -E "(forbidden|Failed to watch|successfully|healthy|leader lease)" || echo "No final status logs"
 
     - name: ping cluster
       shell: bash
