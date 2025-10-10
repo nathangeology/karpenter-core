@@ -3,6 +3,7 @@ package driver
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"sigs.k8s.io/karpenter/hack/e2e_driver/pkg/audit"
@@ -419,6 +420,11 @@ func (d *Driver) collectAndUploadLogs(ctx context.Context) error {
 		return fmt.Errorf("failed to collect logs: %w", err)
 	}
 
+	// Collect component logs (Karpenter and kube-scheduler)
+	if err := d.auditLogger.CollectComponentLogs(ctx); err != nil {
+		fmt.Printf("WARNING: Failed to collect component logs: %v\n", err)
+	}
+
 	// Save logs locally
 	logPath, err := d.auditLogger.SaveLogs(ctx)
 	if err != nil {
@@ -437,16 +443,32 @@ func (d *Driver) collectAndUploadLogs(ctx context.Context) error {
 			return fmt.Errorf("failed to create S3 uploader: %w", err)
 		}
 
-		// Generate S3 object key
 		timestamp := time.Now().UTC().Format("20060102-150405")
-		objectKey := fmt.Sprintf("logs/%s/%s.json", d.config.Simulator.RunID, timestamp)
 
-		// Upload logs
-		if err := uploader.UploadLogFile(logPath, objectKey); err != nil {
-			return fmt.Errorf("failed to upload logs to S3: %w", err)
+		// Upload audit logs
+		auditObjectKey := fmt.Sprintf("logs/%s/audit-log-%s.json", d.config.Simulator.RunID, timestamp)
+		if err := uploader.UploadLogFile(logPath, auditObjectKey); err != nil {
+			return fmt.Errorf("failed to upload audit logs to S3: %w", err)
+		}
+		fmt.Printf("Audit logs uploaded to S3: s3://%s/%s\n", d.s3BucketName, auditObjectKey)
+
+		// Upload Karpenter logs
+		karpenterLogPath := filepath.Join(d.auditLogDir, fmt.Sprintf("karpenter-log-%s-%s.txt", d.config.Simulator.RunID, timestamp))
+		karpenterObjectKey := fmt.Sprintf("logs/%s/karpenter-log-%s.txt", d.config.Simulator.RunID, timestamp)
+		if err := uploader.UploadLogFile(karpenterLogPath, karpenterObjectKey); err != nil {
+			fmt.Printf("WARNING: Failed to upload Karpenter logs to S3: %v\n", err)
+		} else {
+			fmt.Printf("Karpenter logs uploaded to S3: s3://%s/%s\n", d.s3BucketName, karpenterObjectKey)
 		}
 
-		fmt.Printf("Logs uploaded to S3: s3://%s/%s\n", d.s3BucketName, objectKey)
+		// Upload scheduler logs
+		schedulerLogPath := filepath.Join(d.auditLogDir, fmt.Sprintf("scheduler-log-%s-%s.txt", d.config.Simulator.RunID, timestamp))
+		schedulerObjectKey := fmt.Sprintf("logs/%s/scheduler-log-%s.txt", d.config.Simulator.RunID, timestamp)
+		if err := uploader.UploadLogFile(schedulerLogPath, schedulerObjectKey); err != nil {
+			fmt.Printf("WARNING: Failed to upload scheduler logs to S3: %v\n", err)
+		} else {
+			fmt.Printf("Scheduler logs uploaded to S3: s3://%s/%s\n", d.s3BucketName, schedulerObjectKey)
+		}
 	}
 
 	// Display execution summary

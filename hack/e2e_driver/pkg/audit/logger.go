@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"time"
 
@@ -177,6 +178,88 @@ func (l *Logger) AddSnapshots(clusterSnapshots []snapshots.ClusterSnapshot) {
 		fmt.Printf("DEBUG: Snapshot %d - Type: %s, Step: %s, Nodes: %d, Pods: %d\n",
 			i, snapshot.SnapshotType, snapshot.StepName,
 			len(snapshot.Nodes.Items), len(snapshot.Pods.Items))
+	}
+}
+
+// CollectComponentLogs collects logs from Karpenter and kube-scheduler
+func (l *Logger) CollectComponentLogs(ctx context.Context) error {
+	fmt.Println("Collecting Karpenter and kube-scheduler logs...")
+
+	// Collect Karpenter logs
+	karpenterLogs, err := l.getKarpenterLogs(ctx)
+	if err != nil {
+		fmt.Printf("WARNING: Failed to collect Karpenter logs: %v\n", err)
+		karpenterLogs = fmt.Sprintf("Error collecting Karpenter logs: %v", err)
+	}
+
+	// Collect kube-scheduler logs
+	schedulerLogs, err := l.getSchedulerLogs(ctx)
+	if err != nil {
+		fmt.Printf("WARNING: Failed to collect scheduler logs: %v\n", err)
+		schedulerLogs = fmt.Sprintf("Error collecting scheduler logs: %v", err)
+	}
+
+	// Save logs to separate files
+	timestamp := time.Now().UTC().Format("20060102-150405")
+
+	// Save Karpenter logs
+	karpenterFile := filepath.Join(l.auditLogDir, fmt.Sprintf("karpenter-log-%s-%s.txt", l.runID, timestamp))
+	if err := ioutil.WriteFile(karpenterFile, []byte(karpenterLogs), 0644); err != nil {
+		return fmt.Errorf("failed to write Karpenter log file: %w", err)
+	}
+	fmt.Printf("Karpenter logs saved to: %s\n", karpenterFile)
+
+	// Save scheduler logs
+	schedulerFile := filepath.Join(l.auditLogDir, fmt.Sprintf("scheduler-log-%s-%s.txt", l.runID, timestamp))
+	if err := ioutil.WriteFile(schedulerFile, []byte(schedulerLogs), 0644); err != nil {
+		return fmt.Errorf("failed to write scheduler log file: %w", err)
+	}
+	fmt.Printf("Scheduler logs saved to: %s\n", schedulerFile)
+
+	return nil
+}
+
+// getKarpenterLogs retrieves logs from the Karpenter controller
+func (l *Logger) getKarpenterLogs(ctx context.Context) (string, error) {
+	cmd := exec.Command("kubectl", "logs", "-n", "kube-system", "deployment/karpenter", "--tail=1000")
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to get Karpenter logs: %w", err)
+	}
+	return string(output), nil
+}
+
+// getSchedulerLogs retrieves logs from the kube-scheduler
+func (l *Logger) getSchedulerLogs(ctx context.Context) (string, error) {
+	// First, find the scheduler pod
+	pods, err := l.client.CoreV1().Pods("kube-system").List(ctx, metav1.ListOptions{
+		LabelSelector: "component=kube-scheduler",
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to list scheduler pods: %w", err)
+	}
+
+	if len(pods.Items) == 0 {
+		return "No kube-scheduler pods found", nil
+	}
+
+	// Get logs from the first scheduler pod
+	schedulerPod := pods.Items[0].Name
+	cmd := exec.Command("kubectl", "logs", "-n", "kube-system", schedulerPod, "--tail=1000")
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to get scheduler logs from pod %s: %w", schedulerPod, err)
+	}
+	return string(output), nil
+}
+
+// GetLogFiles returns paths to all log files for S3 upload
+func (l *Logger) GetLogFiles() []string {
+	timestamp := time.Now().UTC().Format("20060102-150405")
+	return []string{
+		filepath.Join(l.auditLogDir, fmt.Sprintf("audit-log-%s-%s.json", l.runID, timestamp)),
+		filepath.Join(l.auditLogDir, fmt.Sprintf("karpenter-log-%s-%s.txt", l.runID, timestamp)),
+		filepath.Join(l.auditLogDir, fmt.Sprintf("scheduler-log-%s-%s.txt", l.runID, timestamp)),
 	}
 }
 
