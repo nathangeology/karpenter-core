@@ -11,7 +11,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        k8sVersion: ["1.34.x"] # 1.30.x", "1.31.x",
+        k8sVersion: ["1.33.x"] # 1.30.x", "1.31.x",
         scenario: ["hack/e2e_driver/baseline_scenario_small"] # "hack/e2e_driver/kubernetes_scenario_1753908801",
         include:
 #          - k8sVersion: "1.30.x"
@@ -20,8 +20,8 @@ jobs:
 #          - k8sVersion: "1.31.x"
 #            kindNodeImage: "kindest/node:v1.31.1@sha256:de14b5d8e3c9cd0b576ca570b8f1b774b2df9b5d4930d86139b132b7a6ac7c5e"
 #            kubectlVersion: "v1.31.1"
-          - k8sVersion: "1.34.x"
-            kindNodeImage: "kindest/node:v1.34.0" # @sha256:7416a61b42b1662ca6ca89f02028ac133a309a2a30ba309614e8ec94d976dc5a
+          - k8sVersion: "1.33.x"
+            kindNodeImage: "kindest/node:v1.33.0" # @sha256:7416a61b42b1662ca6ca89f02028ac133a309a2a30ba309614e8ec94d976dc5a
 #            kubectlVersion: "v1.34.0"
     steps:
     - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
