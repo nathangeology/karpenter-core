@@ -24,6 +24,7 @@ type Logger struct {
 	runID         string
 	collectedLogs []byte
 	snapshots     []snapshots.ClusterSnapshot
+	timestamp     string // Consistent timestamp for all log files
 }
 
 // NewLogger creates a new audit logger
@@ -185,6 +186,11 @@ func (l *Logger) AddSnapshots(clusterSnapshots []snapshots.ClusterSnapshot) {
 func (l *Logger) CollectComponentLogs(ctx context.Context) error {
 	fmt.Println("Collecting Karpenter and kube-scheduler logs...")
 
+	// Set consistent timestamp for all log files
+	if l.timestamp == "" {
+		l.timestamp = time.Now().UTC().Format("20060102-150405")
+	}
+
 	// Collect Karpenter logs
 	karpenterLogs, err := l.getKarpenterLogs(ctx)
 	if err != nil {
@@ -199,18 +205,15 @@ func (l *Logger) CollectComponentLogs(ctx context.Context) error {
 		schedulerLogs = fmt.Sprintf("Error collecting scheduler logs: %v", err)
 	}
 
-	// Save logs to separate files
-	timestamp := time.Now().UTC().Format("20060102-150405")
-
 	// Save Karpenter logs
-	karpenterFile := filepath.Join(l.auditLogDir, fmt.Sprintf("karpenter-log-%s-%s.txt", l.runID, timestamp))
+	karpenterFile := filepath.Join(l.auditLogDir, fmt.Sprintf("karpenter-log-%s-%s.txt", l.runID, l.timestamp))
 	if err := ioutil.WriteFile(karpenterFile, []byte(karpenterLogs), 0644); err != nil {
 		return fmt.Errorf("failed to write Karpenter log file: %w", err)
 	}
 	fmt.Printf("Karpenter logs saved to: %s\n", karpenterFile)
 
 	// Save scheduler logs
-	schedulerFile := filepath.Join(l.auditLogDir, fmt.Sprintf("scheduler-log-%s-%s.txt", l.runID, timestamp))
+	schedulerFile := filepath.Join(l.auditLogDir, fmt.Sprintf("scheduler-log-%s-%s.txt", l.runID, l.timestamp))
 	if err := ioutil.WriteFile(schedulerFile, []byte(schedulerLogs), 0644); err != nil {
 		return fmt.Errorf("failed to write scheduler log file: %w", err)
 	}
@@ -261,6 +264,14 @@ func (l *Logger) GetLogFiles() []string {
 		filepath.Join(l.auditLogDir, fmt.Sprintf("karpenter-log-%s-%s.txt", l.runID, timestamp)),
 		filepath.Join(l.auditLogDir, fmt.Sprintf("scheduler-log-%s-%s.txt", l.runID, timestamp)),
 	}
+}
+
+// GetTimestamp returns the consistent timestamp used for all log files
+func (l *Logger) GetTimestamp() string {
+	if l.timestamp == "" {
+		l.timestamp = time.Now().UTC().Format("20060102-150405")
+	}
+	return l.timestamp
 }
 
 // GetLogs returns the collected logs

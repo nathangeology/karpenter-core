@@ -443,7 +443,8 @@ func (d *Driver) collectAndUploadLogs(ctx context.Context) error {
 			return fmt.Errorf("failed to create S3 uploader: %w", err)
 		}
 
-		timestamp := time.Now().UTC().Format("20060102-150405")
+		// Get the consistent timestamp from the audit logger
+		timestamp := d.auditLogger.GetTimestamp()
 
 		// Upload audit logs
 		auditObjectKey := fmt.Sprintf("logs/%s/audit-log-%s.json", d.config.Simulator.RunID, timestamp)
@@ -452,7 +453,7 @@ func (d *Driver) collectAndUploadLogs(ctx context.Context) error {
 		}
 		fmt.Printf("Audit logs uploaded to S3: s3://%s/%s\n", d.s3BucketName, auditObjectKey)
 
-		// Upload Karpenter logs
+		// Upload Karpenter logs (using the same timestamp from audit logger)
 		karpenterLogPath := filepath.Join(d.auditLogDir, fmt.Sprintf("karpenter-log-%s-%s.txt", d.config.Simulator.RunID, timestamp))
 		karpenterObjectKey := fmt.Sprintf("logs/%s/karpenter-log-%s.txt", d.config.Simulator.RunID, timestamp)
 		if err := uploader.UploadLogFile(karpenterLogPath, karpenterObjectKey); err != nil {
@@ -461,7 +462,7 @@ func (d *Driver) collectAndUploadLogs(ctx context.Context) error {
 			fmt.Printf("Karpenter logs uploaded to S3: s3://%s/%s\n", d.s3BucketName, karpenterObjectKey)
 		}
 
-		// Upload scheduler logs
+		// Upload scheduler logs (using the same timestamp from audit logger)
 		schedulerLogPath := filepath.Join(d.auditLogDir, fmt.Sprintf("scheduler-log-%s-%s.txt", d.config.Simulator.RunID, timestamp))
 		schedulerObjectKey := fmt.Sprintf("logs/%s/scheduler-log-%s.txt", d.config.Simulator.RunID, timestamp)
 		if err := uploader.UploadLogFile(schedulerLogPath, schedulerObjectKey); err != nil {
