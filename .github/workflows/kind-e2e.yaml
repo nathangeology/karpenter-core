@@ -86,6 +86,28 @@ jobs:
         echo "All kube-system ClusterRoleBindings:"
         kubectl get clusterrolebindings -o wide | grep kube-system || echo "No kube-system ClusterRoleBindings found"
         
+        # Debug: Authentication Debugging
+        echo "=== Authentication Debugging ==="
+        # Check what identity the scheduler is actually using
+        kubectl auth whoami --as=system:kube-scheduler || echo "Cannot authenticate as system:kube-scheduler"
+        
+        # Check if the scheduler can access anything at all
+        kubectl auth can-i get nodes --as=system:kube-scheduler || echo "system:kube-scheduler cannot get nodes"
+        kubectl auth can-i get pods --as=system:kube-scheduler || echo "system:kube-scheduler cannot get pods"
+        kubectl auth can-i list nodes --as=system:kube-scheduler || echo "system:kube-scheduler cannot list nodes"
+        kubectl auth can-i list pods --as=system:kube-scheduler || echo "system:kube-scheduler cannot list pods"
+        
+        # Check the scheduler's kubeconfig
+        echo "Scheduler kubeconfig (first 20 lines):"
+        kubectl exec -n kube-system -l component=kube-scheduler -- cat /etc/kubernetes/scheduler.conf | head -20 || echo "Could not get scheduler kubeconfig"
+        
+        # Check if anonymous access is working
+        kubectl auth can-i get nodes --as=system:anonymous || echo "Anonymous cannot get nodes"
+        
+        # Check current user permissions
+        kubectl auth whoami || echo "Cannot determine current user"
+        kubectl auth can-i get nodes || echo "Current user cannot get nodes"
+        
         # Debug: Verify our RBAC was applied successfully
         echo "=== Our RBAC Verification ==="
         kubectl get clusterrole system:kube-scheduler-extended || echo "Our ClusterRole not found"
