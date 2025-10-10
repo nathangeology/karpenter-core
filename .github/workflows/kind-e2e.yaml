@@ -55,6 +55,14 @@ jobs:
         make apply-with-kind
         # Fix kube-scheduler RBAC permissions for topology spread constraints
         kubectl apply -f ./hack/e2e_driver/kwok-config/scheduler-rbac.yaml
+        
+        # Debug: Verify RBAC was applied successfully
+        echo "=== RBAC Verification ==="
+        kubectl get clusterrole system:kube-scheduler-extended || echo "ClusterRole not found"
+        kubectl get clusterrolebinding system:kube-scheduler-extended || echo "ClusterRoleBinding not found"
+        kubectl get rolebinding -n kube-system kube-scheduler-extension-apiserver-authentication-reader || echo "RoleBinding not found"
+        kubectl get role -n kube-system extension-apiserver-authentication-reader || echo "Built-in role not found"
+        
         # Apply enhanced KWOK stages for better event generation
         kubectl apply -f ./hack/kwok/stages/pod-complete-lifecycle.yaml
         kubectl apply -f ./hack/kwok/stages/pod-container-events.yaml
@@ -63,8 +71,19 @@ jobs:
         # Apply additional KWOK node configuration
         kubectl apply -f ./hack/e2e_driver/kwok-config/fast_node.yaml
         kubectl apply -f ./hack/e2e_driver/kwok-config/node-heartbeat-with-lease.yml
+        
+        # Debug: Check scheduler pod before restart
+        echo "=== Scheduler Pod Before Restart ==="
+        kubectl get pods -n kube-system -l component=kube-scheduler
+        
         # Restart kube-scheduler to pick up new permissions
         kubectl delete pod -n kube-system -l component=kube-scheduler
+        
+        # Wait for scheduler to restart and check status
+        echo "=== Waiting for Scheduler Restart ==="
+        sleep 10
+        kubectl get pods -n kube-system -l component=kube-scheduler
+        kubectl describe pod -n kube-system -l component=kube-scheduler
 
     - name: ping cluster
       shell: bash
