@@ -73,6 +73,19 @@ jobs:
         ./hack/e2e_driver/kwok-config/patch-scheduler-rbac.sh
         ./hack/e2e_driver/kwok-config/fix-scheduler-auth.sh
         
+        # Nuclear option: Restart API server to clear authentication caches
+        echo "=== Restarting API Server to Clear Caches ==="
+        kubectl delete pod -n kube-system -l component=kube-apiserver
+        echo "Waiting for API server to restart..."
+        sleep 30
+        kubectl get pods -n kube-system -l component=kube-apiserver
+        
+        # Verify the authentication fix worked
+        echo "=== Post-Fix Authentication Test ==="
+        kubectl auth can-i get configmaps --as=system:kube-scheduler -n kube-system || echo "ConfigMap access still broken"
+        kubectl auth can-i get nodes --as=system:kube-scheduler || echo "Node access still broken"
+        kubectl auth can-i get pods --as=system:kube-scheduler || echo "Pod access still broken"
+        
         # Debug: Comprehensive Scheduler RBAC Diagnosis
         echo "=== Scheduler RBAC Diagnosis ==="
         echo "Default scheduler ClusterRoles:"
