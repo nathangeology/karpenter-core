@@ -36,6 +36,7 @@ jobs:
       uses: helm/kind-action@a1b0e391336a6ee6713a0583f8c6240d70863de3 # v1.12.0
       with:
         version: v0.30.0
+        config: hack/e2e_driver/kwok-config/kind-config.yaml
     - name: check kind cluster and taint nodes
       shell: bash
       run: |
