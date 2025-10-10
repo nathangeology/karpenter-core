@@ -70,11 +70,26 @@ jobs:
         # Fix kube-scheduler RBAC permissions for topology spread constraints
         kubectl apply -f ./hack/e2e_driver/kwok-config/scheduler-rbac.yaml
         
-        # Debug: Verify RBAC was applied successfully
-        echo "=== RBAC Verification ==="
-        kubectl get clusterrole system:kube-scheduler-extended || echo "ClusterRole not found"
-        kubectl get clusterrolebinding system:kube-scheduler-extended || echo "ClusterRoleBinding not found"
-        kubectl get rolebinding -n kube-system kube-scheduler-extension-apiserver-authentication-reader || echo "RoleBinding not found"
+        # Debug: Comprehensive Scheduler RBAC Diagnosis
+        echo "=== Scheduler RBAC Diagnosis ==="
+        echo "Default scheduler ClusterRoles:"
+        kubectl get clusterroles | grep -i scheduler || echo "No scheduler ClusterRoles found"
+        echo "Default scheduler ClusterRoleBindings:"
+        kubectl get clusterrolebindings | grep -i scheduler || echo "No scheduler ClusterRoleBindings found"
+        echo "Scheduler service accounts:"
+        kubectl get serviceaccounts -n kube-system | grep -i scheduler || echo "No scheduler ServiceAccounts found"
+        echo "Default system:kube-scheduler binding:"
+        kubectl describe clusterrolebinding system:kube-scheduler || echo "Default scheduler binding missing"
+        echo "Scheduler pod service account:"
+        kubectl get pod -n kube-system -l component=kube-scheduler -o yaml | grep -A5 -B5 serviceAccount || echo "Could not get scheduler pod details"
+        echo "All kube-system ClusterRoleBindings:"
+        kubectl get clusterrolebindings -o wide | grep kube-system || echo "No kube-system ClusterRoleBindings found"
+        
+        # Debug: Verify our RBAC was applied successfully
+        echo "=== Our RBAC Verification ==="
+        kubectl get clusterrole system:kube-scheduler-extended || echo "Our ClusterRole not found"
+        kubectl get clusterrolebinding system:kube-scheduler-extended || echo "Our ClusterRoleBinding not found"
+        kubectl get rolebinding -n kube-system kube-scheduler-extension-apiserver-authentication-reader || echo "Our RoleBinding not found"
         kubectl get role -n kube-system extension-apiserver-authentication-reader || echo "Built-in role not found"
         
         # Apply enhanced KWOK stages for better event generation
