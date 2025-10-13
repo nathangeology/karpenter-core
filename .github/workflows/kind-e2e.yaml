@@ -71,11 +71,17 @@ jobs:
         chmod +x ./hack/e2e_driver/kwok-config/grant-scheduler-admin.sh
         ./hack/e2e_driver/kwok-config/grant-scheduler-admin.sh
         
-        # Check scheduler logs after ClusterRole patch
-        echo "=== Scheduler Logs After ClusterRole Patch ==="
+        # Check scheduler logs after admin permissions granted
+        echo "=== Scheduler Logs After Admin Permissions ==="
         kubectl logs -n kube-system -l component=kube-scheduler --tail=20 | grep -E "(forbidden|Failed to watch|Starting Kubernetes Scheduler)" || echo "No scheduler error logs found"
         
-        ./hack/e2e_driver/kwok-config/fix-scheduler-auth.sh
+        # Wait for permissions to potentially take effect
+        echo "Waiting for permissions to take effect..."
+        sleep 10
+        
+        # Check scheduler logs again to see if errors reduced
+        echo "=== Scheduler Logs After Wait Period ==="
+        kubectl logs -n kube-system -l component=kube-scheduler --tail=20 | grep -E "(forbidden|Failed to watch)" || echo "No forbidden errors found"
         
         # Check scheduler logs after authentication fix
         echo "=== Scheduler Logs After Authentication Fix ==="
