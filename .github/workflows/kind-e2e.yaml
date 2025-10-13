@@ -136,6 +136,35 @@ jobs:
         kubectl auth whoami || echo "Cannot determine current user"
         kubectl auth can-i get nodes || echo "Current user cannot get nodes"
         
+        # Debug: Node Authorization Investigation
+        echo "=== Node Authorization Investigation ==="
+        # Check node authorization settings
+        kubectl get nodes -o yaml | grep -A10 -B10 authorization || echo "No node authorization config found"
+        
+        # Check bootstrap token RBAC
+        echo "Bootstrap token ClusterRoleBindings:"
+        kubectl get clusterrolebindings | grep bootstrap || echo "No bootstrap ClusterRoleBindings found"
+        
+        # Check node-specific RBAC
+        echo "Node-related ClusterRoleBindings:"
+        kubectl get clusterrolebindings | grep node || echo "No node ClusterRoleBindings found"
+        
+        # Check what node-specific RBAC exists
+        echo "Node-specific RBAC details:"
+        kubectl describe clusterrolebinding | grep -A20 -B5 node || echo "No node RBAC details found"
+        
+        # Check if there are node-specific service accounts
+        echo "Node-related ServiceAccounts:"
+        kubectl get serviceaccounts -n kube-system | grep node || echo "No node ServiceAccounts found"
+        
+        # Check API server authorization modes
+        echo "API Server authorization configuration:"
+        kubectl get pod -n kube-system -l component=kube-apiserver -o yaml | grep -A5 -B5 "authorization-mode" || echo "Could not get API server authorization config"
+        
+        # Check if Node authorization is enabled
+        echo "Checking for Node authorization mode:"
+        kubectl logs -n kube-system -l component=kube-apiserver --tail=100 | grep -i "authorization" || echo "No authorization logs in API server"
+        
         # Debug: Verify our RBAC was applied successfully
         echo "=== Our RBAC Verification ==="
         kubectl get clusterrole system:kube-scheduler-extended || echo "Our ClusterRole not found"
