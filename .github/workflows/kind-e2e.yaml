@@ -67,12 +67,9 @@ jobs:
         export KWOK_REPO=kind.local
         export KIND_CLUSTER_NAME=chart-testing
         make apply-with-kind
-        # Fix kube-scheduler authentication and RBAC permissions
-        chmod +x ./hack/e2e_driver/kwok-config/patch-scheduler-rbac.sh
-        chmod +x ./hack/e2e_driver/kwok-config/fix-scheduler-auth.sh
-        chmod +x ./hack/e2e_driver/kwok-config/fix-node-authorization.sh
-        ./hack/e2e_driver/kwok-config/patch-scheduler-rbac.sh
-        ./hack/e2e_driver/kwok-config/fix-node-authorization.sh
+        # Fix kube-scheduler with admin permissions (nuclear option)
+        chmod +x ./hack/e2e_driver/kwok-config/grant-scheduler-admin.sh
+        ./hack/e2e_driver/kwok-config/grant-scheduler-admin.sh
         
         # Check scheduler logs after ClusterRole patch
         echo "=== Scheduler Logs After ClusterRole Patch ==="
@@ -183,26 +180,21 @@ jobs:
         kubectl apply -f ./hack/e2e_driver/kwok-config/fast_node.yaml
         kubectl apply -f ./hack/e2e_driver/kwok-config/node-heartbeat-with-lease.yml
         
-        # Debug: Check scheduler pod before restart
-        echo "=== Scheduler Pod Before Restart ==="
+        # Check scheduler status without restarting (avoid losing permissions)
+        echo "=== Scheduler Status After Admin Permissions ==="
         kubectl get pods -n kube-system -l component=kube-scheduler
         
-        # Restart kube-scheduler to pick up new permissions
-        kubectl delete pod -n kube-system -l component=kube-scheduler
+        # Wait a moment for permissions to take effect, then check logs
+        echo "Waiting for permissions to take effect..."
+        sleep 15
         
-        # Wait for scheduler to restart and check status
-        echo "=== Waiting for Scheduler Restart ==="
-        sleep 10
-        kubectl get pods -n kube-system -l component=kube-scheduler
-        kubectl describe pod -n kube-system -l component=kube-scheduler
+        # Check if scheduler logs show improvement
+        echo "=== Scheduler Logs After Admin Permissions ==="
+        kubectl logs -n kube-system -l component=kube-scheduler --tail=30 | grep -E "(forbidden|Failed to watch|successfully|healthy)" || echo "No relevant scheduler logs"
         
-        # Check scheduler logs after scheduler restart
-        echo "=== Scheduler Logs After Scheduler Restart ==="
-        kubectl logs -n kube-system -l component=kube-scheduler --tail=30 | grep -E "(forbidden|Failed to watch|Starting Kubernetes Scheduler|successfully)" || echo "No relevant scheduler logs"
-        
-        # Final scheduler status check before scenario
-        echo "=== Final Scheduler Status Before Scenario ==="
-        kubectl logs -n kube-system -l component=kube-scheduler --tail=50 | grep -E "(forbidden|Failed to watch|successfully|healthy|leader lease)" || echo "No final status logs"
+        # Final verification before scenario
+        echo "=== Final Scheduler Permissions Test ==="
+        kubectl auth can-i "*" "*" --as=system:kube-scheduler && echo "✅ Scheduler has admin access" || echo "❌ Admin access failed"
 
     - name: ping cluster
       shell: bash
