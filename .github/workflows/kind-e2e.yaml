@@ -67,9 +67,11 @@ jobs:
         export KWOK_REPO=kind.local
         export KIND_CLUSTER_NAME=chart-testing
         make apply-with-kind
-        # Fix kube-scheduler with admin permissions (nuclear option)
+        # Fix kube-scheduler with node-level admin permissions (nuclear option)
         chmod +x ./hack/e2e_driver/kwok-config/grant-scheduler-admin.sh
+        chmod +x ./hack/e2e_driver/kwok-config/grant-node-admin.sh
         ./hack/e2e_driver/kwok-config/grant-scheduler-admin.sh
+        ./hack/e2e_driver/kwok-config/grant-node-admin.sh
         
         # Check scheduler logs after admin permissions granted
         echo "=== Scheduler Logs After Admin Permissions ==="
