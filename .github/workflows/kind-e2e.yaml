@@ -73,6 +73,24 @@ jobs:
         ./hack/e2e_driver/kwok-config/grant-scheduler-admin.sh
         ./hack/e2e_driver/kwok-config/grant-node-admin.sh
         
+        # KIND-specific debugging
+        echo "=== KIND Authentication Investigation ==="
+        # Check the kubeadm configuration KIND generated
+        echo "KIND kubeadm Configuration:"
+        kubectl exec -n kube-system -l component=kube-scheduler -- cat /kind/kubeadm.conf || echo "Could not get kubeadm config"
+        
+        # Check the scheduler static pod manifest
+        echo "Scheduler Static Pod Manifest:"
+        kubectl exec -n kube-system -l component=kube-scheduler -- cat /etc/kubernetes/manifests/kube-scheduler.yaml || echo "Could not get scheduler manifest"
+        
+        # Check scheduler certificates
+        echo "Scheduler Certificates:"
+        kubectl exec -n kube-system -l component=kube-scheduler -- ls -la /etc/kubernetes/pki/ || echo "Could not list certificates"
+        
+        # Check kubelet configuration
+        echo "Kubelet Configuration:"
+        kubectl exec -n kube-system -l component=kube-scheduler -- cat /var/lib/kubelet/config.yaml | head -20 || echo "Could not get kubelet config"
+        
         # Check scheduler logs after admin permissions granted
         echo "=== Scheduler Logs After Admin Permissions ==="
         kubectl logs -n kube-system -l component=kube-scheduler --tail=20 | grep -E "(forbidden|Failed to watch|Starting Kubernetes Scheduler)" || echo "No scheduler error logs found"
