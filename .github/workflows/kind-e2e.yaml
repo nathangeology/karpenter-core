@@ -79,25 +79,23 @@ jobs:
         SCHEDULER_POD=$(kubectl get pods -n kube-system -l component=kube-scheduler -o jsonpath='{.items[0].metadata.name}')
         echo "Scheduler pod name: $SCHEDULER_POD"
         
-        # Check the kubeadm configuration KIND generated
-        echo "KIND kubeadm Configuration:"
-        kubectl exec -n kube-system $SCHEDULER_POD -- cat /kind/kubeadm.conf || echo "Could not get kubeadm config"
+        # Check scheduler pod configuration directly
+        echo "Scheduler Pod Configuration:"
+        kubectl get pod -n kube-system $SCHEDULER_POD -o yaml
         
-        # Check the scheduler static pod manifest
-        echo "Scheduler Static Pod Manifest:"
-        kubectl exec -n kube-system $SCHEDULER_POD -- cat /etc/kubernetes/manifests/kube-scheduler.yaml || echo "Could not get scheduler manifest"
+        # Check scheduler pod description for volume mounts and authentication
+        echo "Scheduler Pod Details:"
+        kubectl describe pod -n kube-system $SCHEDULER_POD
         
-        # Check scheduler certificates
-        echo "Scheduler Certificates:"
-        kubectl exec -n kube-system $SCHEDULER_POD -- ls -la /etc/kubernetes/pki/ || echo "Could not list certificates"
+        # Check kubeadm-config ConfigMap
+        echo "kubeadm-config ConfigMap:"
+        kubectl get configmap kubeadm-config -n kube-system -o yaml || echo "Could not get kubeadm-config"
         
-        # Check kubelet configuration
-        echo "Kubelet Configuration:"
-        kubectl exec -n kube-system $SCHEDULER_POD -- cat /var/lib/kubelet/config.yaml | head -20 || echo "Could not get kubelet config"
-        
-        # Check scheduler kubeconfig
-        echo "Scheduler kubeconfig:"
-        kubectl exec -n kube-system $SCHEDULER_POD -- cat /etc/kubernetes/scheduler.conf | head -20 || echo "Could not get scheduler kubeconfig"
+        # Check from KIND node container directly
+        echo "Checking from KIND node container:"
+        docker exec chart-testing-control-plane cat /kind/kubeadm.conf || echo "Could not get kubeadm config from node"
+        docker exec chart-testing-control-plane cat /etc/kubernetes/manifests/kube-scheduler.yaml || echo "Could not get scheduler manifest from node"
+        docker exec chart-testing-control-plane ls -la /etc/kubernetes/pki/ || echo "Could not list certificates from node"
         
         # Check scheduler logs after admin permissions granted
         echo "=== Scheduler Logs After Admin Permissions ==="
