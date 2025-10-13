@@ -75,21 +75,29 @@ jobs:
         
         # KIND-specific debugging
         echo "=== KIND Authentication Investigation ==="
+        # Get scheduler pod name first
+        SCHEDULER_POD=$(kubectl get pods -n kube-system -l component=kube-scheduler -o jsonpath='{.items[0].metadata.name}')
+        echo "Scheduler pod name: $SCHEDULER_POD"
+        
         # Check the kubeadm configuration KIND generated
         echo "KIND kubeadm Configuration:"
-        kubectl exec -n kube-system -l component=kube-scheduler -- cat /kind/kubeadm.conf || echo "Could not get kubeadm config"
+        kubectl exec -n kube-system $SCHEDULER_POD -- cat /kind/kubeadm.conf || echo "Could not get kubeadm config"
         
         # Check the scheduler static pod manifest
         echo "Scheduler Static Pod Manifest:"
-        kubectl exec -n kube-system -l component=kube-scheduler -- cat /etc/kubernetes/manifests/kube-scheduler.yaml || echo "Could not get scheduler manifest"
+        kubectl exec -n kube-system $SCHEDULER_POD -- cat /etc/kubernetes/manifests/kube-scheduler.yaml || echo "Could not get scheduler manifest"
         
         # Check scheduler certificates
         echo "Scheduler Certificates:"
-        kubectl exec -n kube-system -l component=kube-scheduler -- ls -la /etc/kubernetes/pki/ || echo "Could not list certificates"
+        kubectl exec -n kube-system $SCHEDULER_POD -- ls -la /etc/kubernetes/pki/ || echo "Could not list certificates"
         
         # Check kubelet configuration
         echo "Kubelet Configuration:"
-        kubectl exec -n kube-system -l component=kube-scheduler -- cat /var/lib/kubelet/config.yaml | head -20 || echo "Could not get kubelet config"
+        kubectl exec -n kube-system $SCHEDULER_POD -- cat /var/lib/kubelet/config.yaml | head -20 || echo "Could not get kubelet config"
+        
+        # Check scheduler kubeconfig
+        echo "Scheduler kubeconfig:"
+        kubectl exec -n kube-system $SCHEDULER_POD -- cat /etc/kubernetes/scheduler.conf | head -20 || echo "Could not get scheduler kubeconfig"
         
         # Check scheduler logs after admin permissions granted
         echo "=== Scheduler Logs After Admin Permissions ==="
