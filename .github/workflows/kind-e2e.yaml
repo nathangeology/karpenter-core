@@ -97,6 +97,19 @@ jobs:
         docker exec chart-testing-control-plane cat /etc/kubernetes/manifests/kube-scheduler.yaml || echo "Could not get scheduler manifest from node"
         docker exec chart-testing-control-plane ls -la /etc/kubernetes/pki/ || echo "Could not list certificates from node"
         
+        # Check the scheduler.conf file content (the key authentication file)
+        echo "Scheduler kubeconfig content:"
+        docker exec chart-testing-control-plane cat /etc/kubernetes/scheduler.conf || echo "Could not get scheduler kubeconfig from node"
+        
+        # Check if the scheduler.conf file exists and has proper permissions
+        echo "Scheduler kubeconfig file details:"
+        docker exec chart-testing-control-plane ls -la /etc/kubernetes/scheduler.conf || echo "Could not check scheduler kubeconfig file"
+        
+        # Test the scheduler kubeconfig directly
+        echo "Testing scheduler kubeconfig:"
+        docker exec chart-testing-control-plane kubectl --kubeconfig=/etc/kubernetes/scheduler.conf auth whoami || echo "Scheduler kubeconfig authentication failed"
+        docker exec chart-testing-control-plane kubectl --kubeconfig=/etc/kubernetes/scheduler.conf auth can-i get nodes || echo "Scheduler kubeconfig cannot get nodes"
+        
         # Check scheduler logs after admin permissions granted
         echo "=== Scheduler Logs After Admin Permissions ==="
         kubectl logs -n kube-system -l component=kube-scheduler --tail=20 | grep -E "(forbidden|Failed to watch|Starting Kubernetes Scheduler)" || echo "No scheduler error logs found"
