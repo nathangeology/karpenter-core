@@ -70,7 +70,9 @@ jobs:
         # Fix kube-scheduler authentication and RBAC permissions
         chmod +x ./hack/e2e_driver/kwok-config/patch-scheduler-rbac.sh
         chmod +x ./hack/e2e_driver/kwok-config/fix-scheduler-auth.sh
+        chmod +x ./hack/e2e_driver/kwok-config/fix-node-authorization.sh
         ./hack/e2e_driver/kwok-config/patch-scheduler-rbac.sh
+        ./hack/e2e_driver/kwok-config/fix-node-authorization.sh
         
         # Check scheduler logs after ClusterRole patch
         echo "=== Scheduler Logs After ClusterRole Patch ==="
