@@ -23,19 +23,22 @@ kubectl patch clusterrolebinding kubeadm:get-nodes --type='json' -p='[
 echo "Added system:kube-scheduler to kubeadm:get-nodes ClusterRoleBinding"
 
 # Also add the scheduler to the system:node ClusterRoleBinding for broader node access
+# The system:node binding has no subjects, so we need to create the subjects array
 kubectl patch clusterrolebinding system:node --type='json' -p='[
   {
-    "op": "add", 
-    "path": "/subjects/-",
-    "value": {
-      "kind": "User",
-      "name": "system:kube-scheduler",
-      "apiGroup": "rbac.authorization.k8s.io"
-    }
+    "op": "replace", 
+    "path": "/subjects",
+    "value": [
+      {
+        "kind": "User",
+        "name": "system:kube-scheduler",
+        "apiGroup": "rbac.authorization.k8s.io"
+      }
+    ]
   }
 ]'
 
-echo "Added system:kube-scheduler to system:node ClusterRoleBinding"
+echo "Added system:kube-scheduler to system:node ClusterRoleBinding (created subjects array)"
 
 # Show the updated ClusterRoleBindings
 echo "Updated kubeadm:get-nodes ClusterRoleBinding:"
