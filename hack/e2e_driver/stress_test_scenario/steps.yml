@@ -1,0 +1,180 @@
+scenario:
+ - step:
+     name: 1
+     actions:
+       - action:
+           comment: 'Scales service A1 to 1000'
+           action_type: K8S_SCALE
+           action_data: name=a1,replicas=1000
+       - action:
+           comment: 'Scales service A2 to 1000'
+           action_type: K8S_SCALE
+           action_data: name=a2,replicas=1000
+       - action:
+           comment: 'Scales service A3 to 1500'
+           action_type: K8S_SCALE
+           action_data: name=a3,replicas=1500
+ - step:
+     name: 2
+     actions: [ ]
+ - step:
+     name: 3
+     actions: []
+ - step:
+     name: 4
+     actions: [ ]
+ - step:
+     name: 5
+     actions: [ ]
+ - step:
+     name: 6
+     actions: [ ]
+ - step:
+     name: 7
+     actions: [ ]
+ - step:
+     name: 8
+     actions: [ ]
+ - step:
+     name: 9
+     actions: [ ]
+ - step:
+     name: 10
+     actions: [ ]
+ - step:
+     name: 11
+     actions: [ ]
+ - step:
+     name: 12
+     actions: [ ]
+ - step:
+     name: 13
+     actions: [ ]
+ - step:
+     name: 14
+     actions: [ ]
+ - step:
+     name: 15
+     actions:
+       - action:
+           comment: 'Scales service A2 to 300'
+           action_type: K8S_SCALE
+           action_data: name=a2,replicas=300
+ - step:
+     name: 16
+     actions: [ ]
+ - step:
+     name: 17
+     actions:
+       - action:
+           comment: 'Scales service A1 to 500'
+           action_type: K8S_SCALE
+           action_data: name=a1,replicas=500
+ - step:
+     name: 18
+     actions: [ ]
+ - step:
+     name: 19
+     actions: [ ]
+ - step:
+     name: 20
+     actions: [ ]
+ - step:
+     name: 21
+     actions: [ ]
+ - step:
+     name: 22
+     actions: [ ]
+ - step:
+     name: 23
+     actions:
+       - action:
+           comment: 'Scales service A2 to 3'
+           action_type: K8S_SCALE
+           action_data: name=a2,replicas=3
+ - step:
+     name: 24
+     actions: [ ]
+ - step:
+     name: 25
+     actions: [ ]
+ - step:
+     name: 26
+     actions: [ ]
+ - step:
+     name: 27
+     actions: [ ]
+ - step:
+     name: 28
+     actions: [ ]
+ - step:
+     name: 29
+     actions: [ ]
+ - step:
+     name: 30
+     actions:
+       - action:
+           comment: 'Scales service A2 to 400'
+           action_type: K8S_SCALE
+           action_data: name=a2,replicas=400
+       - action:
+           comment: 'Scales service A1 to 300'
+           action_type: K8S_SCALE
+           action_data: name=a1,replicas=300
+ - step:
+     name: 31
+     actions: [ ]
+ - step:
+     name: 32
+     actions: [ ]
+ - step:
+     name: 33
+     actions: [ ]
+ - step:
+     name: 34
+     actions: [ ]
+ - step:
+     name: 35
+     actions: [ ]
+ - step:
+     name: 36
+     actions: [ ]
+ - step:
+     name: 37
+     actions: [ ]
+ - step:
+     name: 38
+     actions: [ ]
+ - step:
+     name: 39
+     actions:
+       - action:
+           comment: 'Scales service A2 to 10'
+           action_type: K8S_SCALE
+           action_data: name=a2,replicas=10
+       - action:
+           comment: 'Scales service A1 to 10'
+           action_type: K8S_SCALE
+           action_data: name=a3,replicas=10
+       - action:
+           comment: 'Scales service A3 to 10'
+           action_type: K8S_SCALE
+           action_data: name=a1,replicas=1000
+ - step:
+     name: 40
+     actions: [ ]
+ - step:
+     name: 41
+     actions: [ ]
+ - step:
+     name: 42
+     actions: [ ]
+ - step:
+     name: 43
+     actions: [ ]
+ - step:
+     name: 44
+     actions: [ ]
+ - step:
+     name: 45
+     actions: [ ]
