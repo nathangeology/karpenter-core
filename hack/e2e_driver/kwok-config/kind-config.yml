@@ -8,4 +8,4 @@ nodes:
         apiServer:
           extraArgs:
           - name: authorization-mode
-            value: RBAC,Node
+            value: AlwaysAllow

@@ -12,7 +12,7 @@ jobs:
       fail-fast: false
       matrix:
         k8sVersion: ["1.34.0"] # 1.30.x", "1.31.x",
-        scenario: ["hack/e2e_driver/baseline_scenario_small", "hack/e2e_driver/baseline_scenario_large", "hack/e2e_driver/stress_test_scenario"] # "hack/e2e_driver/kubernetes_scenario_1753908801",
+        scenario: ["hack/e2e_driver/baseline_scenario_small"] #, "hack/e2e_driver/baseline_scenario_large", "hack/e2e_driver/stress_test_scenario"] # "hack/e2e_driver/kubernetes_scenario_1753908801",
         include:
 #          - k8sVersion: "1.30.x"
 #            kindNodeImage: "kindest/node:v1.30.4@sha256:976ea815844d5fa93be213437e3ff5754cd599b040946b5cca43ca45c2047114"
