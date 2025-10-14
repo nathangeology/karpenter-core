@@ -50,7 +50,6 @@ jobs:
         #        kubectl_version: ${{ matrix.kubectlVersion }}
         wait: 30s
         verbosity: 10
-        config: hack/e2e_driver/kwok-config/kind-config.yml
     - name: check kind cluster and taint nodes
       shell: bash
       run: |
