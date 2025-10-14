@@ -1,5 +1,5 @@
 kind: Cluster
-apiVersion: kind.x-k8s.io/v1beta3
+apiVersion: kind.x-k8s.io/v1alpha4
 nodes:
   - role: control-plane
     kubeadmConfigPatches:
@@ -7,5 +7,4 @@ nodes:
         kind: ClusterConfiguration
         apiServer:
           extraArgs:
-          - name: authorization-mode
-            value: AlwaysAllow
+            authorization-mode: AlwaysAllow
