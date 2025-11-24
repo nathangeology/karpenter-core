@@ -211,7 +211,10 @@ func (cc *ClusterCost) UpdateNodeClaim(ctx context.Context, nodeClaim *v1.NodeCl
 
 	// First lets check if the right labels are there
 	if nodeClaimMissingLabels(ctx, *nodeClaim) {
-		failed = true
+		// Only mark as failed if this is not a static NodeClaim with expected missing labels
+		if !isStaticNodeClaim(nodeClaim) {
+			failed = true
+		}
 		return
 	}
 
@@ -261,7 +264,10 @@ func (cc *ClusterCost) DeleteNodeClaim(ctx context.Context, nodeClaim *v1.NodeCl
 
 	// First lets check if the right labels are there
 	if nodeClaimMissingLabels(ctx, *nodeClaim) {
-		failed = true
+		// Only mark as failed if this is not a static NodeClaim with expected missing labels
+		if !isStaticNodeClaim(nodeClaim) {
+			failed = true
+		}
 		return
 	}
 
@@ -396,12 +402,21 @@ func nodeClaimMissingLabels(ctx context.Context, nc v1.NodeClaim) bool {
 		}
 	}
 	if len(missingLabels) > 0 {
-		// For static NodeClaims, missing instance-specific labels during creation is expected
-		// as they are populated by the cloud provider after creation. Log at debug level
-		// instead of error to reduce noise in tests and CI.
-		if isStaticNodeClaim(&nc) {
-			log.FromContext(ctx).V(1).Info("static nodeclaim missing labels during initialization, will retry when labels are populated", "nodeclaim", klog.KObj(&nc), "missingLabels", missingLabels)
+		// Check if this is a NodeClaim that's missing instance-specific labels
+		// This is expected during NodeClaim initialization, especially for static NodeClaims
+		missingInstanceLabels := []string{}
+		for _, label := range missingLabels {
+			if label == corev1.LabelInstanceTypeStable || label == v1.CapacityTypeLabelKey || label == corev1.LabelTopologyZone {
+				missingInstanceLabels = append(missingInstanceLabels, label)
+			}
+		}
+
+		// If only instance-specific labels are missing (not NodePool label), this is likely
+		// a NodeClaim during initialization - log at debug level to reduce noise
+		if len(missingInstanceLabels) > 0 && len(missingInstanceLabels) == len(missingLabels) {
+			log.FromContext(ctx).V(1).Info("nodeclaim missing instance-specific labels during initialization, will retry when labels are populated", "nodeclaim", klog.KObj(&nc), "missingLabels", missingLabels)
 		} else {
+			// Only log as error if critical labels like NodePool are missing
 			log.FromContext(ctx).Error(serrors.Wrap(fmt.Errorf("nodeclaim is missing required labels"), "nodeclaim", klog.KObj(&nc), "missingLabels", missingLabels), "failed to update nodeclaim from cost tracking")
 		}
 		return true
@@ -413,20 +428,24 @@ func nodeClaimMissingLabels(ctx context.Context, nc v1.NodeClaim) bool {
 // isStaticNodeClaim determines if a NodeClaim belongs to a static NodePool
 // by checking for the presence of static-specific annotations or owner references
 func isStaticNodeClaim(nc *v1.NodeClaim) bool {
-	// Static NodeClaims are created from NodePools with replicas set
-	// We can identify them by checking if they have the NodePool owner reference
-	// and the NodePool has static characteristics
-	for _, ownerRef := range nc.GetOwnerReferences() {
-		if ownerRef.Kind == "NodePool" {
-			// This is likely a static NodeClaim if it's owned by a NodePool
-			// Additional heuristic: static NodeClaims often lack instance-specific labels initially
-			_, hasInstanceType := nc.Labels[corev1.LabelInstanceTypeStable]
-			_, hasCapacityType := nc.Labels[v1.CapacityTypeLabelKey]
-			_, hasZone := nc.Labels[corev1.LabelTopologyZone]
+	// Check if this NodeClaim is missing the instance-specific labels that are
+	// typically populated by the cloud provider after creation. For static NodeClaims,
+	// this is expected during the initialization phase.
+	_, hasInstanceType := nc.Labels[corev1.LabelInstanceTypeStable]
+	_, hasCapacityType := nc.Labels[v1.CapacityTypeLabelKey]
+	_, hasZone := nc.Labels[corev1.LabelTopologyZone]
 
-			// If it's missing these labels but has NodePool ownership, it's likely static
-			return !hasInstanceType || !hasCapacityType || !hasZone
+	// If it's missing any of these critical labels, treat it as a static NodeClaim
+	// during initialization. This is a more permissive approach that reduces false
+	// positives in cost tracking errors.
+	if !hasInstanceType || !hasCapacityType || !hasZone {
+		// Additional check: ensure it has NodePool ownership (all NodeClaims should have this)
+		for _, ownerRef := range nc.GetOwnerReferences() {
+			if ownerRef.Kind == "NodePool" {
+				return true
+			}
 		}
 	}
+
 	return false
 }
