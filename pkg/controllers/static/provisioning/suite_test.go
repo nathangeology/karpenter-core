@@ -551,12 +551,26 @@ var _ = Describe("Static Provisioning Controller", func() {
 				Expect(<-errs).ToNot(HaveOccurred())
 			}
 
-			// we should never observe > limit NodeClaims.
+			// Wait for NodeClaims to be fully created and processed
+			// This gives time for cost tracking and other async operations to complete
+			Eventually(func() int {
+				var list v1.NodeClaimList
+				_ = env.Client.List(ctx, &list)
+				return len(list.Items)
+			}, 10*time.Second, 100*time.Millisecond).Should(BeNumerically("<=", 10))
+
+			// we should never observe > limit NodeClaims even after giving time for async operations
 			Consistently(func() int {
 				var list v1.NodeClaimList
 				_ = env.Client.List(ctx, &list)
 				return len(list.Items)
-			}, 5*time.Second).Should(BeNumerically("<=", 10))
+			}, 5*time.Second, 100*time.Millisecond).Should(BeNumerically("<=", 10))
+
+			// Wait for cluster state to be fully updated before checking counts
+			Eventually(func() bool {
+				running, _, _ := cluster.NodePoolState.GetNodeCount(nodePool.Name)
+				return running <= 10
+			}, 5*time.Second, 100*time.Millisecond).Should(BeTrue())
 
 			// at the end we should have right counts in StateNodePool
 			ExpectStateNodePoolCount(cluster, nodePool.Name, 10, 0, 0)
