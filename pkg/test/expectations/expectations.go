@@ -47,6 +47,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/kubernetes/scheme"
+	clock "k8s.io/utils/clock/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -775,4 +776,121 @@ func ExpectStateNodePoolCount(cluster *state.Cluster, npName string, r, d, pd in
 	Expect(running).To(Equal(r))
 	Expect(deleting).To(Equal(d))
 	Expect(pendingdisruption).To(Equal(pd))
+}
+
+// ExpectControllerWaitsForTTL tests that a controller waits for the TTL before proceeding with disruption.
+// This is a more reliable replacement for the flaky ExpectParallelized pattern used in TTL tests.
+func ExpectControllerWaitsForTTL(ctx context.Context, c client.Client, controller reconcile.Reconciler, fakeClock *clock.FakeClock, nodeClaims []*v1.NodeClaim) {
+	GinkgoHelper()
+
+	controllerStarted := make(chan struct{})
+	controllerFinished := make(chan struct{})
+	controllerErr := make(chan error, 1)
+
+	// Start the controller in a goroutine
+	go func() {
+		defer GinkgoRecover()
+		defer close(controllerFinished)
+
+		// Signal that we're about to start
+		close(controllerStarted)
+
+		// Run the controller
+		if _, err := controller.Reconcile(ctx, reconcile.Request{}); err != nil {
+			controllerErr <- err
+			return
+		}
+	}()
+
+	// Wait for controller to start
+	Eventually(controllerStarted, time.Second*5).Should(BeClosed(),
+		"Controller should start within 5 seconds")
+
+	// Wait for controller to be blocked on the clock
+	Eventually(func() bool {
+		return fakeClock.HasWaiters()
+	}, time.Second*10, time.Millisecond*100).Should(BeTrue(),
+		"Controller should be waiting on clock within 10 seconds")
+
+	// Verify controller is still running (hasn't finished prematurely)
+	Consistently(func() bool {
+		select {
+		case <-controllerFinished:
+			return false // Controller finished too early
+		case err := <-controllerErr:
+			Fail(fmt.Sprintf("Controller failed unexpectedly: %v", err))
+			return false
+		default:
+			return true // Controller still running (good)
+		}
+	}, time.Second*2, time.Millisecond*100).Should(BeTrue(),
+		"Controller should remain blocked for at least 2 seconds")
+
+	// Verify nodes still exist during the wait
+	if len(nodeClaims) > 0 {
+		Consistently(func() error {
+			for _, nc := range nodeClaims {
+				if err := c.Get(ctx, client.ObjectKeyFromObject(nc), &v1.NodeClaim{}); err != nil {
+					return fmt.Errorf("NodeClaim %s should still exist: %w", nc.Name, err)
+				}
+			}
+			return nil
+		}, time.Second*2, time.Millisecond*500).Should(Succeed(),
+			"NodeClaims should not be deleted during TTL wait")
+	}
+
+	// Now advance the clock to expire the TTL
+	fakeClock.Step(31 * time.Second)
+
+	// Controller should finish within reasonable time
+	Eventually(controllerFinished, time.Second*10).Should(BeClosed(),
+		"Controller should finish within 10 seconds after clock advance")
+
+	// Verify no errors occurred
+	Consistently(controllerErr, time.Millisecond*100).ShouldNot(Receive(),
+		"Controller should not have any errors")
+}
+
+// ExpectControllerWaitsForTTLWithStateChange tests TTL behavior when cluster state changes during the wait.
+// This helper allows testing scenarios where pods are scheduled or other changes occur during TTL.
+func ExpectControllerWaitsForTTLWithStateChange(ctx context.Context, controller reconcile.Reconciler, fakeClock *clock.FakeClock, stateChangeFunc func()) {
+	GinkgoHelper()
+
+	controllerStarted := make(chan struct{})
+	controllerFinished := make(chan struct{})
+
+	go func() {
+		defer GinkgoRecover()
+		defer close(controllerFinished)
+		close(controllerStarted)
+		controller.Reconcile(ctx, reconcile.Request{})
+	}()
+
+	// Wait for controller to start and be blocked
+	Eventually(controllerStarted).Should(BeClosed())
+	Eventually(fakeClock.HasWaiters, time.Second*10).Should(BeTrue())
+
+	// Verify controller is blocked
+	Consistently(controllerFinished, time.Second*1).ShouldNot(BeClosed())
+
+	// Apply state change during the wait
+	if stateChangeFunc != nil {
+		stateChangeFunc()
+	}
+
+	// Advance clock and verify completion
+	fakeClock.Step(31 * time.Second)
+	Eventually(controllerFinished, time.Second*10).Should(BeClosed())
+}
+
+// ExpectSingletonControllerWaitsForTTL is a variant for singleton reconcilers
+func ExpectSingletonControllerWaitsForTTL(ctx context.Context, c client.Client, controller singleton.Reconciler, fakeClock *clock.FakeClock, nodeClaims []*v1.NodeClaim) {
+	GinkgoHelper()
+	ExpectControllerWaitsForTTL(ctx, c, singleton.AsReconciler(controller), fakeClock, nodeClaims)
+}
+
+// ExpectSingletonControllerWaitsForTTLWithStateChange is a variant for singleton reconcilers with state changes
+func ExpectSingletonControllerWaitsForTTLWithStateChange(ctx context.Context, c client.Client, controller singleton.Reconciler, fakeClock *clock.FakeClock, stateChangeFunc func()) {
+	GinkgoHelper()
+	ExpectControllerWaitsForTTLWithStateChange(ctx, singleton.AsReconciler(controller), fakeClock, stateChangeFunc)
 }

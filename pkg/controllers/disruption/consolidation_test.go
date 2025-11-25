@@ -3281,28 +3281,8 @@ var _ = Describe("Consolidation", func() {
 			// inform cluster state about nodes and nodeclaims
 			ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, nodeStateController, nodeClaimStateController, []*corev1.Node{nodes[0], nodes[1]}, []*v1.NodeClaim{nodeClaims[0], nodeClaims[1]})
 
-			finished := atomic.Bool{}
-			ExpectParallelized(
-				func() {
-					defer finished.Store(true)
-					ExpectSingletonReconciled(ctx, disruptionController)
-				},
-				func() {
-					// wait for the controller to block on the validation timeout
-					Eventually(fakeClock.HasWaiters, time.Second*10).Should(BeTrue())
-					// controller should be blocking during the timeout
-					Expect(finished.Load()).To(BeFalse())
-					// and the node should not be deleted yet
-					ExpectExists(ctx, env.Client, nodeClaims[0])
-					ExpectExists(ctx, env.Client, nodeClaims[1])
-
-					// advance the clock so that the timeout expires
-					fakeClock.Step(31 * time.Second)
-
-					// controller should finish
-					Eventually(finished.Load, 10*time.Second).Should(BeTrue())
-				},
-			)
+			// Use the new reliable TTL testing helper
+			ExpectSingletonControllerWaitsForTTL(ctx, env.Client, disruptionController, fakeClock, []*v1.NodeClaim{nodeClaims[0], nodeClaims[1]})
 
 			// Process the item so that the nodes can be deleted.
 			cmds := queue.GetCommands()
@@ -3412,30 +3392,12 @@ var _ = Describe("Consolidation", func() {
 			// inform cluster state about nodes and nodeclaims
 			ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, nodeStateController, nodeClaimStateController, []*corev1.Node{nodes[0]}, []*v1.NodeClaim{nodeClaims[0]})
 
-			finished := atomic.Bool{}
-			ExpectParallelized(
-				func() {
-					defer finished.Store(true)
-					ExpectSingletonReconciled(ctx, disruptionController)
-				},
-				func() {
-					// wait for the disruptionController to block on the validation timeout
-					Eventually(fakeClock.HasWaiters, time.Second*10).Should(BeTrue())
-					// controller should be blocking during the timeout
-					Expect(finished.Load()).To(BeFalse())
-					// and the node should not be deleted yet
-					ExpectExists(ctx, env.Client, nodeClaims[0])
-
-					// make the node non-empty by binding it
-					ExpectManualBinding(ctx, env.Client, pod, nodes[0])
-					ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(nodes[0]))
-
-					// advance the clock so that the timeout expires
-					fakeClock.Step(31 * time.Second)
-					// controller should finish
-					Eventually(finished.Load, 10*time.Second).Should(BeTrue())
-				},
-			)
+			// Use the new reliable TTL testing helper with state change
+			ExpectSingletonControllerWaitsForTTLWithStateChange(ctx, env.Client, disruptionController, fakeClock, func() {
+				// make the node non-empty by binding the do-not-disrupt pod
+				ExpectManualBinding(ctx, env.Client, pod, nodes[0])
+				ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(nodes[0]))
+			})
 
 			cmds := queue.GetCommands()
 			Expect(cmds).To(HaveLen(0))
