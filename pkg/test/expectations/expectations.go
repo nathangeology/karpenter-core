@@ -863,7 +863,10 @@ func ExpectControllerWaitsForTTLWithStateChange(ctx context.Context, controller 
 		defer GinkgoRecover()
 		defer close(controllerFinished)
 		close(controllerStarted)
-		controller.Reconcile(ctx, reconcile.Request{})
+		if _, err := controller.Reconcile(ctx, reconcile.Request{}); err != nil {
+			// In test context, we expect the controller to succeed, so fail the test if it errors
+			Fail(fmt.Sprintf("Controller reconcile failed unexpectedly: %v", err))
+		}
 	}()
 
 	// Wait for controller to start and be blocked
