@@ -58,24 +58,53 @@ jobs:
     - name: verify scheduler configuration
       shell: bash
       run: |
-        echo "Verifying scheduler is running with ${{ inputs.scheduler_strategy }} configuration..."
+        echo "=== Verifying scheduler is running with ${{ inputs.scheduler_strategy }} configuration ==="
+        
+        # Show scheduler pod status
+        kubectl get pods -n kube-system -l component=kube-scheduler -o wide
+        
+        # Show recent scheduler logs
+        echo "=== Recent scheduler logs ==="
         kubectl logs -n kube-system -l component=kube-scheduler --tail=30
         
-        # Test basic scheduling functionality
-        echo "Testing basic scheduling..."
+        # Check cluster nodes and their status
+        echo "=== Cluster nodes ==="
+        kubectl get nodes -o wide
+        kubectl describe nodes | grep -A 10 -B 5 "Taints\|Conditions" || true
+        
+        # Test basic scheduling functionality with better debugging
+        echo "=== Testing basic scheduling functionality ==="
         kubectl run test-scheduler-pod --image=nginx:alpine --restart=Never --dry-run=client -o yaml > /tmp/test-pod.yaml
+        
+        # Show the test pod spec
+        echo "Test pod spec:"
+        cat /tmp/test-pod.yaml
+        
+        # Apply the test pod
         kubectl apply -f /tmp/test-pod.yaml
         
-        # Wait for pod to be scheduled with a longer timeout
+        # Show pod status immediately
+        kubectl get pod test-scheduler-pod -o wide || true
+        kubectl describe pod test-scheduler-pod || true
+        
+        # Wait for pod to be scheduled with detailed monitoring
+        echo "Waiting for pod to be scheduled (60s timeout)..."
         if kubectl wait --for=condition=PodScheduled pod/test-scheduler-pod --timeout=60s; then
           echo "✅ Scheduler verification successful - pod was scheduled"
+          kubectl get pod test-scheduler-pod -o wide
           kubectl delete pod test-scheduler-pod
         else
-          echo "⚠️ Scheduler verification warning - pod scheduling timed out, but continuing..."
+          echo "⚠️ Scheduler verification warning - pod scheduling timed out"
+          echo "Pod status:"
+          kubectl get pod test-scheduler-pod -o wide || true
+          kubectl describe pod test-scheduler-pod || true
+          echo "Events:"
+          kubectl get events --sort-by='.lastTimestamp' | tail -10 || true
+          echo "Continuing with tests despite scheduling timeout..."
           kubectl delete pod test-scheduler-pod --ignore-not-found=true
         fi
         
-        echo "Scheduler verification completed"
+        echo "=== Scheduler verification completed ==="
     - name: install prometheus 
       uses: ./.github/actions/install-prometheus
     - name: install pyroscope 
