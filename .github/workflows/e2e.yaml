@@ -49,6 +49,10 @@ jobs:
       uses: helm/kind-action@92086f6be054225fa813e0a4b13787fc9088faab # v1.13.0
       with:
         config: .github/actions/configure-scheduler/kind-config.yaml
+    - name: create scheduler configuration ConfigMap
+      uses: ./.github/actions/configure-scheduler
+      with:
+        strategy: ${{ inputs.scheduler_strategy }}
     - name: check kind cluster and taint nodes
       shell: bash
       run: |
