@@ -30,44 +30,12 @@ runs:
         
         echo "Created scheduler configuration ConfigMap with ${{ inputs.strategy }} strategy"
 
-    - name: Patch kube-scheduler to use custom configuration
+    - name: Configure kube-scheduler to use custom configuration
       shell: bash
       run: |
-        # Patch the kube-scheduler pod to use our custom configuration
-        kubectl patch pod -n kube-system \
-          -l component=kube-scheduler \
-          --type='json' \
-          -p='[
-            {
-              "op": "add",
-              "path": "/spec/volumes/-",
-              "value": {
-                "name": "scheduler-config",
-                "configMap": {
-                  "name": "scheduler-config"
-                }
-              }
-            },
-            {
-              "op": "add",
-              "path": "/spec/containers/0/volumeMounts/-",
-              "value": {
-                "name": "scheduler-config",
-                "mountPath": "/etc/kubernetes/scheduler-config.yaml",
-                "subPath": "config.yaml",
-                "readOnly": true
-              }
-            },
-            {
-              "op": "add",
-              "path": "/spec/containers/0/command/-",
-              "value": "--config=/etc/kubernetes/scheduler-config.yaml"
-            }
-          ]' || true
-
         # Since we can't patch a running pod, we need to delete and recreate it
         # Kind will automatically recreate the scheduler pod
-        kubectl delete pod -n kube-system -l component=kube-scheduler
+        kubectl delete pod -n kube-system --selector=component=kube-scheduler
         
         echo "Deleted kube-scheduler pod to trigger recreation with new configuration"
 
@@ -93,7 +61,7 @@ runs:
         kubectl describe pod -n kube-system -l component=kube-scheduler | grep -A 5 -B 5 "scheduler-config" || true
         
         # Test scheduling by creating a simple pod
-        kubectl run test-scheduler-pod --image=nginx:alpine --restart=Never --rm -i --dry-run=client -o yaml > /tmp/test-pod.yaml
+        kubectl run test-scheduler-pod --image=nginx:alpine --restart=Never --dry-run=client -o yaml > /tmp/test-pod.yaml
         kubectl apply -f /tmp/test-pod.yaml
         
         # Wait for pod to be scheduled
