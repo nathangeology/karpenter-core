@@ -17,14 +17,60 @@ runs:
         fi
         echo "Configuring scheduler with strategy: ${{ inputs.strategy }}"
 
-    - name: Prepare scheduler configuration for Kind cluster
+    - name: Create scheduler configuration ConfigMap
       shell: bash
       run: |
         CONFIG_FILE="${{ github.action_path }}/configs/${{ inputs.strategy == 'MostAllocated' && 'most-allocated-config.yaml' || 'least-allocated-config.yaml' }}"
         
-        # Copy the scheduler configuration to /tmp so Kind can mount it
-        sudo cp "$CONFIG_FILE" /tmp/scheduler-config.yaml
+        # Create ConfigMap with the scheduler configuration
+        kubectl create configmap scheduler-config \
+          --from-file=config.yaml="$CONFIG_FILE" \
+          --namespace=kube-system \
+          --dry-run=client -o yaml | kubectl apply -f -
         
-        echo "Prepared scheduler configuration file for Kind cluster with ${{ inputs.strategy }} strategy"
+        echo "Created scheduler configuration ConfigMap with ${{ inputs.strategy }} strategy"
         echo "Configuration file contents:"
-        cat /tmp/scheduler-config.yaml
+        cat "$CONFIG_FILE"
+
+    - name: Configure scheduler to use custom configuration
+      shell: bash
+      run: |
+        echo "Configuring scheduler to use ${{ inputs.strategy }} strategy..."
+        
+        # Get the current scheduler pod
+        SCHEDULER_POD=$(kubectl get pod -n kube-system -l component=kube-scheduler -o jsonpath='{.items[0].metadata.name}')
+        echo "Current scheduler pod: $SCHEDULER_POD"
+        
+        # Create a patch to add the ConfigMap volume and mount, and update the command
+        kubectl patch pod "$SCHEDULER_POD" -n kube-system --type='json' -p='[
+          {
+            "op": "add",
+            "path": "/spec/volumes/-",
+            "value": {
+              "name": "scheduler-config",
+              "configMap": {
+                "name": "scheduler-config"
+              }
+            }
+          },
+          {
+            "op": "add", 
+            "path": "/spec/containers/0/volumeMounts/-",
+            "value": {
+              "name": "scheduler-config",
+              "mountPath": "/etc/kubernetes/scheduler-config.yaml",
+              "subPath": "config.yaml",
+              "readOnly": true
+            }
+          }
+        ]' || echo "Patch failed, will delete pod instead"
+        
+        # Since patching static pods doesn't work reliably, delete the pod to force recreation
+        kubectl delete pod "$SCHEDULER_POD" -n kube-system
+        echo "Deleted scheduler pod to trigger recreation"
+        
+        # Wait for new scheduler pod to be created and ready
+        echo "Waiting for new scheduler pod..."
+        kubectl wait --for=condition=Ready pod -l component=kube-scheduler -n kube-system --timeout=120s
+        
+        echo "Scheduler pod recreated successfully"

@@ -8,10 +8,3 @@ nodes:
         apiServer:
           extraArgs:
             authorization-mode: AlwaysAllow
-        scheduler:
-          extraArgs:
-            config: /etc/kubernetes/scheduler-config.yaml
-    extraMounts:
-      - hostPath: /tmp/scheduler-config.yaml
-        containerPath: /etc/kubernetes/scheduler-config.yaml
-        readOnly: true
