@@ -77,25 +77,25 @@ jobs:
         kubectl run test-scheduler-pod --image=nginx:alpine --restart=Never --dry-run=client -o yaml > /tmp/test-pod.yaml
         
         # Add toleration for CriticalAddonsOnly taint so pod can schedule on control plane
-        cat > /tmp/test-pod-with-toleration.yaml << 'EOF'
-apiVersion: v1
-kind: Pod
-metadata:
-  labels:
-    run: test-scheduler-pod
-  name: test-scheduler-pod
-spec:
-  containers:
-  - image: nginx:alpine
-    name: test-scheduler-pod
-    resources: {}
-  dnsPolicy: ClusterFirst
-  restartPolicy: Never
-  tolerations:
-  - key: "CriticalAddonsOnly"
-    operator: "Exists"
-    effect: "NoSchedule"
-EOF
+        cat > /tmp/test-pod-with-toleration.yaml <<EOF
+        apiVersion: v1
+        kind: Pod
+        metadata:
+          labels:
+            run: test-scheduler-pod
+          name: test-scheduler-pod
+        spec:
+          containers:
+          - image: nginx:alpine
+            name: test-scheduler-pod
+            resources: {}
+          dnsPolicy: ClusterFirst
+          restartPolicy: Never
+          tolerations:
+          - key: "CriticalAddonsOnly"
+            operator: "Exists"
+            effect: "NoSchedule"
+        EOF
         
         # Show the test pod spec with toleration
         echo "Test pod spec with toleration:"
