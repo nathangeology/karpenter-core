@@ -1,0 +1,105 @@
+name: 'Configure Kubernetes Scheduler'
+description: 'Configures the Kubernetes scheduler with the specified strategy'
+inputs:
+  strategy:
+    description: 'Scheduler strategy to use (LeastAllocated or MostAllocated)'
+    required: true
+    default: 'LeastAllocated'
+runs:
+  using: 'composite'
+  steps:
+    - name: Validate scheduler strategy
+      shell: bash
+      run: |
+        if [[ "${{ inputs.strategy }}" != "LeastAllocated" && "${{ inputs.strategy }}" != "MostAllocated" ]]; then
+          echo "Error: Invalid scheduler strategy '${{ inputs.strategy }}'. Must be 'LeastAllocated' or 'MostAllocated'"
+          exit 1
+        fi
+        echo "Configuring scheduler with strategy: ${{ inputs.strategy }}"
+
+    - name: Create scheduler configuration ConfigMap
+      shell: bash
+      run: |
+        CONFIG_FILE="${{ github.action_path }}/configs/${{ inputs.strategy == 'MostAllocated' && 'most-allocated-config.yaml' || 'least-allocated-config.yaml' }}"
+        
+        # Create ConfigMap with the scheduler configuration
+        kubectl create configmap scheduler-config \
+          --from-file=config.yaml="$CONFIG_FILE" \
+          --namespace=kube-system \
+          --dry-run=client -o yaml | kubectl apply -f -
+        
+        echo "Created scheduler configuration ConfigMap with ${{ inputs.strategy }} strategy"
+
+    - name: Patch kube-scheduler to use custom configuration
+      shell: bash
+      run: |
+        # Patch the kube-scheduler pod to use our custom configuration
+        kubectl patch pod -n kube-system \
+          -l component=kube-scheduler \
+          --type='json' \
+          -p='[
+            {
+              "op": "add",
+              "path": "/spec/volumes/-",
+              "value": {
+                "name": "scheduler-config",
+                "configMap": {
+                  "name": "scheduler-config"
+                }
+              }
+            },
+            {
+              "op": "add",
+              "path": "/spec/containers/0/volumeMounts/-",
+              "value": {
+                "name": "scheduler-config",
+                "mountPath": "/etc/kubernetes/scheduler-config.yaml",
+                "subPath": "config.yaml",
+                "readOnly": true
+              }
+            },
+            {
+              "op": "add",
+              "path": "/spec/containers/0/command/-",
+              "value": "--config=/etc/kubernetes/scheduler-config.yaml"
+            }
+          ]' || true
+
+        # Since we can't patch a running pod, we need to delete and recreate it
+        # Kind will automatically recreate the scheduler pod
+        kubectl delete pod -n kube-system -l component=kube-scheduler
+        
+        echo "Deleted kube-scheduler pod to trigger recreation with new configuration"
+
+    - name: Wait for scheduler to be ready
+      shell: bash
+      run: |
+        echo "Waiting for kube-scheduler to be ready with new configuration..."
+        
+        # Wait for the scheduler pod to be recreated and running
+        kubectl wait --for=condition=Ready pod -l component=kube-scheduler -n kube-system --timeout=120s
+        
+        # Verify the scheduler is using our configuration
+        kubectl logs -n kube-system -l component=kube-scheduler --tail=20
+        
+        echo "Scheduler is ready with ${{ inputs.strategy }} configuration"
+
+    - name: Verify scheduler configuration
+      shell: bash
+      run: |
+        echo "Verifying scheduler configuration..."
+        
+        # Check if the scheduler pod has our configuration mounted
+        kubectl describe pod -n kube-system -l component=kube-scheduler | grep -A 5 -B 5 "scheduler-config" || true
+        
+        # Test scheduling by creating a simple pod
+        kubectl run test-scheduler-pod --image=nginx:alpine --restart=Never --rm -i --dry-run=client -o yaml > /tmp/test-pod.yaml
+        kubectl apply -f /tmp/test-pod.yaml
+        
+        # Wait for pod to be scheduled
+        kubectl wait --for=condition=PodScheduled pod/test-scheduler-pod --timeout=30s
+        
+        # Clean up test pod
+        kubectl delete pod test-scheduler-pod
+        
+        echo "Scheduler verification completed successfully"

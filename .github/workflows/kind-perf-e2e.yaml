@@ -33,8 +33,14 @@ jobs:
             focus: "Provisioning"
           - name: "Self Anti-Affinity Deployment Interference"
             focus: "Self Anti-Affinity Deployment Interference"
+        scheduler:
+          - strategy: "LeastAllocated"
+            name: "Default"
+          - strategy: "MostAllocated"
+            name: "MostAllocated"
     uses: ./.github/workflows/e2e.yaml
     with:
       suite: Performance
       focus: ${{ matrix.test.focus }}
-      test_name: ${{ matrix.test.name }}
+      test_name: "${{ matrix.test.name }} (${{ matrix.scheduler.name }})"
+      scheduler_strategy: ${{ matrix.scheduler.strategy }}
