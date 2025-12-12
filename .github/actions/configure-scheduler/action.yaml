@@ -17,16 +17,34 @@ runs:
         fi
         echo "Configuring scheduler with strategy: ${{ inputs.strategy }}"
 
-    - name: Prepare scheduler configuration for Kind cluster
+    - name: Prepare scheduler patches directory for Kind cluster
       shell: bash
       run: |
+        STRATEGY_LOWER=$(echo "${{ inputs.strategy }}" | tr '[:upper:]' '[:lower:]')
+        PATCHES_SOURCE="${{ github.action_path }}/patches/${STRATEGY_LOWER/leastallocated/least-allocated}"
+        PATCHES_SOURCE="${PATCHES_SOURCE/mostallocated/most-allocated}"
+        
+        echo "Preparing patches directory for ${{ inputs.strategy }} strategy..."
+        echo "Source patches directory: $PATCHES_SOURCE"
+        
+        # Create the patches directory that Kind will mount
+        sudo mkdir -p /tmp/scheduler-patches
+        
+        # Copy the appropriate scheduler patch
+        sudo cp "$PATCHES_SOURCE/kube-scheduler.yaml" /tmp/scheduler-patches/
+        
+        # Also copy the scheduler configuration file to the patches directory
         CONFIG_FILE="${{ github.action_path }}/configs/${{ inputs.strategy == 'MostAllocated' && 'most-allocated-config.yaml' || 'least-allocated-config.yaml' }}"
+        sudo cp "$CONFIG_FILE" /tmp/scheduler-patches/scheduler-config.yaml
         
-        # Copy the scheduler configuration to /tmp so Kind can mount it
-        sudo cp "$CONFIG_FILE" /tmp/scheduler-config.yaml
+        echo "Prepared patches directory for Kind cluster with ${{ inputs.strategy }} strategy"
+        echo "Patches directory contents:"
+        ls -la /tmp/scheduler-patches/
         
-        echo "Prepared scheduler configuration file for Kind cluster with ${{ inputs.strategy }} strategy"
-        echo "Configuration file contents:"
-        cat /tmp/scheduler-config.yaml
+        echo "Scheduler patch contents:"
+        cat /tmp/scheduler-patches/kube-scheduler.yaml
         
-        echo "File is ready for Kind cluster creation with extraMounts"
+        echo "Scheduler config contents:"
+        cat /tmp/scheduler-patches/scheduler-config.yaml
+        
+        echo "Patches directory is ready for Kind cluster creation"

@@ -2,16 +2,17 @@ kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 nodes:
   - role: control-plane
+    extraMounts:
+      - hostPath: /tmp/scheduler-patches
+        containerPath: /patches
+        readOnly: true
     kubeadmConfigPatches:
       - |
         kind: ClusterConfiguration
         apiServer:
           extraArgs:
             authorization-mode: AlwaysAllow
-        scheduler:
-          extraArgs:
-            config: /etc/kubernetes/scheduler-config.yaml
-    extraMounts:
-      - hostPath: /tmp/scheduler-config.yaml
-        containerPath: /etc/kubernetes/scheduler-config.yaml
-        readOnly: true
+      - |
+        kind: InitConfiguration
+        patches:
+          directory: /patches
