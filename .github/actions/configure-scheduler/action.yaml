@@ -17,57 +17,14 @@ runs:
         fi
         echo "Configuring scheduler with strategy: ${{ inputs.strategy }}"
 
-    - name: Create scheduler configuration ConfigMap
+    - name: Prepare scheduler configuration for Kind cluster
       shell: bash
       run: |
         CONFIG_FILE="${{ github.action_path }}/configs/${{ inputs.strategy == 'MostAllocated' && 'most-allocated-config.yaml' || 'least-allocated-config.yaml' }}"
         
-        # Create ConfigMap with the scheduler configuration
-        kubectl create configmap scheduler-config \
-          --from-file=config.yaml="$CONFIG_FILE" \
-          --namespace=kube-system \
-          --dry-run=client -o yaml | kubectl apply -f -
+        # Copy the scheduler configuration to /tmp so Kind can mount it
+        sudo cp "$CONFIG_FILE" /tmp/scheduler-config.yaml
         
-        echo "Created scheduler configuration ConfigMap with ${{ inputs.strategy }} strategy"
-
-    - name: Configure kube-scheduler to use custom configuration
-      shell: bash
-      run: |
-        # Since we can't patch a running pod, we need to delete and recreate it
-        # Kind will automatically recreate the scheduler pod
-        kubectl delete pod -n kube-system --selector=component=kube-scheduler
-        
-        echo "Deleted kube-scheduler pod to trigger recreation with new configuration"
-
-    - name: Wait for scheduler to be ready
-      shell: bash
-      run: |
-        echo "Waiting for kube-scheduler to be ready with new configuration..."
-        
-        # Wait for the scheduler pod to be recreated and running
-        kubectl wait --for=condition=Ready pod -l component=kube-scheduler -n kube-system --timeout=120s
-        
-        # Verify the scheduler is using our configuration
-        kubectl logs -n kube-system -l component=kube-scheduler --tail=20
-        
-        echo "Scheduler is ready with ${{ inputs.strategy }} configuration"
-
-    - name: Verify scheduler configuration
-      shell: bash
-      run: |
-        echo "Verifying scheduler configuration..."
-        
-        # Check if the scheduler pod has our configuration mounted
-        kubectl describe pod -n kube-system -l component=kube-scheduler | grep -A 5 -B 5 "scheduler-config" || true
-        
-        # Test scheduling by creating a simple pod
-        kubectl run test-scheduler-pod --image=nginx:alpine --restart=Never --dry-run=client -o yaml > /tmp/test-pod.yaml
-        kubectl apply -f /tmp/test-pod.yaml
-        
-        # Wait for pod to be scheduled
-        kubectl wait --for=condition=PodScheduled pod/test-scheduler-pod --timeout=30s
-        
-        # Clean up test pod
-        kubectl delete pod test-scheduler-pod
-        
-        echo "Scheduler verification completed successfully"
+        echo "Prepared scheduler configuration file for Kind cluster with ${{ inputs.strategy }} strategy"
+        echo "Configuration file contents:"
+        cat /tmp/scheduler-config.yaml

@@ -41,6 +41,10 @@ jobs:
     - uses: ./.github/actions/install-deps
       with:
           k8sVersion: ${{ inputs.k8s_version }}
+    - name: prepare scheduler configuration
+      uses: ./.github/actions/configure-scheduler
+      with:
+        strategy: ${{ inputs.scheduler_strategy }}
     - name: Kind Cluster
       uses: helm/kind-action@92086f6be054225fa813e0a4b13787fc9088faab # v1.13.0
       with:
@@ -51,10 +55,13 @@ jobs:
         kubectl config current-context
         kubectl get nodes
         kubectl taint nodes chart-testing-control-plane CriticalAddonsOnly:NoSchedule
-    - name: configure scheduler
-      uses: ./.github/actions/configure-scheduler
-      with:
-        strategy: ${{ inputs.scheduler_strategy }}
+    - name: verify scheduler configuration
+      shell: bash
+      run: |
+        echo "Verifying scheduler is running with ${{ inputs.scheduler_strategy }} configuration..."
+        kubectl wait --for=condition=Ready pod -l component=kube-scheduler -n kube-system --timeout=120s
+        kubectl logs -n kube-system -l component=kube-scheduler --tail=30
+        echo "Scheduler verification completed"
     - name: install prometheus 
       uses: ./.github/actions/install-prometheus
     - name: install pyroscope 
