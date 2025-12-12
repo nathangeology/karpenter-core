@@ -17,82 +17,16 @@ runs:
         fi
         echo "Configuring scheduler with strategy: ${{ inputs.strategy }}"
 
-    - name: Create scheduler configuration ConfigMap
+    - name: Prepare scheduler configuration for Kind cluster
       shell: bash
       run: |
         CONFIG_FILE="${{ github.action_path }}/configs/${{ inputs.strategy == 'MostAllocated' && 'most-allocated-config.yaml' || 'least-allocated-config.yaml' }}"
         
-        # Create ConfigMap with the scheduler configuration
-        kubectl create configmap scheduler-config \
-          --from-file=config.yaml="$CONFIG_FILE" \
-          --namespace=kube-system \
-          --dry-run=client -o yaml | kubectl apply -f -
+        # Copy the scheduler configuration to /tmp so Kind can mount it
+        sudo cp "$CONFIG_FILE" /tmp/scheduler-config.yaml
         
-        echo "Created scheduler configuration ConfigMap with ${{ inputs.strategy }} strategy"
+        echo "Prepared scheduler configuration file for Kind cluster with ${{ inputs.strategy }} strategy"
         echo "Configuration file contents:"
-        cat "$CONFIG_FILE"
-
-    - name: Configure scheduler to use custom configuration
-      shell: bash
-      run: |
-        echo "Configuring scheduler to use ${{ inputs.strategy }} strategy..."
+        cat /tmp/scheduler-config.yaml
         
-        # Get the current scheduler pod
-        SCHEDULER_POD=$(kubectl get pod -n kube-system -l component=kube-scheduler -o jsonpath='{.items[0].metadata.name}')
-        echo "Current scheduler pod: $SCHEDULER_POD"
-        
-        # Show current scheduler pod configuration
-        echo "=== Current scheduler pod spec ==="
-        kubectl get pod "$SCHEDULER_POD" -n kube-system -o yaml | grep -A 20 -B 5 "command:" || true
-        
-        # Since patching static pods doesn't work reliably, we'll try a different approach
-        # Let's modify the static pod manifest directly
-        echo "Attempting to modify scheduler static pod manifest..."
-        
-        # First, let's see what's in the manifests directory
-        kubectl exec "$SCHEDULER_POD" -n kube-system -- ls -la /etc/kubernetes/manifests/ || true
-        
-        # Delete the pod to force recreation (Kind will recreate from static manifest)
-        kubectl delete pod "$SCHEDULER_POD" -n kube-system
-        echo "Deleted scheduler pod to trigger recreation"
-        
-        # Wait for new scheduler pod to be created and ready
-        echo "Waiting for new scheduler pod..."
-        kubectl wait --for=condition=Ready pod -l component=kube-scheduler -n kube-system --timeout=120s
-        
-        # Get the new pod name
-        NEW_SCHEDULER_POD=$(kubectl get pod -n kube-system -l component=kube-scheduler -o jsonpath='{.items[0].metadata.name}')
-        echo "New scheduler pod: $NEW_SCHEDULER_POD"
-        
-        echo "Scheduler pod recreated successfully"
-
-    - name: Verify scheduler configuration
-      shell: bash
-      run: |
-        echo "=== Verifying scheduler configuration ==="
-        
-        # Get the current scheduler pod
-        SCHEDULER_POD=$(kubectl get pod -n kube-system -l component=kube-scheduler -o jsonpath='{.items[0].metadata.name}')
-        echo "Scheduler pod: $SCHEDULER_POD"
-        
-        # Check if our ConfigMap exists
-        echo "=== ConfigMap verification ==="
-        kubectl get configmap scheduler-config -n kube-system -o yaml || echo "ConfigMap not found"
-        
-        # Check scheduler pod volumes and mounts
-        echo "=== Pod volumes ==="
-        kubectl get pod "$SCHEDULER_POD" -n kube-system -o jsonpath='{.spec.volumes}' | jq '.' || echo "No volumes found"
-        
-        echo "=== Pod volume mounts ==="
-        kubectl get pod "$SCHEDULER_POD" -n kube-system -o jsonpath='{.spec.containers[0].volumeMounts}' | jq '.' || echo "No volume mounts found"
-        
-        # Check scheduler command line arguments
-        echo "=== Scheduler command ==="
-        kubectl get pod "$SCHEDULER_POD" -n kube-system -o jsonpath='{.spec.containers[0].command}' | jq '.' || echo "No command found"
-        kubectl get pod "$SCHEDULER_POD" -n kube-system -o jsonpath='{.spec.containers[0].args}' | jq '.' || echo "No args found"
-        
-        # Check if scheduler is using our configuration by looking at logs
-        echo "=== Scheduler logs (looking for config loading) ==="
-        kubectl logs "$SCHEDULER_POD" -n kube-system | grep -i "config\|loading\|strategy\|NodeResourcesFit" || echo "No config-related logs found"
-        
-        echo "=== Scheduler configuration verification completed ==="
+        echo "File is ready for Kind cluster creation with extraMounts"
