@@ -44,7 +44,7 @@ jobs:
     - name: Kind Cluster
       uses: helm/kind-action@92086f6be054225fa813e0a4b13787fc9088faab # v1.13.0
       with:
-        config: .github/actions/deploy-alternate-scheduler/kind-config.yaml
+        config: kind-config.yaml
     - name: check kind cluster and taint nodes
       shell: bash
       run: |
