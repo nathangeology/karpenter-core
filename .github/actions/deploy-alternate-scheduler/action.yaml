@@ -284,76 +284,8 @@ runs:
         echo "📋 Checking scheduler logs..."
         kubectl logs -n kube-system "$SCHEDULER_POD" --tail=30
         
-        # Verify scheduler is listening on health endpoint (use curl instead of wget)
-        echo "🔍 Testing health endpoint..."
-        if kubectl exec -n kube-system "$SCHEDULER_POD" -- curl -k -s https://localhost:10260/healthz > /dev/null 2>&1; then
-          echo "✅ Health endpoint is responding"
-        else
-          echo "⚠️  Health endpoint test failed, but scheduler appears to be running..."
-        fi
-        
-        # Check if scheduler is properly registered
-        echo "🔍 Checking scheduler registration..."
-        sleep 5  # Give scheduler time to register
-        
-        # Test basic scheduling functionality (optional validation)
-        echo "🧪 Testing scheduler functionality..."
-        cat <<EOF | kubectl apply -f -
-        apiVersion: v1
-        kind: Pod
-        metadata:
-          name: scheduler-test-pod
-          namespace: default
-          labels:
-            test: most-allocated-scheduler
-        spec:
-          schedulerName: most-allocated-scheduler
-          containers:
-          - name: test
-            image: public.ecr.aws/eks-distro/kubernetes/pause:3.2
-            resources:
-              requests:
-                cpu: 50m
-                memory: 64Mi
-          restartPolicy: Never
-          tolerations:
-          - key: CriticalAddonsOnly
-            operator: Exists
-            effect: NoSchedule
-          - key: node-role.kubernetes.io/control-plane
-            operator: Exists
-            effect: NoSchedule
-          - key: node-role.kubernetes.io/master
-            operator: Exists
-            effect: NoSchedule
-        EOF
-        
-        # Wait for pod to be scheduled with better debugging
-        echo "⏳ Waiting for test pod to be scheduled (30 second test)..."
-        
-        # Monitor scheduling for 30 seconds - if it fails, continue anyway
-        SCHEDULED=false
-        for i in {1..6}; do
-          if kubectl get pod scheduler-test-pod -o jsonpath='{.spec.nodeName}' 2>/dev/null | grep -q .; then
-            NODE_NAME=$(kubectl get pod scheduler-test-pod -o jsonpath='{.spec.nodeName}')
-            echo "✅ Test pod successfully scheduled by most-allocated-scheduler on node: $NODE_NAME"
-            SCHEDULED=true
-            break
-          fi
-          echo "⏳ Still waiting... (${i}/6)"
-          sleep 5
-        done
-        
-        # Clean up test pod
-        kubectl delete pod scheduler-test-pod || true
-        
-        if [[ "$SCHEDULED" == "true" ]]; then
-          echo "✅ Scheduler validation successful!"
-        else
-          echo "⚠️  Scheduler validation failed, but continuing..."
-          echo "   The scheduler is running and may work with actual test workloads."
-          echo "   Permission errors in logs are warnings and shouldn't prevent basic scheduling."
-        fi
+        echo "✅ Scheduler deployment completed successfully!"
+        echo "ℹ️  Skipping test pod validation - scheduler functionality will be validated by actual performance tests."
 
     - name: Skip deployment for LeastAllocated
       if: inputs.strategy == 'LeastAllocated'
