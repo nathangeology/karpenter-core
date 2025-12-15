@@ -15,10 +15,30 @@ if [[ "${SCHEDULER_STRATEGY}" == "MostAllocated" ]]; then
     
     echo "✅ Scheduler strategy applied: ${SCHEDULER_STRATEGY}"
     echo "   Scheduler name: ${SCHEDULER_NAME}"
+    
+    # Create a temporary Go file that will be imported to apply scheduler names
+    cat > /tmp/scheduler_env.go <<EOF
+package main
+
+import (
+    "os"
+    "strings"
+)
+
+func init() {
+    // This will be used by the test framework to apply scheduler names
+    if os.Getenv("USE_MOST_ALLOCATED_SCHEDULER") == "true" {
+        // Set a global variable that tests can check
+        os.Setenv("APPLY_SCHEDULER_NAME", "most-allocated-scheduler")
+    }
+}
+EOF
+    
 else
     echo "ℹ️  Using default scheduler (LeastAllocated strategy)"
     export USE_MOST_ALLOCATED_SCHEDULER="false"
     export SCHEDULER_NAME=""
+    export APPLY_SCHEDULER_NAME=""
 fi
 
 # Execute the original command with the modified environment

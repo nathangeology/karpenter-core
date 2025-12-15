@@ -111,9 +111,17 @@ func CreateDeploymentOptions(name string, replicas int32, cpuRequest, memoryRequ
 		},
 	}
 
-	// Apply all modifiers
+	// Apply all modifiers first
 	for _, opt := range opts {
 		opt(&deploymentOpts)
+	}
+
+	// Auto-apply scheduler based on environment variable if no scheduler is explicitly set
+	if deploymentOpts.PodOptions.SchedulerName == "" {
+		// Check for environment variable using a simple approach
+		if schedulerName := getSchedulerFromEnv(); schedulerName != "" {
+			deploymentOpts.PodOptions.SchedulerName = schedulerName
+		}
 	}
 
 	return deploymentOpts
