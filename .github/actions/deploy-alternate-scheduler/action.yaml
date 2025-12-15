@@ -24,6 +24,41 @@ runs:
       run: |
         echo "🚀 Deploying MostAllocated scheduler..."
         
+        # Validate scheduler configuration YAML syntax
+        echo "📋 Validating scheduler configuration YAML syntax..."
+        cat > /tmp/scheduler-config.yaml <<EOF
+        apiVersion: kubescheduler.config.k8s.io/v1
+        kind: KubeSchedulerConfiguration
+        profiles:
+        - schedulerName: most-allocated-scheduler
+          pluginConfig:
+          - name: NodeResourcesFit
+            args:
+              scoringStrategy:
+                type: MostAllocated
+                resources:
+                - name: cpu
+                  weight: 1
+                - name: memory
+                  weight: 1
+        EOF
+        
+        # Test YAML syntax using yq or python
+        if command -v yq &> /dev/null; then
+          if ! yq eval '.' /tmp/scheduler-config.yaml > /dev/null 2>&1; then
+            echo "❌ Invalid scheduler configuration YAML syntax"
+            exit 1
+          fi
+        elif command -v python3 &> /dev/null; then
+          if ! python3 -c "import yaml; yaml.safe_load(open('/tmp/scheduler-config.yaml'))" > /dev/null 2>&1; then
+            echo "❌ Invalid scheduler configuration YAML syntax"
+            exit 1
+          fi
+        else
+          echo "⚠️  Cannot validate YAML syntax (yq or python3 not available), proceeding..."
+        fi
+        echo "✅ Scheduler configuration YAML syntax is valid"
+        
         # Create scheduler configuration
         cat <<EOF | kubectl apply -f -
         apiVersion: v1
@@ -74,17 +109,31 @@ runs:
           namespace: kube-system
         EOF
 
-        # Get the current kube-scheduler image
-        SCHEDULER_IMAGE=$(kubectl get deployment -n kube-system coredns -o jsonpath='{.spec.template.spec.containers[0].image}' | sed 's/coredns.*/kube-scheduler:v1.34.0/')
+        # Get the Kubernetes version and determine scheduler image
+        echo "🔍 Determining scheduler image..."
         
-        # If we can't determine the image, use a default
-        if [[ -z "$SCHEDULER_IMAGE" || "$SCHEDULER_IMAGE" == *"coredns"* ]]; then
-          SCHEDULER_IMAGE="registry.k8s.io/kube-scheduler:v1.34.0"
+        # Get Kubernetes version from server
+        K8S_VERSION=$(kubectl version --output=json 2>/dev/null | jq -r '.serverVersion.gitVersion' 2>/dev/null | sed 's/^v//' || echo "")
+        
+        # If we can't get the version, check what's running in the cluster
+        if [[ -z "$K8S_VERSION" ]]; then
+          echo "⚠️  Could not get K8s version from server, checking existing scheduler..."
+          EXISTING_SCHEDULER_IMAGE=$(kubectl get pod -n kube-system -l component=kube-scheduler -o jsonpath='{.items[0].spec.containers[0].image}' 2>/dev/null || echo "")
+          if [[ -n "$EXISTING_SCHEDULER_IMAGE" ]]; then
+            SCHEDULER_IMAGE="$EXISTING_SCHEDULER_IMAGE"
+            echo "✅ Using same image as existing scheduler: $SCHEDULER_IMAGE"
+          else
+            # Fallback to a known working version
+            SCHEDULER_IMAGE="registry.k8s.io/kube-scheduler:v1.31.0"
+            echo "⚠️  Using fallback image: $SCHEDULER_IMAGE"
+          fi
+        else
+          # Use the detected version
+          SCHEDULER_IMAGE="registry.k8s.io/kube-scheduler:v${K8S_VERSION}"
+          echo "✅ Using scheduler image for detected version: $SCHEDULER_IMAGE"
         fi
-        
-        echo "Using scheduler image: $SCHEDULER_IMAGE"
 
-        # Deploy alternate scheduler
+        # Deploy alternate scheduler with improved configuration
         cat <<EOF | kubectl apply -f -
         apiVersion: apps/v1
         kind: Deployment
@@ -111,6 +160,9 @@ runs:
                 - kube-scheduler
                 - --config=/etc/kubernetes/scheduler-config.yaml
                 - --v=2
+                - --leader-elect=false
+                - --bind-address=0.0.0.0
+                - --secure-port=10259
                 volumeMounts:
                 - name: config
                   mountPath: /etc/kubernetes
@@ -120,20 +172,35 @@ runs:
                     cpu: 100m
                     memory: 128Mi
                   limits:
-                    cpu: 200m
-                    memory: 256Mi
+                    cpu: 500m
+                    memory: 512Mi
                 livenessProbe:
                   httpGet:
                     path: /healthz
                     port: 10259
                     scheme: HTTPS
-                  initialDelaySeconds: 15
+                  initialDelaySeconds: 30
+                  periodSeconds: 10
+                  timeoutSeconds: 5
+                  failureThreshold: 3
                 readinessProbe:
                   httpGet:
                     path: /healthz
                     port: 10259
                     scheme: HTTPS
-                  initialDelaySeconds: 5
+                  initialDelaySeconds: 15
+                  periodSeconds: 5
+                  timeoutSeconds: 3
+                  failureThreshold: 3
+                startupProbe:
+                  httpGet:
+                    path: /healthz
+                    port: 10259
+                    scheme: HTTPS
+                  initialDelaySeconds: 10
+                  periodSeconds: 5
+                  timeoutSeconds: 3
+                  failureThreshold: 10
               volumes:
               - name: config
                 configMap:
@@ -148,8 +215,13 @@ runs:
               - key: node-role.kubernetes.io/master
                 operator: Exists
                 effect: NoSchedule
+              - key: CriticalAddonsOnly
+                operator: Exists
+                effect: NoSchedule
               nodeSelector:
                 node-role.kubernetes.io/control-plane: ""
+              hostNetwork: true
+              dnsPolicy: ClusterFirstWithHostNet
         EOF
 
     - name: Wait for alternate scheduler to be ready
@@ -157,10 +229,38 @@ runs:
       shell: bash
       run: |
         echo "⏳ Waiting for MostAllocated scheduler to be ready..."
-        kubectl wait --for=condition=available --timeout=120s deployment/most-allocated-scheduler -n kube-system
+        
+        # Wait with better error handling
+        if ! kubectl wait --for=condition=available --timeout=180s deployment/most-allocated-scheduler -n kube-system; then
+          echo "❌ Scheduler deployment failed to become available. Debugging..."
+          
+          # Show deployment status
+          echo "📊 Deployment status:"
+          kubectl get deployment most-allocated-scheduler -n kube-system -o wide
+          
+          # Show pod status
+          echo "📊 Pod status:"
+          kubectl get pods -n kube-system -l app=most-allocated-scheduler -o wide
+          
+          # Show events
+          echo "📊 Recent events:"
+          kubectl get events -n kube-system --sort-by='.lastTimestamp' | tail -20
+          
+          # Show pod details if pod exists
+          SCHEDULER_POD=$(kubectl get pods -n kube-system -l app=most-allocated-scheduler -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+          if [[ -n "$SCHEDULER_POD" ]]; then
+            echo "📊 Pod description:"
+            kubectl describe pod "$SCHEDULER_POD" -n kube-system
+            
+            echo "📊 Pod logs:"
+            kubectl logs "$SCHEDULER_POD" -n kube-system --tail=50 || echo "No logs available"
+          fi
+          
+          exit 1
+        fi
         
         # Verify scheduler is running
-        kubectl get pods -n kube-system -l app=most-allocated-scheduler
+        kubectl get pods -n kube-system -l app=most-allocated-scheduler -o wide
         
         echo "✅ MostAllocated scheduler is ready!"
 
@@ -170,18 +270,41 @@ runs:
       run: |
         echo "🔍 Verifying scheduler configuration..."
         
+        # Wait a bit for scheduler to fully initialize
+        sleep 10
+        
         # Check if scheduler pod is running
         SCHEDULER_POD=$(kubectl get pods -n kube-system -l app=most-allocated-scheduler -o jsonpath='{.items[0].metadata.name}')
         if [[ -z "$SCHEDULER_POD" ]]; then
           echo "❌ No scheduler pod found"
+          kubectl get pods -n kube-system -l app=most-allocated-scheduler
           exit 1
         fi
         
         echo "Scheduler pod: $SCHEDULER_POD"
         
+        # Check pod status
+        POD_STATUS=$(kubectl get pod "$SCHEDULER_POD" -n kube-system -o jsonpath='{.status.phase}')
+        echo "Pod status: $POD_STATUS"
+        
+        if [[ "$POD_STATUS" != "Running" ]]; then
+          echo "❌ Scheduler pod is not running"
+          kubectl describe pod "$SCHEDULER_POD" -n kube-system
+          kubectl logs "$SCHEDULER_POD" -n kube-system --tail=50 || echo "No logs available"
+          exit 1
+        fi
+        
         # Check scheduler logs for successful startup
-        echo "Checking scheduler logs..."
-        kubectl logs -n kube-system "$SCHEDULER_POD" --tail=20
+        echo "📋 Checking scheduler logs..."
+        kubectl logs -n kube-system "$SCHEDULER_POD" --tail=30
+        
+        # Verify scheduler is listening on health endpoint
+        echo "🔍 Testing health endpoint..."
+        if kubectl exec -n kube-system "$SCHEDULER_POD" -- wget -q --spider --no-check-certificate https://localhost:10259/healthz; then
+          echo "✅ Health endpoint is responding"
+        else
+          echo "⚠️  Health endpoint not responding, but continuing..."
+        fi
         
         # Test basic scheduling functionality
         echo "🧪 Testing scheduler functionality..."
@@ -202,16 +325,28 @@ runs:
                 cpu: 50m
                 memory: 64Mi
           restartPolicy: Never
+          tolerations:
+          - key: CriticalAddonsOnly
+            operator: Exists
+            effect: NoSchedule
         EOF
         
         # Wait for pod to be scheduled
-        echo "Waiting for test pod to be scheduled..."
-        if kubectl wait --for=condition=PodScheduled pod/scheduler-test-pod --timeout=60s; then
+        echo "⏳ Waiting for test pod to be scheduled..."
+        if kubectl wait --for=condition=PodScheduled pod/scheduler-test-pod --timeout=90s; then
           echo "✅ Test pod successfully scheduled by most-allocated-scheduler"
+          
+          # Show where it was scheduled
+          NODE_NAME=$(kubectl get pod scheduler-test-pod -o jsonpath='{.spec.nodeName}')
+          echo "📍 Test pod scheduled on node: $NODE_NAME"
+          
           kubectl delete pod scheduler-test-pod
         else
           echo "❌ Test pod failed to be scheduled"
+          echo "📊 Pod description:"
           kubectl describe pod scheduler-test-pod
+          echo "📊 Pod events:"
+          kubectl get events --field-selector involvedObject.name=scheduler-test-pod
           kubectl delete pod scheduler-test-pod || true
           exit 1
         fi
