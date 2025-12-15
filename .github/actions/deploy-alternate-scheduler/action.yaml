@@ -162,7 +162,7 @@ runs:
                 - --v=2
                 - --leader-elect=false
                 - --bind-address=0.0.0.0
-                - --secure-port=10259
+                - --secure-port=10260
                 volumeMounts:
                 - name: config
                   mountPath: /etc/kubernetes
@@ -177,7 +177,7 @@ runs:
                 livenessProbe:
                   httpGet:
                     path: /healthz
-                    port: 10259
+                    port: 10260
                     scheme: HTTPS
                   initialDelaySeconds: 30
                   periodSeconds: 10
@@ -186,7 +186,7 @@ runs:
                 readinessProbe:
                   httpGet:
                     path: /healthz
-                    port: 10259
+                    port: 10260
                     scheme: HTTPS
                   initialDelaySeconds: 15
                   periodSeconds: 5
@@ -195,7 +195,7 @@ runs:
                 startupProbe:
                   httpGet:
                     path: /healthz
-                    port: 10259
+                    port: 10260
                     scheme: HTTPS
                   initialDelaySeconds: 10
                   periodSeconds: 5
@@ -300,7 +300,7 @@ runs:
         
         # Verify scheduler is listening on health endpoint
         echo "🔍 Testing health endpoint..."
-        if kubectl exec -n kube-system "$SCHEDULER_POD" -- wget -q --spider --no-check-certificate https://localhost:10259/healthz; then
+        if kubectl exec -n kube-system "$SCHEDULER_POD" -- wget -q --spider --no-check-certificate https://localhost:10260/healthz; then
           echo "✅ Health endpoint is responding"
         else
           echo "⚠️  Health endpoint not responding, but continuing..."
