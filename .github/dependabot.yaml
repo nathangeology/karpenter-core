@@ -38,6 +38,14 @@ updates:
   # If you need to make a change to this file, ensure that you make a change to hack/github/dependabot.sh first
   # That script assumes that the number of elements above this line is static and bases the append operation on it
   - package-ecosystem: github-actions
+    directory: .github/actions/deploy-alternate-scheduler
+    schedule:
+      interval: weekly
+    groups:
+      action-deps:
+        patterns:
+          - '*'
+  - package-ecosystem: github-actions
     directory: .github/actions/install-deps
     schedule:
       interval: weekly
@@ -55,14 +63,6 @@ updates:
           - '*'
   - package-ecosystem: github-actions
     directory: .github/actions/install-pyroscope
-    schedule:
-      interval: weekly
-    groups:
-      action-deps:
-        patterns:
-          - '*'
-  - package-ecosystem: github-actions
-    directory: .github/actions/run-bench-test
     schedule:
       interval: weekly
     groups:
