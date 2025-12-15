@@ -16,6 +16,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        scheduler:
+          - strategy: "LeastAllocated"
+            name: "Default"
+          - strategy: "MostAllocated"
+            name: "MostAllocated"
         test:
           - name: "Drift Performance"
             focus: "Drift Performance"
@@ -37,4 +42,5 @@ jobs:
     with:
       suite: Performance
       focus: ${{ matrix.test.focus }}
-      test_name: ${{ matrix.test.name }}
+      test_name: ${{ matrix.test.name }} (${{ matrix.scheduler.name }})
+      scheduler_strategy: ${{ matrix.scheduler.strategy }}

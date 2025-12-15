@@ -16,6 +16,11 @@ on:
         type: string
         required: false
         description: "Human-readable test name for job identification"
+      scheduler_strategy:
+        type: string
+        required: false
+        default: "LeastAllocated"
+        description: "Scheduler strategy to use (LeastAllocated or MostAllocated)"
 jobs:
   e2e:
     permissions:
@@ -52,6 +57,10 @@ jobs:
       shell: bash
       run: |
         go install github.com/google/ko@latest      
+    - name: deploy alternate scheduler
+      uses: ./.github/actions/deploy-alternate-scheduler
+      with:
+        strategy: ${{ inputs.scheduler_strategy }}
     - name: install kwok and controller
       shell: bash
       run: |
@@ -71,12 +80,18 @@ jobs:
       env:
           SUITE: ${{ inputs.suite }}
           FOCUS: ${{ inputs.focus }}
+          SCHEDULER_STRATEGY: ${{ inputs.scheduler_strategy }}
       shell: bash
       run: |
         OUTPUT_DIR=$(mktemp -d)
         export OUTPUT_DIR
         echo OUTPUT_DIR="$OUTPUT_DIR" >> "$GITHUB_ENV"
-        TEST_SUITE="$SUITE" make e2etests
+        
+        # Make the scheduler strategy script executable
+        chmod +x hack/apply-scheduler-strategy.sh
+        
+        # Run tests with scheduler strategy applied
+        hack/apply-scheduler-strategy.sh make e2etests
     - name: Upload performance results
       if: always() && env.OUTPUT_DIR != ''
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

@@ -34,6 +34,7 @@ type PodOptions struct {
 	metav1.ObjectMeta
 	Image                         string
 	NodeName                      string
+	SchedulerName                 string
 	Overhead                      v1.ResourceList
 	PriorityClassName             string
 	InitContainers                []v1.Container
@@ -148,6 +149,7 @@ func Pod(overrides ...PodOptions) *v1.Pod {
 				LivenessProbe:  options.LivenessProbe,
 			}},
 			NodeName:                      options.NodeName,
+			SchedulerName:                 options.SchedulerName,
 			Volumes:                       volumes,
 			PriorityClassName:             options.PriorityClassName,
 			RestartPolicy:                 options.RestartPolicy,

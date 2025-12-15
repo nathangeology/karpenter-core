@@ -1,0 +1,224 @@
+name: 'Deploy Alternate Scheduler'
+description: 'Deploys an alternate kube-scheduler with MostAllocated strategy for benchmarking'
+inputs:
+  strategy:
+    description: 'Scheduler strategy to deploy (LeastAllocated or MostAllocated)'
+    required: true
+    default: 'LeastAllocated'
+runs:
+  using: 'composite'
+  steps:
+    - name: Validate scheduler strategy
+      shell: bash
+      run: |
+        if [[ "${{ inputs.strategy }}" != "LeastAllocated" && "${{ inputs.strategy }}" != "MostAllocated" ]]; then
+          echo "❌ Invalid scheduler strategy: ${{ inputs.strategy }}"
+          echo "Valid options are: LeastAllocated, MostAllocated"
+          exit 1
+        fi
+        echo "✅ Using scheduler strategy: ${{ inputs.strategy }}"
+
+    - name: Deploy alternate scheduler (MostAllocated only)
+      if: inputs.strategy == 'MostAllocated'
+      shell: bash
+      run: |
+        echo "🚀 Deploying MostAllocated scheduler..."
+        
+        # Create scheduler configuration
+        cat <<EOF | kubectl apply -f -
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: most-allocated-scheduler-config
+          namespace: kube-system
+        data:
+          config.yaml: |
+            apiVersion: kubescheduler.config.k8s.io/v1
+            kind: KubeSchedulerConfiguration
+            profiles:
+            - schedulerName: most-allocated-scheduler
+              pluginConfig:
+              - name: NodeResourcesFit
+                args:
+                  scoringStrategy:
+                    type: MostAllocated
+                    resources:
+                    - name: cpu
+                      weight: 1
+                    - name: memory
+                      weight: 1
+        EOF
+
+        # Create ServiceAccount for alternate scheduler
+        cat <<EOF | kubectl apply -f -
+        apiVersion: v1
+        kind: ServiceAccount
+        metadata:
+          name: most-allocated-scheduler
+          namespace: kube-system
+        EOF
+
+        # Create ClusterRoleBinding for alternate scheduler
+        cat <<EOF | kubectl apply -f -
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRoleBinding
+        metadata:
+          name: most-allocated-scheduler
+        roleRef:
+          apiGroup: rbac.authorization.k8s.io
+          kind: ClusterRole
+          name: system:kube-scheduler
+        subjects:
+        - kind: ServiceAccount
+          name: most-allocated-scheduler
+          namespace: kube-system
+        EOF
+
+        # Get the current kube-scheduler image
+        SCHEDULER_IMAGE=$(kubectl get deployment -n kube-system coredns -o jsonpath='{.spec.template.spec.containers[0].image}' | sed 's/coredns.*/kube-scheduler:v1.34.0/')
+        
+        # If we can't determine the image, use a default
+        if [[ -z "$SCHEDULER_IMAGE" || "$SCHEDULER_IMAGE" == *"coredns"* ]]; then
+          SCHEDULER_IMAGE="registry.k8s.io/kube-scheduler:v1.34.0"
+        fi
+        
+        echo "Using scheduler image: $SCHEDULER_IMAGE"
+
+        # Deploy alternate scheduler
+        cat <<EOF | kubectl apply -f -
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: most-allocated-scheduler
+          namespace: kube-system
+          labels:
+            app: most-allocated-scheduler
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              app: most-allocated-scheduler
+          template:
+            metadata:
+              labels:
+                app: most-allocated-scheduler
+            spec:
+              serviceAccountName: most-allocated-scheduler
+              containers:
+              - name: kube-scheduler
+                image: $SCHEDULER_IMAGE
+                command:
+                - kube-scheduler
+                - --config=/etc/kubernetes/scheduler-config.yaml
+                - --v=2
+                volumeMounts:
+                - name: config
+                  mountPath: /etc/kubernetes
+                  readOnly: true
+                resources:
+                  requests:
+                    cpu: 100m
+                    memory: 128Mi
+                  limits:
+                    cpu: 200m
+                    memory: 256Mi
+                livenessProbe:
+                  httpGet:
+                    path: /healthz
+                    port: 10259
+                    scheme: HTTPS
+                  initialDelaySeconds: 15
+                readinessProbe:
+                  httpGet:
+                    path: /healthz
+                    port: 10259
+                    scheme: HTTPS
+                  initialDelaySeconds: 5
+              volumes:
+              - name: config
+                configMap:
+                  name: most-allocated-scheduler-config
+                  items:
+                  - key: config.yaml
+                    path: scheduler-config.yaml
+              tolerations:
+              - key: node-role.kubernetes.io/control-plane
+                operator: Exists
+                effect: NoSchedule
+              - key: node-role.kubernetes.io/master
+                operator: Exists
+                effect: NoSchedule
+              nodeSelector:
+                node-role.kubernetes.io/control-plane: ""
+        EOF
+
+    - name: Wait for alternate scheduler to be ready
+      if: inputs.strategy == 'MostAllocated'
+      shell: bash
+      run: |
+        echo "⏳ Waiting for MostAllocated scheduler to be ready..."
+        kubectl wait --for=condition=available --timeout=120s deployment/most-allocated-scheduler -n kube-system
+        
+        # Verify scheduler is running
+        kubectl get pods -n kube-system -l app=most-allocated-scheduler
+        
+        echo "✅ MostAllocated scheduler is ready!"
+
+    - name: Verify scheduler configuration
+      if: inputs.strategy == 'MostAllocated'
+      shell: bash
+      run: |
+        echo "🔍 Verifying scheduler configuration..."
+        
+        # Check if scheduler pod is running
+        SCHEDULER_POD=$(kubectl get pods -n kube-system -l app=most-allocated-scheduler -o jsonpath='{.items[0].metadata.name}')
+        if [[ -z "$SCHEDULER_POD" ]]; then
+          echo "❌ No scheduler pod found"
+          exit 1
+        fi
+        
+        echo "Scheduler pod: $SCHEDULER_POD"
+        
+        # Check scheduler logs for successful startup
+        echo "Checking scheduler logs..."
+        kubectl logs -n kube-system "$SCHEDULER_POD" --tail=20
+        
+        # Test basic scheduling functionality
+        echo "🧪 Testing scheduler functionality..."
+        cat <<EOF | kubectl apply -f -
+        apiVersion: v1
+        kind: Pod
+        metadata:
+          name: scheduler-test-pod
+          labels:
+            test: most-allocated-scheduler
+        spec:
+          schedulerName: most-allocated-scheduler
+          containers:
+          - name: test
+            image: nginx:alpine
+            resources:
+              requests:
+                cpu: 50m
+                memory: 64Mi
+          restartPolicy: Never
+        EOF
+        
+        # Wait for pod to be scheduled
+        echo "Waiting for test pod to be scheduled..."
+        if kubectl wait --for=condition=PodScheduled pod/scheduler-test-pod --timeout=60s; then
+          echo "✅ Test pod successfully scheduled by most-allocated-scheduler"
+          kubectl delete pod scheduler-test-pod
+        else
+          echo "❌ Test pod failed to be scheduled"
+          kubectl describe pod scheduler-test-pod
+          kubectl delete pod scheduler-test-pod || true
+          exit 1
+        fi
+
+    - name: Skip deployment for LeastAllocated
+      if: inputs.strategy == 'LeastAllocated'
+      shell: bash
+      run: |
+        echo "ℹ️  Using default scheduler (LeastAllocated strategy)"
+        echo "No alternate scheduler deployment needed."
