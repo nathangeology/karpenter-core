@@ -153,13 +153,8 @@ runs:
                 - name: config
                   mountPath: /etc/kubernetes
                   readOnly: true
-                resources:
-                  requests:
-                    cpu: 100m
-                    memory: 128Mi
-                  limits:
-                    cpu: 500m
-                    memory: 512Mi
+                # No resource requests/limits to avoid resource pressure in GitHub Actions environment
+                # Let the scheduler share the host resources naturally
                 livenessProbe:
                   httpGet:
                     path: /healthz
