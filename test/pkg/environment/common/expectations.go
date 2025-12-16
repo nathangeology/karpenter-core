@@ -1076,125 +1076,144 @@ func (env *Environment) GetNode(nodeName string) corev1.Node {
 func (env *Environment) ExpectNoCrashes() {
 	GinkgoHelper()
 
+	crashedContainers := env.getCrashedKarpenterContainers()
+	if len(crashedContainers) > 0 {
+		env.printCrashDebugInfo(crashedContainers)
+		Fail(fmt.Sprintf("expected karpenter containers to not crash, but found crashes in: %v", crashedContainers))
+	}
+}
+
+func (env *Environment) getCrashedKarpenterContainers() []string {
 	crashedContainers := []string{}
 	restartCounts := env.Monitor.RestartCount("kube-system")
 
-	// Collect all crashed karpenter containers
 	for k, v := range restartCounts {
 		if strings.Contains(k, "karpenter") && v > 0 {
 			crashedContainers = append(crashedContainers, fmt.Sprintf("%s (restarts: %d)", k, v))
 		}
 	}
+	return crashedContainers
+}
 
-	if len(crashedContainers) > 0 {
-		fmt.Printf("\n🚨 KARPENTER CONTAINER CRASHES DETECTED 🚨\n")
-		fmt.Printf("==========================================\n")
+func (env *Environment) printCrashDebugInfo(crashedContainers []string) {
+	fmt.Printf("\n🚨 KARPENTER CONTAINER CRASHES DETECTED 🚨\n")
+	fmt.Printf("==========================================\n")
 
-		// Show which containers crashed
-		fmt.Printf("📊 Crashed Containers:\n")
-		for _, container := range crashedContainers {
-			fmt.Printf("   - %s\n", container)
-		}
-		fmt.Printf("\n")
+	// Show which containers crashed
+	fmt.Printf("📊 Crashed Containers:\n")
+	for _, container := range crashedContainers {
+		fmt.Printf("   - %s\n", container)
+	}
+	fmt.Printf("\n")
 
-		// Get all karpenter pods for detailed analysis
-		podList := &corev1.PodList{}
-		if err := env.Client.List(env.Context, podList, client.MatchingLabels{
-			"app.kubernetes.io/instance": "karpenter",
-		}); err == nil {
-			fmt.Printf("📋 Karpenter Pod Details:\n")
-			for _, pod := range podList.Items {
-				fmt.Printf("\n🔍 Pod: %s (Status: %s)\n", pod.Name, pod.Status.Phase)
+	env.printKarpenterPodDetails()
+	env.printSchedulerInfo()
+	env.printClusterResourceInfo()
+	env.printSystemPodStatus()
 
-				// Show container statuses
-				for _, containerStatus := range pod.Status.ContainerStatuses {
-					fmt.Printf("   Container: %s\n", containerStatus.Name)
-					fmt.Printf("   - Ready: %t\n", containerStatus.Ready)
-					fmt.Printf("   - Restart Count: %d\n", containerStatus.RestartCount)
-					fmt.Printf("   - State: %+v\n", containerStatus.State)
-					if containerStatus.LastTerminationState.Terminated != nil {
-						fmt.Printf("   - Last Termination: %s (Exit Code: %d)\n",
-							containerStatus.LastTerminationState.Terminated.Reason,
-							containerStatus.LastTerminationState.Terminated.ExitCode)
-						fmt.Printf("   - Last Termination Message: %s\n",
-							containerStatus.LastTerminationState.Terminated.Message)
-					}
-				}
+	fmt.Printf("\n==========================================\n")
+}
 
-				// Show recent pod events
-				fmt.Printf("\n📅 Recent Events for Pod %s:\n", pod.Name)
-				eventList := &corev1.EventList{}
-				if err := env.Client.List(env.Context, eventList,
-					client.InNamespace(pod.Namespace),
-					client.MatchingFields{"involvedObject.name": pod.Name}); err == nil {
-					for _, event := range eventList.Items {
-						fmt.Printf("   %s: %s - %s\n",
-							event.LastTimestamp.Format("15:04:05"),
-							event.Reason,
-							event.Message)
-					}
-				}
+func (env *Environment) printKarpenterPodDetails() {
+	podList := &corev1.PodList{}
+	if err := env.Client.List(env.Context, podList, client.MatchingLabels{
+		"app.kubernetes.io/instance": "karpenter",
+	}); err == nil {
+		fmt.Printf("📋 Karpenter Pod Details:\n")
+		for _, pod := range podList.Items {
+			fmt.Printf("\n🔍 Pod: %s (Status: %s)\n", pod.Name, pod.Status.Phase)
+
+			// Show container statuses
+			for _, containerStatus := range pod.Status.ContainerStatuses {
+				env.printContainerStatus(containerStatus)
 			}
+
+			env.printPodEvents(pod)
 		}
+	}
+}
 
-		// Show scheduler-related information
-		fmt.Printf("\n🔧 Scheduler Information:\n")
+func (env *Environment) printContainerStatus(containerStatus corev1.ContainerStatus) {
+	fmt.Printf("   Container: %s\n", containerStatus.Name)
+	fmt.Printf("   - Ready: %t\n", containerStatus.Ready)
+	fmt.Printf("   - Restart Count: %d\n", containerStatus.RestartCount)
+	fmt.Printf("   - State: %+v\n", containerStatus.State)
+	if containerStatus.LastTerminationState.Terminated != nil {
+		fmt.Printf("   - Last Termination: %s (Exit Code: %d)\n",
+			containerStatus.LastTerminationState.Terminated.Reason,
+			containerStatus.LastTerminationState.Terminated.ExitCode)
+		fmt.Printf("   - Last Termination Message: %s\n",
+			containerStatus.LastTerminationState.Terminated.Message)
+	}
+}
 
-		// Check if alternate scheduler is running
-		altSchedulerPods := &corev1.PodList{}
-		if err := env.Client.List(env.Context, altSchedulerPods,
-			client.InNamespace("kube-system"),
-			client.MatchingLabels{"app": "most-allocated-scheduler"}); err == nil {
-			if len(altSchedulerPods.Items) > 0 {
-				fmt.Printf("   📍 MostAllocated Scheduler Status: Running (%d pods)\n", len(altSchedulerPods.Items))
-				for _, pod := range altSchedulerPods.Items {
-					fmt.Printf("      - Pod: %s (Status: %s, Restarts: %d)\n",
-						pod.Name, pod.Status.Phase,
-						func() int32 {
-							if len(pod.Status.ContainerStatuses) > 0 {
-								return pod.Status.ContainerStatuses[0].RestartCount
-							}
-							return 0
-						}())
-				}
-			} else {
-				fmt.Printf("   📍 MostAllocated Scheduler: Not deployed\n")
-			}
+func (env *Environment) printPodEvents(pod corev1.Pod) {
+	fmt.Printf("\n📅 Recent Events for Pod %s:\n", pod.Name)
+	eventList := &corev1.EventList{}
+	if err := env.Client.List(env.Context, eventList,
+		client.InNamespace(pod.Namespace),
+		client.MatchingFields{"involvedObject.name": pod.Name}); err == nil {
+		for _, event := range eventList.Items {
+			fmt.Printf("   %s: %s - %s\n",
+				event.LastTimestamp.Format("15:04:05"),
+				event.Reason,
+				event.Message)
 		}
+	}
+}
 
-		// Show cluster resource usage
-		fmt.Printf("\n💾 Cluster Resource Information:\n")
-		nodeList := &corev1.NodeList{}
-		if err := env.Client.List(env.Context, nodeList); err == nil {
-			for _, node := range nodeList.Items {
-				fmt.Printf("   Node: %s\n", node.Name)
-				if node.Status.Capacity != nil {
-					fmt.Printf("      CPU Capacity: %s\n", node.Status.Capacity.Cpu().String())
-					fmt.Printf("      Memory Capacity: %s\n", node.Status.Capacity.Memory().String())
-				}
-				if node.Status.Allocatable != nil {
-					fmt.Printf("      CPU Allocatable: %s\n", node.Status.Allocatable.Cpu().String())
-					fmt.Printf("      Memory Allocatable: %s\n", node.Status.Allocatable.Memory().String())
-				}
-			}
-		}
+func (env *Environment) printSchedulerInfo() {
+	fmt.Printf("\n🔧 Scheduler Information:\n")
 
-		// Show all kube-system pod statuses for context
-		fmt.Printf("\n🏗️  All kube-system Pods:\n")
-		systemPods := &corev1.PodList{}
-		if err := env.Client.List(env.Context, systemPods, client.InNamespace("kube-system")); err == nil {
-			for _, pod := range systemPods.Items {
+	altSchedulerPods := &corev1.PodList{}
+	if err := env.Client.List(env.Context, altSchedulerPods,
+		client.InNamespace("kube-system"),
+		client.MatchingLabels{"app": "most-allocated-scheduler"}); err == nil {
+		if len(altSchedulerPods.Items) > 0 {
+			fmt.Printf("   📍 MostAllocated Scheduler Status: Running (%d pods)\n", len(altSchedulerPods.Items))
+			for _, pod := range altSchedulerPods.Items {
 				restartCount := int32(0)
 				if len(pod.Status.ContainerStatuses) > 0 {
 					restartCount = pod.Status.ContainerStatuses[0].RestartCount
 				}
-				fmt.Printf("   %s: %s (Restarts: %d)\n", pod.Name, pod.Status.Phase, restartCount)
+				fmt.Printf("      - Pod: %s (Status: %s, Restarts: %d)\n",
+					pod.Name, pod.Status.Phase, restartCount)
+			}
+		} else {
+			fmt.Printf("   📍 MostAllocated Scheduler: Not deployed\n")
+		}
+	}
+}
+
+func (env *Environment) printClusterResourceInfo() {
+	fmt.Printf("\n💾 Cluster Resource Information:\n")
+	nodeList := &corev1.NodeList{}
+	if err := env.Client.List(env.Context, nodeList); err == nil {
+		for _, node := range nodeList.Items {
+			fmt.Printf("   Node: %s\n", node.Name)
+			if node.Status.Capacity != nil {
+				fmt.Printf("      CPU Capacity: %s\n", node.Status.Capacity.Cpu().String())
+				fmt.Printf("      Memory Capacity: %s\n", node.Status.Capacity.Memory().String())
+			}
+			if node.Status.Allocatable != nil {
+				fmt.Printf("      CPU Allocatable: %s\n", node.Status.Allocatable.Cpu().String())
+				fmt.Printf("      Memory Allocatable: %s\n", node.Status.Allocatable.Memory().String())
 			}
 		}
+	}
+}
 
-		fmt.Printf("\n==========================================\n")
-
-		Fail(fmt.Sprintf("expected karpenter containers to not crash, but found crashes in: %v", crashedContainers))
+func (env *Environment) printSystemPodStatus() {
+	fmt.Printf("\n🏗️  All kube-system Pods:\n")
+	systemPods := &corev1.PodList{}
+	if err := env.Client.List(env.Context, systemPods, client.InNamespace("kube-system")); err == nil {
+		for _, pod := range systemPods.Items {
+			restartCount := int32(0)
+			if len(pod.Status.ContainerStatuses) > 0 {
+				restartCount = pod.Status.ContainerStatuses[0].RestartCount
+			}
+			fmt.Printf("   %s: %s (Restarts: %d)\n", pod.Name, pod.Status.Phase, restartCount)
+		}
 	}
 }
 
