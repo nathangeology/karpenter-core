@@ -95,7 +95,7 @@ jobs:
         kubectl describe nodes
     - name: run the ${{ inputs.test_name || inputs.suite }} test
       env:
-          SUITE: ${{ inputs.suite }}
+          TEST_SUITE: ${{ inputs.suite }}
           FOCUS: ${{ inputs.focus }}
           SCHEDULER_STRATEGY: ${{ inputs.scheduler_strategy }}
       shell: bash
