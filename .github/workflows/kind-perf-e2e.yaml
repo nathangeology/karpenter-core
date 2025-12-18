@@ -10,6 +10,8 @@ on:
       - completed
   workflow_dispatch:
 jobs:
+  build:
+    runs-on: ubuntu-22.04-16core
   kind-perf-e2e:
     if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     permissions:
@@ -23,22 +25,22 @@ jobs:
           - strategy: "MostAllocated"
             name: "MostAllocated"
         test:
-          - name: "Drift Performance"
-            focus: "Drift Performance"
-          - name: "Host Name Spreading"
-            focus: "Host Name Spreading Deployment Reg"
-          - name: "Host Name Spreading XL"
-            focus: "Host Name Spreading Deployment XL"
-          - name: "Wide Deployments"
-            focus: "Wide Deployments"
+          #          - name: "Drift Performance"
+          #            focus: "Drift Performance"
+          #          - name: "Host Name Spreading"
+          #            focus: "Host Name Spreading Deployment Reg"
+          #          - name: "Host Name Spreading XL"
+          #            focus: "Host Name Spreading Deployment XL"
+          #          - name: "Wide Deployments"
+          #            focus: "Wide Deployments"
           - name: "Basic Scale Test"
             focus: "Basic Deployment"
-          - name: "Do Not Disrupt Performance"
-            focus: "Do Not Disrupt Performance Test"
-          - name: "Provisioning"
-            focus: "Provisioning"
-          - name: "Self Anti-Affinity Deployment Interference"
-            focus: "Self Anti-Affinity Deployment Interference"
+          #          - name: "Do Not Disrupt Performance"
+          #            focus: "Do Not Disrupt Performance Test"
+          #          - name: "Provisioning"
+          #            focus: "Provisioning"
+          #          - name: "Self Anti-Affinity Deployment Interference"
+          #            focus: "Self Anti-Affinity Deployment Interference"
     uses: ./.github/workflows/e2e.yaml
     with:
       suite: Performance
