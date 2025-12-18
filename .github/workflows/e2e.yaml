@@ -55,6 +55,29 @@ jobs:
                 apiServer:
                   extraArgs:
                     authorization-mode: AlwaysAllow
+                    # Increase API server connection limits and timeouts
+                    max-requests-inflight: "800"
+                    max-mutating-requests-inflight: "400"
+                    request-timeout: "300s"
+                    # Increase watch cache sizes for better performance
+                    watch-cache-sizes: "nodes#100,pods#1000"
+                    # Add more generous timeouts
+                    default-watch-cache-size: "100"
+                etcd:
+                  local:
+                    extraArgs:
+                      # Increase etcd quota for larger datasets
+                      quota-backend-bytes: "8589934592"
+                      # Optimize etcd performance
+                      heartbeat-interval: "500"
+                      election-timeout: "2500"
+              - |
+                kind: KubeletConfiguration
+                # Increase kubelet timeouts to handle API server instability
+                nodeStatusUpdateFrequency: "20s"
+                nodeStatusReportFrequency: "5m"
+                # Reduce API server load from kubelet
+                serializeImagePulls: false
         EOF
     - name: Kind Cluster
       uses: helm/kind-action@92086f6be054225fa813e0a4b13787fc9088faab # v1.13.0
@@ -65,6 +88,19 @@ jobs:
       run: |
         kubectl config current-context
         kubectl get nodes
+        
+        # Check API server health before proceeding
+        echo "🔍 Checking API server health..."
+        kubectl get --raw /healthz
+        kubectl get --raw /readyz
+        
+        # Show API server pod status
+        kubectl get pods -n kube-system -l component=kube-apiserver -o wide
+        
+        # Add some buffer time for API server to stabilize
+        echo "⏳ Allowing API server to stabilize..."
+        sleep 10
+        
         kubectl taint nodes chart-testing-control-plane CriticalAddonsOnly:NoSchedule
     - name: install prometheus 
       uses: ./.github/actions/install-prometheus
