@@ -1129,6 +1129,7 @@ func (env *Environment) printKarpenterPodDetails() {
 			}
 
 			env.printPodEvents(pod)
+			env.printContainerLogs(pod)
 		}
 	}
 }
@@ -1213,6 +1214,45 @@ func (env *Environment) printSystemPodStatus() {
 				restartCount = pod.Status.ContainerStatuses[0].RestartCount
 			}
 			fmt.Printf("   %s: %s (Restarts: %d)\n", pod.Name, pod.Status.Phase, restartCount)
+		}
+	}
+}
+
+func (env *Environment) printContainerLogs(pod corev1.Pod) {
+	fmt.Printf("\n📜 Container Logs for Pod %s:\n", pod.Name)
+
+	// Show current logs
+	if req := env.KubeClient.CoreV1().Pods(pod.Namespace).GetLogs(pod.Name, &corev1.PodLogOptions{
+		Container:  "controller",
+		TailLines:  lo.ToPtr(int64(20)),
+		Timestamps: true,
+	}); req != nil {
+		if logs, err := req.DoRaw(env.Context); err == nil {
+			fmt.Printf("   [CURRENT LOGS - Last 20 lines]\n")
+			for _, line := range strings.Split(string(logs), "\n") {
+				if strings.TrimSpace(line) != "" {
+					fmt.Printf("   %s\n", line)
+				}
+			}
+		}
+	}
+
+	// Show previous container logs if container has restarted
+	if len(pod.Status.ContainerStatuses) > 0 && pod.Status.ContainerStatuses[0].RestartCount > 0 {
+		if req := env.KubeClient.CoreV1().Pods(pod.Namespace).GetLogs(pod.Name, &corev1.PodLogOptions{
+			Container:  "controller",
+			Previous:   true,
+			TailLines:  lo.ToPtr(int64(20)),
+			Timestamps: true,
+		}); req != nil {
+			if logs, err := req.DoRaw(env.Context); err == nil {
+				fmt.Printf("   [PREVIOUS LOGS - Last 20 lines before crash]\n")
+				for _, line := range strings.Split(string(logs), "\n") {
+					if strings.TrimSpace(line) != "" {
+						fmt.Printf("   %s\n", line)
+					}
+				}
+			}
 		}
 	}
 }
