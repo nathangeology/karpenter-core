@@ -25,7 +25,7 @@ jobs:
   e2e:
     permissions:
       issues: write
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest-4-cores
     name: ${{ inputs.test_name || format('suite-{0}', inputs.suite) }}
     steps:
     - name: Debug workflow_run trigger
