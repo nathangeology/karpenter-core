@@ -65,7 +65,7 @@ var _ = Describe("Performance", Label(debug.NoWatch), func() {
 			largeDeployment.Spec.Replicas = lo.ToPtr(int32(350))
 			env.ExpectUpdated(smallDeployment, largeDeployment)
 
-			consolidationReport, err := ReportConsolidationWithOutput(env, "Consolidation Test", 1000, 700, initialNodes, 20*time.Minute, "consolidation")
+			consolidationReport, err := ReportConsolidationWithOutput(env, "Consolidation Test", 1000, 700, initialNodes, 20*time.Minute, "consolidation", sizeClassLockThreshold)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(consolidationReport.TestType).To(Equal("consolidation"), "Should be detected as consolidation test")
 			Expect(consolidationReport.TotalPods).To(Equal(700), "Should have 700 total pods after scale-in")

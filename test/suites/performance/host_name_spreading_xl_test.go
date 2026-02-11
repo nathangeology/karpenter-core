@@ -74,7 +74,7 @@ var _ = Describe("Performance", Label(debug.NoWatch), func() {
 			env.ExpectUpdated(smallDeployment, largeDeployment)
 
 			By("Monitoring XL consolidation performance")
-			consolidationReport, err := ReportConsolidationWithOutput(env, "XL Hostname Spread Consolidation Test", 2000, 1400, initialNodes, 25*time.Minute, "hostname_spread_xl_consolidation")
+			consolidationReport, err := ReportConsolidationWithOutput(env, "XL Hostname Spread Consolidation Test", 2000, 1400, initialNodes, 25*time.Minute, "hostname_spread_xl_consolidation", sizeClassLockThreshold)
 			Expect(err).ToNot(HaveOccurred(), "XL consolidation should execute successfully")
 
 			By("Validating XL consolidation performance")

@@ -149,9 +149,10 @@ func ReportScaleOut(env *common.Environment, testName string, expectedPods int, 
 //   - finalPods: Expected final number of pods after consolidation
 //   - initialNodes: Initial number of nodes before consolidation
 //   - timeout: Maximum time to wait for consolidation completion
+//   - sizeClassLockThreshold: The size class lock threshold setting (0 = disabled)
 //
 // Returns a PerformanceReport with consolidation metrics and timing information.
-func ReportConsolidation(env *common.Environment, testName string, initialPods, finalPods, initialNodes int, timeout time.Duration) (*PerformanceReport, error) {
+func ReportConsolidation(env *common.Environment, testName string, initialPods, finalPods, initialNodes int, timeout time.Duration, sizeClassLockThreshold int) (*PerformanceReport, error) {
 	startTime := time.Now()
 
 	// Capture baseline pod disruption count at start of test
@@ -196,6 +197,7 @@ func ReportConsolidation(env *common.Environment, testName string, initialPods, 
 		ResourceEfficiencyScore: resourceEfficiencyScore,
 		PodsPerNode:             podsPerNode,
 		Rounds:                  len(consolidationRounds),
+		SizeClassLockThreshold:  sizeClassLockThreshold,
 		Timestamp:               time.Now(),
 	}, nil
 }
@@ -381,8 +383,8 @@ func ReportScaleOutWithOutput(env *common.Environment, testName string, expected
 }
 
 // ReportConsolidationWithOutput monitors consolidation and automatically outputs the report
-func ReportConsolidationWithOutput(env *common.Environment, testName string, initialPods, finalPods, initialNodes int, timeout time.Duration, filePrefix string) (*PerformanceReport, error) {
-	report, err := ReportConsolidation(env, testName, initialPods, finalPods, initialNodes, timeout)
+func ReportConsolidationWithOutput(env *common.Environment, testName string, initialPods, finalPods, initialNodes int, timeout time.Duration, filePrefix string, sizeClassLockThreshold int) (*PerformanceReport, error) {
+	report, err := ReportConsolidation(env, testName, initialPods, finalPods, initialNodes, timeout, sizeClassLockThreshold)
 	if err != nil {
 		return nil, err
 	}
