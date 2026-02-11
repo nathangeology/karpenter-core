@@ -166,7 +166,7 @@ var _ = Describe("Performance", Label(debug.NoWatch), func() {
 			}
 
 			By("Monitoring wide scale-out performance (30 deployments, 1000 pods)")
-			scaleOutReport, err := ReportScaleOutWithOutput(env, "Wide Deployments Performance Test", 1000, 20*time.Minute, "wide_deployments_scale_out")
+			scaleOutReport, err := ReportScaleOutWithOutput(env, "Wide Deployments Performance Test", 1000, 20*time.Minute, "wide_deployments_scale_out", sizeClassLockThreshold)
 			Expect(err).ToNot(HaveOccurred(), "Wide scale-out should execute successfully")
 
 			By("Validating wide scale-out performance")

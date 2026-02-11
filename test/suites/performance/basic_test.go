@@ -42,7 +42,7 @@ var _ = Describe("Performance", Label(debug.NoWatch), func() {
 
 			env.ExpectCreated(nodePool, nodeClass, smallDeployment, largeDeployment)
 
-			scaleOutReport, err := ReportScaleOutWithOutput(env, "Scale Out Test", 1000, 15*time.Minute, "scale_out")
+			scaleOutReport, err := ReportScaleOutWithOutput(env, "Scale Out Test", 1000, 15*time.Minute, "scale_out", sizeClassLockThreshold)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(scaleOutReport.TestType).To(Equal("scale-out"), "Should be detected as scale-out test")
 			Expect(scaleOutReport.TotalPods).To(Equal(1000), "Should have 1000 total pods")

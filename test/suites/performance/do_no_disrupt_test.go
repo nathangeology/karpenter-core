@@ -53,7 +53,7 @@ var _ = Describe("Performance", Label(debug.NoWatch), func() {
 			env.ExpectCreated(smallDeployment, largeDeployment, protectedDeployment)
 
 			By("Monitoring scale-out performance with do-not-disrupt protection (1100 pods)")
-			scaleOutReport, err := ReportScaleOutWithOutput(env, "Do Not Disrupt Performance Test", 1100, 15*time.Minute, "do_not_disrupt_scale_out")
+			scaleOutReport, err := ReportScaleOutWithOutput(env, "Do Not Disrupt Performance Test", 1100, 15*time.Minute, "do_not_disrupt_scale_out", sizeClassLockThreshold)
 			Expect(err).ToNot(HaveOccurred(), "Scale-out should execute successfully")
 
 			By("Validating scale-out performance with do-not-disrupt protection")

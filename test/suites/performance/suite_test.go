@@ -35,6 +35,10 @@ var nodePool *v1.NodePool
 var nodeClass *unstructured.Unstructured
 var env *common.Environment
 
+// sizeClassLockThreshold controls the pod count threshold for size class locking
+// Set to 0 to disable, or set to a positive value (e.g., 5, 10, 20) to enable
+var sizeClassLockThreshold int = 5
+
 func TestIntegration(t *testing.T) {
 	RegisterFailHandler(Fail)
 	BeforeSuite(func() {
@@ -62,6 +66,14 @@ var _ = BeforeEach(func() {
 	nodePool.Spec.Disruption.ConsolidationPolicy = v1.ConsolidationPolicyWhenEmptyOrUnderutilized
 	nodePool.Spec.Disruption.ConsolidateAfter = v1.MustParseNillableDuration("30s")
 	nodePool.Spec.Disruption.Budgets = []v1.Budget{{Nodes: "100%"}}
+
+	// Configure size class locking if threshold is set
+	if sizeClassLockThreshold > 0 {
+		if nodePool.Annotations == nil {
+			nodePool.Annotations = make(map[string]string)
+		}
+		nodePool.Annotations[v1.NodeClaimSizeClassLockThresholdAnnotationKey] = fmt.Sprintf("%d", sizeClassLockThreshold)
+	}
 })
 
 var _ = AfterEach(func() {

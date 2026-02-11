@@ -48,7 +48,7 @@ var _ = Describe("Performance", Label(debug.NoWatch), func() {
 			env.ExpectCreated(smallDeployment)
 
 			By("Monitoring scale-out performance with self anti-affinity (500 pods)")
-			scaleOutReport, err := ReportScaleOutWithOutput(env, "Self Anti-Affinity Performance Test", 500, 15*time.Minute, "self_antiaffinity_scale_out_small")
+			scaleOutReport, err := ReportScaleOutWithOutput(env, "Self Anti-Affinity Performance Test", 500, 15*time.Minute, "self_antiaffinity_scale_out_small", sizeClassLockThreshold)
 			Expect(err).ToNot(HaveOccurred(), "Scale-out should execute successfully")
 
 			By("Validating scale-out performance with self anti-affinity")
@@ -73,7 +73,7 @@ var _ = Describe("Performance", Label(debug.NoWatch), func() {
 			env.ExpectCreated(largeDeployment)
 
 			By("Monitoring scale out performance")
-			interferenceReport, err := ReportScaleOutWithOutput(env, "Self Anti-Affinity scale out Test", 750, 5*time.Minute, "self_antiaffinity_interference")
+			interferenceReport, err := ReportScaleOutWithOutput(env, "Self Anti-Affinity scale out Test", 750, 5*time.Minute, "self_antiaffinity_interference", sizeClassLockThreshold)
 			Expect(err).ToNot(HaveOccurred(), "Scale out interference test should execute successfully")
 
 			By("Validating scale out performance")

@@ -62,6 +62,11 @@ func OutputPerformanceReport(report *PerformanceReport, filePrefix string) {
 	GinkgoWriter.Printf("Efficiency Score: %.1f%%\n", report.ResourceEfficiencyScore)
 	GinkgoWriter.Printf("Pods per Node: %.1f\n", report.PodsPerNode)
 	GinkgoWriter.Printf("Rounds: %d\n", report.Rounds)
+	if report.SizeClassLockThreshold > 0 {
+		GinkgoWriter.Printf("Size Class Lock Threshold: %d\n", report.SizeClassLockThreshold)
+	} else {
+		GinkgoWriter.Printf("Size Class Lock Threshold: disabled\n")
+	}
 
 	// File output
 	if outputDir := os.Getenv("OUTPUT_DIR"); outputDir != "" {
@@ -84,9 +89,10 @@ func OutputPerformanceReport(report *PerformanceReport, filePrefix string) {
 //   - testName: Name of the test for reporting
 //   - expectedPods: Expected number of healthy pods
 //   - timeout: Maximum time to wait for scale-out completion
+//   - sizeClassLockThreshold: The size class lock threshold setting (0 = disabled)
 //
 // Returns a PerformanceReport with scale-out metrics and timing information.
-func ReportScaleOut(env *common.Environment, testName string, expectedPods int, timeout time.Duration) (*PerformanceReport, error) {
+func ReportScaleOut(env *common.Environment, testName string, expectedPods int, timeout time.Duration, sizeClassLockThreshold int) (*PerformanceReport, error) {
 	startTime := time.Now()
 
 	// Capture baseline pod disruption count at start of test
@@ -128,6 +134,7 @@ func ReportScaleOut(env *common.Environment, testName string, expectedPods int, 
 		ResourceEfficiencyScore: resourceEfficiencyScore,
 		PodsPerNode:             podsPerNode,
 		Rounds:                  1, // Scale-out is always 1 round
+		SizeClassLockThreshold:  sizeClassLockThreshold,
 		Timestamp:               time.Now(),
 	}, nil
 }
@@ -363,8 +370,8 @@ func monitorConsolidationRounds(env *common.Environment, timeout time.Duration) 
 // Convenience functions for common monitoring patterns
 
 // ReportScaleOutWithOutput monitors scale-out and automatically outputs the report
-func ReportScaleOutWithOutput(env *common.Environment, testName string, expectedPods int, timeout time.Duration, filePrefix string) (*PerformanceReport, error) {
-	report, err := ReportScaleOut(env, testName, expectedPods, timeout)
+func ReportScaleOutWithOutput(env *common.Environment, testName string, expectedPods int, timeout time.Duration, filePrefix string, sizeClassLockThreshold int) (*PerformanceReport, error) {
+	report, err := ReportScaleOut(env, testName, expectedPods, timeout, sizeClassLockThreshold)
 	if err != nil {
 		return nil, err
 	}

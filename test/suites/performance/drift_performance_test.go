@@ -50,7 +50,7 @@ var _ = Describe("Performance", Label(debug.NoWatch), func() {
 			env.ExpectCreated(hostnameSpreadDeployment, standardDeployment)
 
 			By("Monitoring initial deployment performance (600 pods)")
-			initialReport, err := ReportScaleOutWithOutput(env, "Drift Test Initial Deployment", 600, 20*time.Minute, "drift_initial_deployment")
+			initialReport, err := ReportScaleOutWithOutput(env, "Drift Test Initial Deployment", 600, 20*time.Minute, "drift_initial_deployment", sizeClassLockThreshold)
 			Expect(err).ToNot(HaveOccurred(), "Initial deployment should execute successfully")
 
 			By("Validating initial deployment")

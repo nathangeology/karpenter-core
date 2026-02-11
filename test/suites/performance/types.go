@@ -45,5 +45,6 @@ type PerformanceReport struct {
 	ResourceEfficiencyScore float64       `json:"resource_efficiency_score"`
 	PodsPerNode             float64       `json:"pods_per_node"`
 	Rounds                  int           `json:"rounds"`
+	SizeClassLockThreshold  int           `json:"size_class_lock_threshold"`
 	Timestamp               time.Time     `json:"timestamp"`
 }

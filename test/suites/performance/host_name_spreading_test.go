@@ -49,7 +49,7 @@ var _ = Describe("Performance", Label(debug.NoWatch), func() {
 			env.ExpectCreated(smallDeployment, largeDeployment)
 
 			By("Monitoring scale-out performance with hostname spreading (1000 pods)")
-			scaleOutReport, err := ReportScaleOutWithOutput(env, "Host Name Spreading Performance Test", 1000, 15*time.Minute, "hostname_spread_scale_out")
+			scaleOutReport, err := ReportScaleOutWithOutput(env, "Host Name Spreading Performance Test", 1000, 15*time.Minute, "hostname_spread_scale_out", sizeClassLockThreshold)
 			Expect(err).ToNot(HaveOccurred(), "Scale-out should execute successfully")
 
 			By("Validating scale-out performance with hostname spreading")
