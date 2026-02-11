@@ -37,7 +37,7 @@ var env *common.Environment
 
 // sizeClassLockThreshold controls the pod count threshold for size class locking
 // Set to 0 to disable, or set to a positive value (e.g., 5, 10, 20) to enable
-var sizeClassLockThreshold int = 2
+var sizeClassLockThreshold int = 0
 
 func TestIntegration(t *testing.T) {
 	RegisterFailHandler(Fail)
@@ -59,7 +59,7 @@ var _ = BeforeEach(func() {
 		test.ReplaceRequirements(nodePool, v1.NodeSelectorRequirementWithMinValues{
 			Key:      v1alpha1.InstanceSizeLabelKey,
 			Operator: corev1.NodeSelectorOpLt,
-			Values:   []string{"32"},
+			Values:   []string{"96"},
 		})
 	}
 	nodePool.Spec.Limits = v1.Limits{}
