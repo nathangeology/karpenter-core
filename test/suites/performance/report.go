@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/samber/lo"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 
@@ -31,6 +32,20 @@ import (
 	"sigs.k8s.io/karpenter/pkg/test"
 	"sigs.k8s.io/karpenter/test/pkg/environment/common"
 )
+
+// getPodsDisruptedCount fetches the total pod disruption count from Prometheus metrics
+func getPodsDisruptedCount(env *common.Environment) int {
+	metrics := env.ExpectPodMetrics()
+	disruptionMetrics := lo.Filter(metrics, func(m common.PrometheusMetric, _ int) bool {
+		return m.Name == "karpenter_voluntary_disruption_pods_disrupted_total"
+	})
+
+	totalDisrupted := 0
+	for _, metric := range disruptionMetrics {
+		totalDisrupted += int(metric.Value)
+	}
+	return totalDisrupted
+}
 
 // OutputPerformanceReport outputs a performance report to console and file
 func OutputPerformanceReport(report *PerformanceReport, filePrefix string) {
@@ -41,6 +56,7 @@ func OutputPerformanceReport(report *PerformanceReport, filePrefix string) {
 	GinkgoWriter.Printf("Total Time: %v\n", report.TotalTime)
 	GinkgoWriter.Printf("Total Pods: %d (Net Change: %+d)\n", report.TotalPods, report.PodsNetChange)
 	GinkgoWriter.Printf("Total Nodes: %d (Net Change: %+d)\n", report.TotalNodes, report.NodesNetChange)
+	GinkgoWriter.Printf("Pods Disrupted: %d\n", report.PodsDisrupted)
 	GinkgoWriter.Printf("CPU Utilization: %.2f%%\n", report.TotalReservedCPUUtil*100)
 	GinkgoWriter.Printf("Memory Utilization: %.2f%%\n", report.TotalReservedMemoryUtil*100)
 	GinkgoWriter.Printf("Efficiency Score: %.1f%%\n", report.ResourceEfficiencyScore)
@@ -73,6 +89,9 @@ func OutputPerformanceReport(report *PerformanceReport, filePrefix string) {
 func ReportScaleOut(env *common.Environment, testName string, expectedPods int, timeout time.Duration) (*PerformanceReport, error) {
 	startTime := time.Now()
 
+	// Capture baseline pod disruption count at start of test
+	baselinePodsDisrupted := getPodsDisruptedCount(env)
+
 	// Wait for all pods to be healthy
 	allPodsSelector := labels.SelectorFromSet(map[string]string{test.DiscoveryLabel: "unspecified"})
 	if expectedPods > 0 {
@@ -85,6 +104,8 @@ func ReportScaleOut(env *common.Environment, testName string, expectedPods int, 
 	nodeCount := env.Monitor.CreatedNodeCount()
 	avgCPUUtil := env.Monitor.AvgUtilization(corev1.ResourceCPU)
 	avgMemUtil := env.Monitor.AvgUtilization(corev1.ResourceMemory)
+	// Calculate delta: only count disruptions during this test
+	podsDisrupted := getPodsDisruptedCount(env) - baselinePodsDisrupted
 
 	// Calculate derived metrics
 	resourceEfficiencyScore := (avgCPUUtil*90 + avgMemUtil*10)
@@ -101,6 +122,7 @@ func ReportScaleOut(env *common.Environment, testName string, expectedPods int, 
 		TotalTime:               totalTime,
 		PodsNetChange:           expectedPods,
 		NodesNetChange:          nodeCount,
+		PodsDisrupted:           podsDisrupted,
 		TotalReservedCPUUtil:    avgCPUUtil,
 		TotalReservedMemoryUtil: avgMemUtil,
 		ResourceEfficiencyScore: resourceEfficiencyScore,
@@ -125,6 +147,9 @@ func ReportScaleOut(env *common.Environment, testName string, expectedPods int, 
 func ReportConsolidation(env *common.Environment, testName string, initialPods, finalPods, initialNodes int, timeout time.Duration) (*PerformanceReport, error) {
 	startTime := time.Now()
 
+	// Capture baseline pod disruption count at start of test
+	baselinePodsDisrupted := getPodsDisruptedCount(env)
+
 	// Wait for pods to scale down first
 	allPodsSelector := labels.SelectorFromSet(map[string]string{test.DiscoveryLabel: "unspecified"})
 	if finalPods > 0 {
@@ -140,6 +165,8 @@ func ReportConsolidation(env *common.Environment, testName string, initialPods, 
 	finalNodes := env.Monitor.CreatedNodeCount()
 	avgCPUUtil := env.Monitor.AvgUtilization(corev1.ResourceCPU)
 	avgMemUtil := env.Monitor.AvgUtilization(corev1.ResourceMemory)
+	// Calculate delta: only count disruptions during this test
+	podsDisrupted := getPodsDisruptedCount(env) - baselinePodsDisrupted
 
 	// Calculate derived metrics
 	resourceEfficiencyScore := (avgCPUUtil*90 + avgMemUtil*10)
@@ -156,6 +183,7 @@ func ReportConsolidation(env *common.Environment, testName string, initialPods, 
 		TotalTime:               totalTime,
 		PodsNetChange:           finalPods - initialPods,
 		NodesNetChange:          finalNodes - initialNodes,
+		PodsDisrupted:           podsDisrupted,
 		TotalReservedCPUUtil:    avgCPUUtil,
 		TotalReservedMemoryUtil: avgMemUtil,
 		ResourceEfficiencyScore: resourceEfficiencyScore,
@@ -179,6 +207,9 @@ func ReportConsolidation(env *common.Environment, testName string, initialPods, 
 func ReportDrift(env *common.Environment, testName string, expectedPods int, timeout time.Duration) (*PerformanceReport, error) {
 	startTime := time.Now()
 	initialNodeCount := env.Monitor.CreatedNodeCount()
+
+	// Capture baseline pod disruption count at start of test
+	baselinePodsDisrupted := getPodsDisruptedCount(env)
 
 	// Track node replacement during drift
 	driftRounds := 0
@@ -233,6 +264,8 @@ func ReportDrift(env *common.Environment, testName string, expectedPods int, tim
 	// Collect metrics
 	avgCPUUtil := env.Monitor.AvgUtilization(corev1.ResourceCPU)
 	avgMemUtil := env.Monitor.AvgUtilization(corev1.ResourceMemory)
+	// Calculate delta: only count disruptions during this test
+	podsDisrupted := getPodsDisruptedCount(env) - baselinePodsDisrupted
 
 	// Calculate derived metrics
 	resourceEfficiencyScore := (avgCPUUtil*90 + avgMemUtil*10)
@@ -254,6 +287,7 @@ func ReportDrift(env *common.Environment, testName string, expectedPods int, tim
 		TotalTime:               totalTime,
 		PodsNetChange:           0,                                 // Pods don't change in drift
 		NodesNetChange:          finalNodeCount - initialNodeCount, // Net change in nodes (should be ~0 for drift)
+		PodsDisrupted:           podsDisrupted,
 		TotalReservedCPUUtil:    avgCPUUtil,
 		TotalReservedMemoryUtil: avgMemUtil,
 		ResourceEfficiencyScore: resourceEfficiencyScore,
