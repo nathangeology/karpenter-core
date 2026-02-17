@@ -23,6 +23,7 @@ import (
 	"sort"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
 	"sigs.k8s.io/karpenter/pkg/controllers/state"
 )
 
@@ -101,7 +102,7 @@ func computeNodeHash(ctx context.Context, kubeClient client.Client, nodes []*sta
 		if err != nil {
 			return "", err
 		}
-		h.Write([]byte(fmt.Sprintf("%d", len(pods))))
+		fmt.Fprintf(h, "%d", len(pods))
 	}
 
 	return fmt.Sprintf("%x", h.Sum(nil)), nil
