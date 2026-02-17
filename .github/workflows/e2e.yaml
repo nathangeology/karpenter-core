@@ -19,7 +19,7 @@ on:
       pod_deletion_cost_enabled:
         type: string
         required: false
-        default: "false"
+        default: "true"
         description: "Enable pod deletion cost management feature"
       pod_deletion_cost_ranking_strategy:
         type: string

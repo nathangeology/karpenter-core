@@ -60,6 +60,44 @@ See also our [contributor guide](CONTRIBUTING.md) and the Kubernetes [community 
 
 Participation in the Kubernetes community is governed by the [Kubernetes Code of Conduct](code-of-conduct.md).
 
+## Testing Pod Deletion Cost Feature
+
+The Pod Deletion Cost Management feature allows Karpenter to intelligently rank pods during disruption operations, optimizing which pods are evicted first based on configurable strategies.
+
+### In CI/CD
+
+Performance tests automatically run with the pod deletion cost feature enabled by default, using the `UnallocatedVCPUPerPodCost` ranking strategy. This ensures continuous validation of the feature's performance impact.
+
+Regular end-to-end tests run with the feature disabled by default to maintain baseline functionality testing.
+
+### Local Testing
+
+To test the pod deletion cost feature locally, set environment variables before deploying Karpenter:
+
+```bash
+# Enable the feature with default Random strategy
+POD_DELETION_COST_ENABLED=true make apply-with-kind
+
+# Enable with a specific ranking strategy
+POD_DELETION_COST_ENABLED=true \
+POD_DELETION_COST_RANKING_STRATEGY=UnallocatedVCPUPerPodCost \
+make apply-with-kind
+
+# Disable change detection optimization
+POD_DELETION_COST_ENABLED=true \
+POD_DELETION_COST_RANKING_STRATEGY=UnallocatedVCPUPerPodCost \
+POD_DELETION_COST_CHANGE_DETECTION=false \
+make apply-with-kind
+```
+
+Available ranking strategies:
+- `Random` - Random pod selection (default)
+- `LargestToSmallest` - Prioritize evicting larger pods first
+- `SmallestToLargest` - Prioritize evicting smaller pods first
+- `UnallocatedVCPUPerPodCost` - Optimize based on unallocated vCPU per pod cost
+
+For detailed CI/CD configuration and troubleshooting, see the [CI Setup Guide](.github/POD_DELETION_COST_CI_SETUP.md).
+
 ## Talks
 - 04/03/2025 [Automating Kubernetes Cluster Updates: Achieving Zero Downtime Effortlessly @ KubeCon](https://youtu.be/rAIcQvKBuZA?si=UZhNqwjPCIybHCvW)
 - 09/08/2022 [Workload Consolidation with Karpenter](https://youtu.be/BnksdJ3oOEs)

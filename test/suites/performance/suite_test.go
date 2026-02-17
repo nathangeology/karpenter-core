@@ -38,7 +38,7 @@ var env *common.Environment
 
 // sizeClassLockThreshold controls the pod count threshold for size class locking
 // Set to 0 to disable, or set to a positive value (e.g., 5, 10, 20) to enable
-var sizeClassLockThreshold int = 5
+var sizeClassLockThreshold int = 0
 
 // Pod deletion cost configuration - reads from environment or uses defaults
 var (
