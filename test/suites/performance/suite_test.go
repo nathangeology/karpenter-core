@@ -39,15 +39,27 @@ var env *common.Environment
 // Set to 0 to disable, or set to a positive value (e.g., 5, 10, 20) to enable
 var sizeClassLockThreshold int = 5
 
-// podDeletionCostEnabled controls whether pod deletion cost management is enabled
-// Set to true to enable the feature, false to disable
+// podDeletionCostEnabled tracks whether pod deletion cost management is enabled in the Karpenter deployment being tested
+// NOTE: This variable is for reporting purposes only. To actually enable the feature, set the feature gate in your Karpenter deployment:
+//
+//	FEATURE_GATES="PodDeletionCostManagement=true"
+//
+// Set this variable to match your deployment configuration for accurate reporting
 var podDeletionCostEnabled bool = true
 
-// podDeletionCostRankingStrategy controls the ranking strategy for pod deletion cost
+// podDeletionCostRankingStrategy tracks the ranking strategy for pod deletion cost
+// NOTE: This variable is for reporting purposes only. To configure the strategy, set in your Karpenter deployment:
+//
+//	POD_DELETION_COST_RANKING_STRATEGY="UnallocatedVCPUPerPodCost"
+//
 // Valid values: "Random", "LargestToSmallest", "SmallestToLargest", "UnallocatedVCPUPerPodCost"
-var podDeletionCostRankingStrategy string = "Random"
+var podDeletionCostRankingStrategy string = "UnallocatedVCPUPerPodCost"
 
-// podDeletionCostChangeDetection controls whether change detection optimization is enabled
+// podDeletionCostChangeDetection tracks whether change detection optimization is enabled
+// NOTE: This variable is for reporting purposes only. To configure change detection, set in your Karpenter deployment:
+//
+//	POD_DELETION_COST_CHANGE_DETECTION="true"
+//
 // Set to true to enable change detection (skip ranking when no changes), false to always rank
 var podDeletionCostChangeDetection bool = true
 

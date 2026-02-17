@@ -16,6 +16,21 @@ on:
         type: string
         required: false
         description: "Human-readable test name for job identification"
+      pod_deletion_cost_enabled:
+        type: string
+        required: false
+        default: "false"
+        description: "Enable pod deletion cost management feature"
+      pod_deletion_cost_ranking_strategy:
+        type: string
+        required: false
+        default: "Random"
+        description: "Ranking strategy: Random, LargestToSmallest, SmallestToLargest, UnallocatedVCPUPerPodCost"
+      pod_deletion_cost_change_detection:
+        type: string
+        required: false
+        default: "true"
+        description: "Enable change detection optimization"
 jobs:
   e2e:
     permissions:
@@ -54,6 +69,10 @@ jobs:
         go install github.com/google/ko@latest      
     - name: install kwok and controller
       shell: bash
+      env:
+        POD_DELETION_COST_ENABLED: ${{ inputs.pod_deletion_cost_enabled || 'false' }}
+        POD_DELETION_COST_RANKING_STRATEGY: ${{ inputs.pod_deletion_cost_ranking_strategy || 'Random' }}
+        POD_DELETION_COST_CHANGE_DETECTION: ${{ inputs.pod_deletion_cost_change_detection || 'true' }}
       run: |
         make install-kwok
         export KWOK_REPO=kind.local

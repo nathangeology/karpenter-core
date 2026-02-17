@@ -42,7 +42,13 @@ apply-with-kind: verify build-with-kind ## Deploy the kwok controller from the c
 		--set controller.image.tag=$(IMG_TAG) \
 		--set serviceMonitor.enabled=true \
 		--set-string controller.env[0].name=ENABLE_PROFILING \
-		--set-string controller.env[0].value=true
+		--set-string controller.env[0].value=true \
+		--set-string controller.env[1].name=FEATURE_GATES \
+		--set-string controller.env[1].value="PodDeletionCostManagement=$${POD_DELETION_COST_ENABLED:-false}" \
+		--set-string controller.env[2].name=POD_DELETION_COST_RANKING_STRATEGY \
+		--set-string controller.env[2].value="$${POD_DELETION_COST_RANKING_STRATEGY:-Random}" \
+		--set-string controller.env[3].name=POD_DELETION_COST_CHANGE_DETECTION \
+		--set-string controller.env[3].value="$${POD_DELETION_COST_CHANGE_DETECTION:-true}"
 
 JUNIT_REPORT := $(if $(ARTIFACT_DIR), --ginkgo.junit-report="$(ARTIFACT_DIR)/junit_report.xml")
 e2etests: ## Run the e2e suite against your local cluster
@@ -69,7 +75,13 @@ apply: verify build ## Deploy the kwok controller from the current state of your
 		--set controller.image.digest=$(IMG_DIGEST) \
 		--set settings.preferencePolicy=Ignore \
 		--set-string controller.env[0].name=ENABLE_PROFILING \
-		--set-string controller.env[0].value=true
+		--set-string controller.env[0].value=true \
+		--set-string controller.env[1].name=FEATURE_GATES \
+		--set-string controller.env[1].value="PodDeletionCostManagement=$${POD_DELETION_COST_ENABLED:-false}" \
+		--set-string controller.env[2].name=POD_DELETION_COST_RANKING_STRATEGY \
+		--set-string controller.env[2].value="$${POD_DELETION_COST_RANKING_STRATEGY:-Random}" \
+		--set-string controller.env[3].name=POD_DELETION_COST_CHANGE_DETECTION \
+		--set-string controller.env[3].value="$${POD_DELETION_COST_CHANGE_DETECTION:-true}"
 
 delete: ## Delete the controller from your ~/.kube/config cluster
 	helm uninstall karpenter --namespace $(KARPENTER_NAMESPACE)

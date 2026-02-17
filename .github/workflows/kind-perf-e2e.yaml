@@ -36,3 +36,6 @@ jobs:
       suite: Performance
       focus: ${{ matrix.test.focus }}
       test_name: ${{ matrix.test.name }}
+      pod_deletion_cost_enabled: "true"
+      pod_deletion_cost_ranking_strategy: "UnallocatedVCPUPerPodCost"
+      pod_deletion_cost_change_detection: "true"
