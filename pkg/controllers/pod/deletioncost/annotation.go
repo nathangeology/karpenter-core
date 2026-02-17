@@ -19,39 +19,23 @@ package deletioncost
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/klog/v2"
+	"k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"sigs.k8s.io/karpenter/pkg/events"
-	"sigs.k8s.io/karpenter/pkg/metrics"
 )
 
-const (
-	// PodDeletionCostAnnotation is the Kubernetes annotation that influences pod termination priority
-	// Lower values indicate higher deletion priority
-	PodDeletionCostAnnotation = "controller.kubernetes.io/pod-deletion-cost"
-	// KarpenterManagedDeletionCostAnnotation tracks whether Karpenter is managing the deletion cost
-	KarpenterManagedDeletionCostAnnotation = "karpenter.sh/managed-deletion-cost"
-)
-
-// PodUpdate represents a pod that needs its deletion cost annotation updated
-type PodUpdate struct {
-	Pod       *corev1.Pod
-	NewRank   int
-	ShouldAdd bool // true if adding annotation, false if updating
-}
-
-// AnnotationManager handles pod deletion cost annotation updates
+// AnnotationManager manages pod deletion cost annotations
 type AnnotationManager struct {
 	kubeClient client.Client
 	recorder   events.Recorder
 }
 
-// NewAnnotationManager creates a new AnnotationManager
+// NewAnnotationManager creates a new annotation manager
 func NewAnnotationManager(kubeClient client.Client, recorder events.Recorder) *AnnotationManager {
 	return &AnnotationManager{
 		kubeClient: kubeClient,
@@ -59,149 +43,118 @@ func NewAnnotationManager(kubeClient client.Client, recorder events.Recorder) *A
 	}
 }
 
-// UpdatePodDeletionCosts updates pod deletion cost annotations for all pods on the ranked nodes
+// UpdatePodDeletionCosts updates pod deletion cost annotations based on node ranks
 func (a *AnnotationManager) UpdatePodDeletionCosts(ctx context.Context, nodeRanks []NodeRank) error {
-	// Measure annotation update duration
-	defer metrics.Measure(AnnotationDurationSeconds, map[string]string{})()
+	logger := log.FromContext(ctx)
+	var errors []error
 
-	var successCount, skippedCount, errorCount int
-
-	// Process each ranked node
 	for _, nodeRank := range nodeRanks {
-		// Get all pods on this node
-		pods, err := nodeRank.Node.Pods(ctx, a.kubeClient)
-		if err != nil {
-			log.FromContext(ctx).WithValues("node", nodeRank.Node.Name()).Error(err, "failed to list pods on node")
-			errorCount++
+		if nodeRank.Node == nil || nodeRank.Node.Node == nil {
 			continue
 		}
 
-		// Build list of pods to update
-		podsToUpdate := []PodUpdate{}
-		for _, pod := range pods {
-			// Check if pod needs updating
-			if shouldUpdatePod(pod) {
-				podsToUpdate = append(podsToUpdate, PodUpdate{
-					Pod:       pod,
-					NewRank:   nodeRank.Rank,
-					ShouldAdd: !hasDeletionCostAnnotation(pod),
-				})
-			} else {
-				skippedCount++
-			}
+		// Get all pods on this node
+		pods, err := a.getPodsOnNode(ctx, nodeRank.Node.Node.Name)
+		if err != nil {
+			logger.Error(err, "failed to list pods on node", "node", nodeRank.Node.Node.Name)
+			errors = append(errors, err)
+			continue
 		}
 
-		// Batch update pods with new deletion cost
-		for _, podUpdate := range podsToUpdate {
-			if err := a.updatePodAnnotation(ctx, podUpdate); err != nil {
-				// Handle pod not found errors gracefully (pod was deleted)
-				if apierrors.IsNotFound(err) {
-					log.FromContext(ctx).V(1).WithValues("pod", klog.KObj(podUpdate.Pod)).Info("pod not found, skipping annotation update")
-					continue
+		// Update each pod
+		for i := range pods {
+			pod := &pods[i]
+			if err := a.updatePodAnnotation(ctx, pod, nodeRank.Rank); err != nil {
+				if !isNotFoundError(err) {
+					logger.V(1).Info("failed to update pod deletion cost", "pod", pod.Name, "error", err)
+					errors = append(errors, err)
 				}
-
-				// Handle conflict errors (will retry on next reconcile)
-				if apierrors.IsConflict(err) {
-					log.FromContext(ctx).V(1).WithValues("pod", klog.KObj(podUpdate.Pod)).Info("conflict updating pod annotation, will retry on next reconcile")
-					errorCount++
-					continue
-				}
-
-				// Log warnings for other failures and continue processing other pods
-				log.FromContext(ctx).WithValues("pod", klog.KObj(podUpdate.Pod)).Error(err, "failed to update pod deletion cost annotation")
-				// Publish event for failed update
-				a.recorder.Publish(UpdateFailedEvent(podUpdate.Pod, err))
-				errorCount++
-				continue
+				// Continue with other pods even if one fails
 			}
-			successCount++
 		}
 	}
 
-	// Record metrics
-	PodsUpdatedTotal.Add(float64(successCount), map[string]string{
-		resultLabel: "success",
-	})
-	PodsUpdatedTotal.Add(float64(skippedCount), map[string]string{
-		resultLabel: "skipped_customer_managed",
-	})
-	PodsUpdatedTotal.Add(float64(errorCount), map[string]string{
-		resultLabel: "error",
-	})
-
-	// Log summary
-	if successCount > 0 || errorCount > 0 {
-		log.FromContext(ctx).WithValues(
-			"success", successCount,
-			"skipped", skippedCount,
-			"errors", errorCount,
-		).V(1).Info("pod deletion cost annotation update completed")
+	if len(errors) > 0 {
+		return fmt.Errorf("failed to update %d pod annotations", len(errors))
 	}
 
 	return nil
 }
 
-// hasDeletionCostAnnotation checks if a pod has the deletion cost annotation
-func hasDeletionCostAnnotation(pod *corev1.Pod) bool {
-	if pod.Annotations == nil {
-		return false
-	}
-	_, exists := pod.Annotations[PodDeletionCostAnnotation]
-	return exists
-}
-
-// shouldUpdatePod determines if a pod should have its deletion cost updated
-// Returns true if:
-// - Pod has no deletion cost annotation (we should add it)
-// - Pod has deletion cost AND Karpenter management annotation (we manage it)
-// Returns false if:
-// - Pod has deletion cost but NO Karpenter management annotation (customer-managed)
-func shouldUpdatePod(pod *corev1.Pod) bool {
-	if pod.Annotations == nil {
-		// No annotations at all, we can add our annotation
-		return true
+// getPodsOnNode retrieves all pods running on a specific node
+func (a *AnnotationManager) getPodsOnNode(ctx context.Context, nodeName string) ([]corev1.Pod, error) {
+	podList := &corev1.PodList{}
+	if err := a.kubeClient.List(ctx, podList, client.MatchingFields{"spec.nodeName": nodeName}); err != nil {
+		return nil, err
 	}
 
-	hasDeletionCost := false
-	hasManagedAnnotation := false
-
-	if _, exists := pod.Annotations[PodDeletionCostAnnotation]; exists {
-		hasDeletionCost = true
-	}
-
-	if _, exists := pod.Annotations[KarpenterManagedDeletionCostAnnotation]; exists {
-		hasManagedAnnotation = true
-	}
-
-	// If pod has deletion cost but no management annotation, it's customer-managed
-	if hasDeletionCost && !hasManagedAnnotation {
-		return false
-	}
-
-	// Otherwise, we should update it
-	return true
+	return podList.Items, nil
 }
 
 // updatePodAnnotation updates a single pod's deletion cost annotation
-// It also adds the Karpenter management tracking annotation
-func (a *AnnotationManager) updatePodAnnotation(ctx context.Context, podUpdate PodUpdate) error {
-	pod := podUpdate.Pod.DeepCopy()
+func (a *AnnotationManager) updatePodAnnotation(ctx context.Context, pod *corev1.Pod, rank int) error {
+	// Check if we should update this pod
+	if !a.shouldUpdatePod(pod) {
+		return nil
+	}
 
-	// Initialize annotations map if it doesn't exist
+	// Create a copy for patching
+	stored := pod.DeepCopy()
+
+	// Initialize annotations if needed
 	if pod.Annotations == nil {
 		pod.Annotations = make(map[string]string)
 	}
 
-	// Set the deletion cost annotation
-	pod.Annotations[PodDeletionCostAnnotation] = fmt.Sprintf("%d", podUpdate.NewRank)
+	// Set deletion cost and management tracking
+	pod.Annotations[PodDeletionCostAnnotation] = strconv.Itoa(rank)
+	pod.Annotations[KarpenterManagedDeletionCostKey] = "true"
 
-	// Add the Karpenter management tracking annotation
-	pod.Annotations[KarpenterManagedDeletionCostAnnotation] = "true"
-
-	// Update the pod
-	if err := a.kubeClient.Update(ctx, pod); err != nil {
-		return err
+	// Patch the pod
+	if err := a.kubeClient.Patch(ctx, pod, client.MergeFrom(stored)); err != nil {
+		return fmt.Errorf("patching pod: %w", err)
 	}
 
 	return nil
+}
+
+// shouldUpdatePod determines if a pod's deletion cost should be updated
+func (a *AnnotationManager) shouldUpdatePod(pod *corev1.Pod) bool {
+	if pod.Annotations == nil {
+		// No annotations, safe to add
+		return true
+	}
+
+	existingCost, hasCost := pod.Annotations[PodDeletionCostAnnotation]
+	managedByKarpenter, isManaged := pod.Annotations[KarpenterManagedDeletionCostKey]
+
+	// If no deletion cost exists, we can add it
+	if !hasCost {
+		return true
+	}
+
+	// If deletion cost exists but is managed by Karpenter, we can update it
+	if isManaged && managedByKarpenter == "true" {
+		return true
+	}
+
+	// If deletion cost exists but no management annotation, it's customer-managed
+	// Don't update customer-managed annotations
+	if hasCost && !isManaged {
+		return false
+	}
+
+	// If deletion cost exists and management annotation says it's not managed by Karpenter
+	if hasCost && isManaged && managedByKarpenter != "true" {
+		return false
+	}
+
+	// Default: check if we have the existing cost
+	_ = existingCost
+	return true
+}
+
+// isNotFoundError checks if an error is a NotFound error
+func isNotFoundError(err error) bool {
+	return errors.IsNotFound(err)
 }

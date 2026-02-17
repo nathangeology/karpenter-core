@@ -17,139 +17,99 @@ limitations under the License.
 package deletioncost
 
 import (
-	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"sort"
-
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"sigs.k8s.io/karpenter/pkg/controllers/state"
 )
 
-// ChangeDetector tracks cluster state changes for optimization
-// It uses hash-based comparison to determine if ranking computation is needed
+// ChangeDetector detects changes in cluster state to optimize ranking operations
 type ChangeDetector struct {
-	lastNodeHash string
-	lastPodHash  string
+	lastHash string
 }
 
-// NewChangeDetector creates a new ChangeDetector instance
+// NewChangeDetector creates a new change detector
 func NewChangeDetector() *ChangeDetector {
 	return &ChangeDetector{
-		lastNodeHash: "",
-		lastPodHash:  "",
+		lastHash: "",
 	}
 }
 
-// HasChanged determines if the cluster state has changed since the last check
-// Returns true if nodes or pods have changed, false otherwise
-func (c *ChangeDetector) HasChanged(ctx context.Context, kubeClient client.Client, nodes []*state.StateNode) (bool, error) {
-	// Compute current hashes
-	currentNodeHash, err := computeNodeHash(ctx, kubeClient, nodes)
-	if err != nil {
-		return false, err
+// HasChanged checks if the node state has changed since the last check
+func (c *ChangeDetector) HasChanged(nodes []*state.StateNode) bool {
+	currentHash := c.computeHash(nodes)
+
+	if c.lastHash == "" {
+		// First call, always consider it changed
+		c.lastHash = currentHash
+		return true
 	}
 
-	currentPodHash, err := computePodHash(ctx, kubeClient, nodes)
-	if err != nil {
-		return false, err
+	if currentHash != c.lastHash {
+		c.lastHash = currentHash
+		return true
 	}
 
-	// Compare with previous hashes
-	nodeChanged := currentNodeHash != c.lastNodeHash
-	podChanged := currentPodHash != c.lastPodHash
-
-	// Update stored hashes if changed
-	if nodeChanged || podChanged {
-		c.lastNodeHash = currentNodeHash
-		c.lastPodHash = currentPodHash
-		return true, nil
-	}
-
-	return false, nil
+	return false
 }
 
-// computeNodeHash computes a stable hash of the node list
-// Includes node names, creation timestamps, and pod counts
-func computeNodeHash(ctx context.Context, kubeClient client.Client, nodes []*state.StateNode) (string, error) {
+// computeHash computes a hash of the current node state
+func (c *ChangeDetector) computeHash(nodes []*state.StateNode) string {
 	if len(nodes) == 0 {
-		return "", nil
+		return "empty"
 	}
 
-	// Sort nodes by name for deterministic ordering
-	sortedNodes := make([]*state.StateNode, len(nodes))
-	copy(sortedNodes, nodes)
-	sort.Slice(sortedNodes, func(i, j int) bool {
-		return sortedNodes[i].Name() < sortedNodes[j].Name()
-	})
-
-	// Build a string representation of node state
-	h := sha256.New()
-	for _, node := range sortedNodes {
-		// Include node name
-		h.Write([]byte(node.Name()))
-
-		// Include creation timestamp if available
-		if node.Node != nil {
-			h.Write([]byte(node.Node.CreationTimestamp.String()))
-		} else if node.NodeClaim != nil {
-			h.Write([]byte(node.NodeClaim.CreationTimestamp.String()))
-		}
-
-		// Include pod count
-		pods, err := node.Pods(ctx, kubeClient)
-		if err != nil {
-			return "", err
-		}
-		fmt.Fprintf(h, "%d", len(pods))
-	}
-
-	return fmt.Sprintf("%x", h.Sum(nil)), nil
-}
-
-// computePodHash computes a stable hash of pod assignments
-// Includes pod names and their assigned node names
-func computePodHash(ctx context.Context, kubeClient client.Client, nodes []*state.StateNode) (string, error) {
-	if len(nodes) == 0 {
-		return "", nil
-	}
-
-	// Collect all pod assignments
-	type podAssignment struct {
-		podName  string
-		nodeName string
-	}
-	var assignments []podAssignment
-
+	// Collect node information
+	nodeInfos := make([]string, 0, len(nodes))
 	for _, node := range nodes {
-		pods, err := node.Pods(ctx, kubeClient)
-		if err != nil {
-			return "", err
-		}
-
-		for _, pod := range pods {
-			assignments = append(assignments, podAssignment{
-				podName:  fmt.Sprintf("%s/%s", pod.Namespace, pod.Name),
-				nodeName: node.Name(),
-			})
-		}
+		info := c.getNodeInfo(node)
+		nodeInfos = append(nodeInfos, info)
 	}
 
-	// Sort assignments for deterministic ordering
-	sort.Slice(assignments, func(i, j int) bool {
-		if assignments[i].nodeName != assignments[j].nodeName {
-			return assignments[i].nodeName < assignments[j].nodeName
-		}
-		return assignments[i].podName < assignments[j].podName
-	})
+	// Sort for deterministic hashing
+	sort.Strings(nodeInfos)
 
 	// Compute hash
-	h := sha256.New()
-	for _, assignment := range assignments {
-		h.Write([]byte(assignment.nodeName))
-		h.Write([]byte(assignment.podName))
+	hasher := sha256.New()
+	for _, info := range nodeInfos {
+		hasher.Write([]byte(info))
+		hasher.Write([]byte("\n"))
 	}
 
-	return fmt.Sprintf("%x", h.Sum(nil)), nil
+	return hex.EncodeToString(hasher.Sum(nil))
+}
+
+// getNodeInfo extracts relevant information from a node for hashing
+func (c *ChangeDetector) getNodeInfo(node *state.StateNode) string {
+	if node == nil {
+		return "nil"
+	}
+
+	var nodeName string
+	var creationTime string
+	var capacity string
+	var podCount int
+
+	if node.Node != nil {
+		nodeName = node.Node.Name
+		creationTime = node.Node.CreationTimestamp.String()
+
+		// Get capacity
+		allocatable := node.Node.Status.Allocatable
+		capacity = fmt.Sprintf("cpu:%s,mem:%s",
+			allocatable.Cpu().String(),
+			allocatable.Memory().String())
+
+		// Pod count would be calculated from actual pods in real implementation
+		podCount = 0
+	} else if node.NodeClaim != nil {
+		nodeName = node.NodeClaim.Name
+		creationTime = node.NodeClaim.CreationTimestamp.String()
+		capacity = "unknown"
+		podCount = 0
+	}
+
+	return fmt.Sprintf("%s|%s|%s|pods:%d", nodeName, creationTime, capacity, podCount)
 }

@@ -112,11 +112,8 @@ func (c *Controller) Reconcile(ctx context.Context) (reconciler.Result, error) {
 
 	// Check change detection if enabled
 	if opts.PodDeletionCostChangeDetection {
-		changed, err := c.changeDetector.HasChanged(ctx, c.kubeClient, nodes)
-		if err != nil {
-			log.FromContext(ctx).Error(err, "failed to check for changes")
-			// Continue with ranking even if change detection fails
-		} else if !changed {
+		changed := c.changeDetector.HasChanged(nodes)
+		if !changed {
 			// No changes detected, skip ranking
 			log.FromContext(ctx).V(1).Info("no changes detected, skipping pod deletion cost update")
 			SkippedNoChangesTotal.Add(1, map[string]string{})
@@ -125,7 +122,7 @@ func (c *Controller) Reconcile(ctx context.Context) (reconciler.Result, error) {
 	}
 
 	// Call ranking engine to rank nodes
-	nodeRanks, err := c.rankingEngine.RankNodes(ctx, c.kubeClient, nodes)
+	nodeRanks, err := c.rankingEngine.RankNodes(ctx, nodes)
 	if err != nil {
 		log.FromContext(ctx).Error(err, "failed to rank nodes")
 		// Publish disabled event for fatal ranking errors
