@@ -32,19 +32,22 @@ type ConsolidationRound struct {
 
 // PerformanceReport represents the structured performance test results
 type PerformanceReport struct {
-	TestName                string        `json:"test_name"`
-	TestType                string        `json:"test_type"`
-	TotalPods               int           `json:"total_pods"`
-	TotalNodes              int           `json:"total_nodes"`
-	TotalTime               time.Duration `json:"total_time"`
-	PodsNetChange           int           `json:"change_in_pod_count"`
-	NodesNetChange          int           `json:"change_in_node_count"`
-	PodsDisrupted           int           `json:"pods_disrupted"`
-	TotalReservedCPUUtil    float64       `json:"total_reserved_cpu_utilization"`
-	TotalReservedMemoryUtil float64       `json:"total_reserved_memory_utilization"`
-	ResourceEfficiencyScore float64       `json:"resource_efficiency_score"`
-	PodsPerNode             float64       `json:"pods_per_node"`
-	Rounds                  int           `json:"rounds"`
-	SizeClassLockThreshold  int           `json:"size_class_lock_threshold"`
-	Timestamp               time.Time     `json:"timestamp"`
+	TestName                       string        `json:"test_name"`
+	TestType                       string        `json:"test_type"`
+	TotalPods                      int           `json:"total_pods"`
+	TotalNodes                     int           `json:"total_nodes"`
+	TotalTime                      time.Duration `json:"total_time"`
+	PodsNetChange                  int           `json:"change_in_pod_count"`
+	NodesNetChange                 int           `json:"change_in_node_count"`
+	PodsDisrupted                  int           `json:"pods_disrupted"`
+	TotalReservedCPUUtil           float64       `json:"total_reserved_cpu_utilization"`
+	TotalReservedMemoryUtil        float64       `json:"total_reserved_memory_utilization"`
+	ResourceEfficiencyScore        float64       `json:"resource_efficiency_score"`
+	PodsPerNode                    float64       `json:"pods_per_node"`
+	Rounds                         int           `json:"rounds"`
+	SizeClassLockThreshold         int           `json:"size_class_lock_threshold"`
+	PodDeletionCostEnabled         bool          `json:"pod_deletion_cost_enabled"`
+	PodDeletionCostRankingStrategy string        `json:"pod_deletion_cost_ranking_strategy"`
+	PodDeletionCostChangeDetection bool          `json:"pod_deletion_cost_change_detection"`
+	Timestamp                      time.Time     `json:"timestamp"`
 }

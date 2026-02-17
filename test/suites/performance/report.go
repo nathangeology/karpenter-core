@@ -67,6 +67,13 @@ func OutputPerformanceReport(report *PerformanceReport, filePrefix string) {
 	} else {
 		GinkgoWriter.Printf("Size Class Lock Threshold: disabled\n")
 	}
+	if report.PodDeletionCostEnabled {
+		GinkgoWriter.Printf("Pod Deletion Cost: enabled\n")
+		GinkgoWriter.Printf("  Ranking Strategy: %s\n", report.PodDeletionCostRankingStrategy)
+		GinkgoWriter.Printf("  Change Detection: %v\n", report.PodDeletionCostChangeDetection)
+	} else {
+		GinkgoWriter.Printf("Pod Deletion Cost: disabled\n")
+	}
 
 	// File output
 	if outputDir := os.Getenv("OUTPUT_DIR"); outputDir != "" {
@@ -121,21 +128,24 @@ func ReportScaleOut(env *common.Environment, testName string, expectedPods int, 
 	}
 
 	return &PerformanceReport{
-		TestName:                testName,
-		TestType:                "scale-out",
-		TotalPods:               expectedPods,
-		TotalNodes:              nodeCount,
-		TotalTime:               totalTime,
-		PodsNetChange:           expectedPods,
-		NodesNetChange:          nodeCount,
-		PodsDisrupted:           podsDisrupted,
-		TotalReservedCPUUtil:    avgCPUUtil,
-		TotalReservedMemoryUtil: avgMemUtil,
-		ResourceEfficiencyScore: resourceEfficiencyScore,
-		PodsPerNode:             podsPerNode,
-		Rounds:                  1, // Scale-out is always 1 round
-		SizeClassLockThreshold:  sizeClassLockThreshold,
-		Timestamp:               time.Now(),
+		TestName:                       testName,
+		TestType:                       "scale-out",
+		TotalPods:                      expectedPods,
+		TotalNodes:                     nodeCount,
+		TotalTime:                      totalTime,
+		PodsNetChange:                  expectedPods,
+		NodesNetChange:                 nodeCount,
+		PodsDisrupted:                  podsDisrupted,
+		TotalReservedCPUUtil:           avgCPUUtil,
+		TotalReservedMemoryUtil:        avgMemUtil,
+		ResourceEfficiencyScore:        resourceEfficiencyScore,
+		PodsPerNode:                    podsPerNode,
+		Rounds:                         1, // Scale-out is always 1 round
+		SizeClassLockThreshold:         sizeClassLockThreshold,
+		PodDeletionCostEnabled:         podDeletionCostEnabled,
+		PodDeletionCostRankingStrategy: podDeletionCostRankingStrategy,
+		PodDeletionCostChangeDetection: podDeletionCostChangeDetection,
+		Timestamp:                      time.Now(),
 	}, nil
 }
 
@@ -184,21 +194,24 @@ func ReportConsolidation(env *common.Environment, testName string, initialPods, 
 	}
 
 	return &PerformanceReport{
-		TestName:                testName,
-		TestType:                "consolidation",
-		TotalPods:               finalPods,
-		TotalNodes:              finalNodes,
-		TotalTime:               totalTime,
-		PodsNetChange:           finalPods - initialPods,
-		NodesNetChange:          finalNodes - initialNodes,
-		PodsDisrupted:           podsDisrupted,
-		TotalReservedCPUUtil:    avgCPUUtil,
-		TotalReservedMemoryUtil: avgMemUtil,
-		ResourceEfficiencyScore: resourceEfficiencyScore,
-		PodsPerNode:             podsPerNode,
-		Rounds:                  len(consolidationRounds),
-		SizeClassLockThreshold:  sizeClassLockThreshold,
-		Timestamp:               time.Now(),
+		TestName:                       testName,
+		TestType:                       "consolidation",
+		TotalPods:                      finalPods,
+		TotalNodes:                     finalNodes,
+		TotalTime:                      totalTime,
+		PodsNetChange:                  finalPods - initialPods,
+		NodesNetChange:                 finalNodes - initialNodes,
+		PodsDisrupted:                  podsDisrupted,
+		TotalReservedCPUUtil:           avgCPUUtil,
+		TotalReservedMemoryUtil:        avgMemUtil,
+		ResourceEfficiencyScore:        resourceEfficiencyScore,
+		PodsPerNode:                    podsPerNode,
+		Rounds:                         len(consolidationRounds),
+		SizeClassLockThreshold:         sizeClassLockThreshold,
+		PodDeletionCostEnabled:         podDeletionCostEnabled,
+		PodDeletionCostRankingStrategy: podDeletionCostRankingStrategy,
+		PodDeletionCostChangeDetection: podDeletionCostChangeDetection,
+		Timestamp:                      time.Now(),
 	}, nil
 }
 
@@ -289,20 +302,23 @@ func ReportDrift(env *common.Environment, testName string, expectedPods int, tim
 	}
 
 	return &PerformanceReport{
-		TestName:                testName,
-		TestType:                "drift",
-		TotalPods:               expectedPods,
-		TotalNodes:              finalNodeCount,
-		TotalTime:               totalTime,
-		PodsNetChange:           0,                                 // Pods don't change in drift
-		NodesNetChange:          finalNodeCount - initialNodeCount, // Net change in nodes (should be ~0 for drift)
-		PodsDisrupted:           podsDisrupted,
-		TotalReservedCPUUtil:    avgCPUUtil,
-		TotalReservedMemoryUtil: avgMemUtil,
-		ResourceEfficiencyScore: resourceEfficiencyScore,
-		PodsPerNode:             podsPerNode,
-		Rounds:                  driftRounds,
-		Timestamp:               time.Now(),
+		TestName:                       testName,
+		TestType:                       "drift",
+		TotalPods:                      expectedPods,
+		TotalNodes:                     finalNodeCount,
+		TotalTime:                      totalTime,
+		PodsNetChange:                  0,                                 // Pods don't change in drift
+		NodesNetChange:                 finalNodeCount - initialNodeCount, // Net change in nodes (should be ~0 for drift)
+		PodsDisrupted:                  podsDisrupted,
+		TotalReservedCPUUtil:           avgCPUUtil,
+		TotalReservedMemoryUtil:        avgMemUtil,
+		ResourceEfficiencyScore:        resourceEfficiencyScore,
+		PodsPerNode:                    podsPerNode,
+		Rounds:                         driftRounds,
+		PodDeletionCostEnabled:         podDeletionCostEnabled,
+		PodDeletionCostRankingStrategy: podDeletionCostRankingStrategy,
+		PodDeletionCostChangeDetection: podDeletionCostChangeDetection,
+		Timestamp:                      time.Now(),
 	}, nil
 }
 

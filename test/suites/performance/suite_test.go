@@ -39,6 +39,18 @@ var env *common.Environment
 // Set to 0 to disable, or set to a positive value (e.g., 5, 10, 20) to enable
 var sizeClassLockThreshold int = 0
 
+// podDeletionCostEnabled controls whether pod deletion cost management is enabled
+// Set to true to enable the feature, false to disable
+var podDeletionCostEnabled bool = true
+
+// podDeletionCostRankingStrategy controls the ranking strategy for pod deletion cost
+// Valid values: "Random", "LargestToSmallest", "SmallestToLargest", "UnallocatedVCPUPerPodCost"
+var podDeletionCostRankingStrategy string = "Random"
+
+// podDeletionCostChangeDetection controls whether change detection optimization is enabled
+// Set to true to enable change detection (skip ranking when no changes), false to always rank
+var podDeletionCostChangeDetection bool = true
+
 func TestIntegration(t *testing.T) {
 	RegisterFailHandler(Fail)
 	BeforeSuite(func() {
