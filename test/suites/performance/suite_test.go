@@ -58,7 +58,7 @@ var (
 		if val := os.Getenv("POD_DELETION_COST_RANKING_STRATEGY"); val != "" {
 			return val
 		}
-		return "UnallocatedVCPUPerPodCost" // Default for performance tests
+		return "Unknown" // Default for performance tests
 	}()
 
 	// podDeletionCostChangeDetection controls whether change detection optimization is enabled
