@@ -49,6 +49,6 @@ jobs:
       suite: Performance
       focus: ${{ inputs.test_focus }}
       test_name: ${{ matrix.config.name }}
-      pod_deletion_cost_enabled: ${{ matrix.config.enabled }}
+      pod_deletion_cost_enabled: ${{ format('{0}', matrix.config.enabled) }}
       pod_deletion_cost_ranking_strategy: ${{ matrix.config.strategy }}
-      pod_deletion_cost_change_detection: ${{ matrix.config.change_detection }}
+      pod_deletion_cost_change_detection: ${{ format('{0}', matrix.config.change_detection) }}
