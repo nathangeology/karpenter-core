@@ -18,6 +18,7 @@ package performance
 
 import (
 	"fmt"
+	"os"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -39,17 +40,59 @@ var env *common.Environment
 // Set to 0 to disable, or set to a positive value (e.g., 5, 10, 20) to enable
 var sizeClassLockThreshold int = 5
 
-// podDeletionCostEnabled controls whether pod deletion cost management is enabled
-// Set to true to enable the feature, false to disable
-var podDeletionCostEnabled bool = true
+// Pod deletion cost configuration - reads from environment or uses defaults
+var (
+	// podDeletionCostEnabled controls whether pod deletion cost management is enabled
+	// Reads from POD_DELETION_COST_ENABLED environment variable, defaults to true for performance tests
+	podDeletionCostEnabled = func() bool {
+		if val := os.Getenv("POD_DELETION_COST_ENABLED"); val != "" {
+			return val == "true"
+		}
+		return true // Default for performance tests
+	}()
 
-// podDeletionCostRankingStrategy controls the ranking strategy for pod deletion cost
-// Valid values: "Random", "LargestToSmallest", "SmallestToLargest", "UnallocatedVCPUPerPodCost"
-var podDeletionCostRankingStrategy string = "Random"
+	// podDeletionCostRankingStrategy controls the ranking strategy for pod deletion cost
+	// Valid values: "Random", "LargestToSmallest", "SmallestToLargest", "UnallocatedVCPUPerPodCost"
+	// Reads from POD_DELETION_COST_RANKING_STRATEGY environment variable, defaults to UnallocatedVCPUPerPodCost
+	podDeletionCostRankingStrategy = func() string {
+		if val := os.Getenv("POD_DELETION_COST_RANKING_STRATEGY"); val != "" {
+			return val
+		}
+		return "UnallocatedVCPUPerPodCost" // Default for performance tests
+	}()
 
-// podDeletionCostChangeDetection controls whether change detection optimization is enabled
-// Set to true to enable change detection (skip ranking when no changes), false to always rank
-var podDeletionCostChangeDetection bool = true
+	// podDeletionCostChangeDetection controls whether change detection optimization is enabled
+	// Set to true to enable change detection (skip ranking when no changes), false to always rank
+	// Reads from POD_DELETION_COST_CHANGE_DETECTION environment variable, defaults to true
+	podDeletionCostChangeDetection = func() bool {
+		if val := os.Getenv("POD_DELETION_COST_CHANGE_DETECTION"); val != "" {
+			return val == "true"
+		}
+		return true // Default
+	}()
+)
+
+func init() {
+	// Log configuration at startup for debugging
+	fmt.Printf("=== Pod Deletion Cost Configuration ===\n")
+	fmt.Printf("  Enabled: %v\n", podDeletionCostEnabled)
+	fmt.Printf("  Strategy: %s\n", podDeletionCostRankingStrategy)
+	fmt.Printf("  Change Detection: %v\n", podDeletionCostChangeDetection)
+
+	// Validate ranking strategy
+	validStrategies := []string{"Random", "LargestToSmallest", "SmallestToLargest", "UnallocatedVCPUPerPodCost"}
+	isValid := false
+	for _, valid := range validStrategies {
+		if podDeletionCostRankingStrategy == valid {
+			isValid = true
+			break
+		}
+	}
+	if !isValid {
+		fmt.Printf("  WARNING: Invalid ranking strategy '%s'. Valid values: %v\n", podDeletionCostRankingStrategy, validStrategies)
+	}
+	fmt.Printf("========================================\n")
+}
 
 func TestIntegration(t *testing.T) {
 	RegisterFailHandler(Fail)

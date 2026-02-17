@@ -34,6 +34,16 @@ build: ## Build the Karpenter KWOK controller images using ko build
 	$(eval IMG_TAG=$(shell echo $(CONTROLLER_IMG) | cut -d "@" -f 1 | cut -d ":" -f 2 -s))
 	$(eval IMG_DIGEST=$(shell echo $(CONTROLLER_IMG) | cut -d "@" -f 2))
 
+## Deploy the kwok controller with pod deletion cost configuration
+## Environment variables:
+##   POD_DELETION_COST_ENABLED=true|false (default: false)
+##     Controls whether the pod deletion cost management feature is enabled
+##   POD_DELETION_COST_RANKING_STRATEGY=Random|LargestToSmallest|SmallestToLargest|UnallocatedVCPUPerPodCost (default: Random)
+##     Sets the ranking strategy for pod deletion cost calculation
+##   POD_DELETION_COST_CHANGE_DETECTION=true|false (default: true)
+##     Enables change detection optimization to reduce unnecessary ranking computations
+## Example:
+##   POD_DELETION_COST_ENABLED=true POD_DELETION_COST_RANKING_STRATEGY=UnallocatedVCPUPerPodCost make apply-with-kind
 apply-with-kind: verify build-with-kind ## Deploy the kwok controller from the current state of your git repository into your ~/.kube/config cluster
 	kubectl apply -f kwok/charts/crds
 	helm upgrade --install karpenter kwok/charts --namespace $(KARPENTER_NAMESPACE) --skip-crds \
@@ -42,7 +52,13 @@ apply-with-kind: verify build-with-kind ## Deploy the kwok controller from the c
 		--set controller.image.tag=$(IMG_TAG) \
 		--set serviceMonitor.enabled=true \
 		--set-string controller.env[0].name=ENABLE_PROFILING \
-		--set-string controller.env[0].value=true
+		--set-string controller.env[0].value=true \
+		--set-string controller.env[1].name=FEATURE_GATES \
+		--set-string controller.env[1].value="PodDeletionCostManagement=$${POD_DELETION_COST_ENABLED:-false}" \
+		--set-string controller.env[2].name=POD_DELETION_COST_RANKING_STRATEGY \
+		--set-string controller.env[2].value="$${POD_DELETION_COST_RANKING_STRATEGY:-Random}" \
+		--set-string controller.env[3].name=POD_DELETION_COST_CHANGE_DETECTION \
+		--set-string controller.env[3].value="$${POD_DELETION_COST_CHANGE_DETECTION:-true}"
 
 JUNIT_REPORT := $(if $(ARTIFACT_DIR), --ginkgo.junit-report="$(ARTIFACT_DIR)/junit_report.xml")
 e2etests: ## Run the e2e suite against your local cluster

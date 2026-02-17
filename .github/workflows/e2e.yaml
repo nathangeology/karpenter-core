@@ -16,6 +16,21 @@ on:
         type: string
         required: false
         description: "Human-readable test name for job identification"
+      pod_deletion_cost_enabled:
+        type: string
+        required: false
+        default: "false"
+        description: "Enable pod deletion cost management feature"
+      pod_deletion_cost_ranking_strategy:
+        type: string
+        required: false
+        default: "Random"
+        description: "Ranking strategy: Random, LargestToSmallest, SmallestToLargest, UnallocatedVCPUPerPodCost"
+      pod_deletion_cost_change_detection:
+        type: string
+        required: false
+        default: "true"
+        description: "Enable change detection optimization"
 jobs:
   e2e:
     permissions:
@@ -54,6 +69,10 @@ jobs:
         go install github.com/google/ko@latest      
     - name: install kwok and controller
       shell: bash
+      env:
+        POD_DELETION_COST_ENABLED: ${{ inputs.pod_deletion_cost_enabled }}
+        POD_DELETION_COST_RANKING_STRATEGY: ${{ inputs.pod_deletion_cost_ranking_strategy }}
+        POD_DELETION_COST_CHANGE_DETECTION: ${{ inputs.pod_deletion_cost_change_detection }}
       run: |
         make install-kwok
         export KWOK_REPO=kind.local
@@ -67,6 +86,88 @@ jobs:
         kubectl get nodepools
         kubectl get pods -A
         kubectl describe nodes
+    - name: Verify Karpenter configuration
+      if: inputs.pod_deletion_cost_enabled == 'true'
+      shell: bash
+      run: |
+        echo "Verifying pod deletion cost configuration..."
+        echo "Expected configuration:"
+        echo "  Feature enabled: ${{ inputs.pod_deletion_cost_enabled }}"
+        echo "  Ranking strategy: ${{ inputs.pod_deletion_cost_ranking_strategy }}"
+        echo "  Change detection: ${{ inputs.pod_deletion_cost_change_detection }}"
+        echo ""
+        
+        # Wait for deployment to be ready
+        kubectl wait --for=condition=available --timeout=60s deployment/karpenter -n kube-system
+        
+        # Get all environment variables from the deployment
+        echo "Karpenter controller environment variables:"
+        kubectl get deployment -n kube-system karpenter -o jsonpath='{.spec.template.spec.containers[0].env}' | jq '.'
+        echo ""
+        
+        # Check feature gate
+        FEATURE_GATES=$(kubectl get deployment -n kube-system karpenter -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="FEATURE_GATES")].value}')
+        echo "FEATURE_GATES: $FEATURE_GATES"
+        if [[ "$FEATURE_GATES" != *"PodDeletionCostManagement=true"* ]]; then
+          echo "ERROR: Feature gate PodDeletionCostManagement is not enabled"
+          echo "Expected: PodDeletionCostManagement=true"
+          echo "Got: $FEATURE_GATES"
+          exit 1
+        fi
+        echo "✓ Feature gate verified: PodDeletionCostManagement=true"
+        
+        # Check ranking strategy
+        STRATEGY=$(kubectl get deployment -n kube-system karpenter -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="POD_DELETION_COST_RANKING_STRATEGY")].value}')
+        echo "POD_DELETION_COST_RANKING_STRATEGY: $STRATEGY"
+        if [[ "$STRATEGY" != "${{ inputs.pod_deletion_cost_ranking_strategy }}" ]]; then
+          echo "ERROR: Ranking strategy mismatch"
+          echo "Expected: ${{ inputs.pod_deletion_cost_ranking_strategy }}"
+          echo "Got: $STRATEGY"
+          exit 1
+        fi
+        echo "✓ Ranking strategy verified: $STRATEGY"
+        
+        # Check change detection
+        CHANGE_DETECTION=$(kubectl get deployment -n kube-system karpenter -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="POD_DELETION_COST_CHANGE_DETECTION")].value}')
+        echo "POD_DELETION_COST_CHANGE_DETECTION: $CHANGE_DETECTION"
+        if [[ "$CHANGE_DETECTION" != "${{ inputs.pod_deletion_cost_change_detection }}" ]]; then
+          echo "ERROR: Change detection setting mismatch"
+          echo "Expected: ${{ inputs.pod_deletion_cost_change_detection }}"
+          echo "Got: $CHANGE_DETECTION"
+          exit 1
+        fi
+        echo "✓ Change detection verified: $CHANGE_DETECTION"
+        
+        echo ""
+        echo "✓ All configuration checks passed successfully"
+    - name: Verify pod annotations
+      if: inputs.pod_deletion_cost_enabled == 'true'
+      shell: bash
+      run: |
+        echo "Verifying pod deletion cost annotations..."
+        echo "Waiting for pods to be annotated (30 seconds)..."
+        sleep 30
+        
+        # Check for deletion cost annotations
+        ANNOTATED_PODS=$(kubectl get pods -A -o json | jq '[.items[] | select(.metadata.annotations."controller.kubernetes.io/pod-deletion-cost" != null)] | length')
+        echo "Found $ANNOTATED_PODS pods with deletion cost annotations"
+        
+        if [ "$ANNOTATED_PODS" -eq 0 ]; then
+          echo "WARNING: No pods have deletion cost annotations yet"
+          echo "This may be expected if no pods have been scheduled or if the controller hasn't processed them yet"
+          echo ""
+          echo "Current pod status:"
+          kubectl get pods -A --no-headers | wc -l
+          echo "total pods in cluster"
+        else
+          echo "✓ Pod annotations are being set"
+          echo ""
+          echo "Sample annotations (first 10 pods):"
+          kubectl get pods -A -o json | jq -r '.items[] | select(.metadata.annotations."controller.kubernetes.io/pod-deletion-cost" != null) | "\(.metadata.namespace)/\(.metadata.name): \(.metadata.annotations."controller.kubernetes.io/pod-deletion-cost")"' | head -10
+        fi
+        
+        echo ""
+        echo "Pod annotation verification complete"
     - name: run the ${{ inputs.test_name || inputs.suite }} test
       env:
           SUITE: ${{ inputs.suite }}
