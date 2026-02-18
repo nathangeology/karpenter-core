@@ -160,9 +160,10 @@ func ReportScaleOut(env *common.Environment, testName string, expectedPods int, 
 //   - initialNodes: Initial number of nodes before consolidation
 //   - timeout: Maximum time to wait for consolidation completion
 //   - sizeClassLockThreshold: The size class lock threshold setting (0 = disabled)
+//   - baselineDisruptions: Baseline disruption count to exclude from the report (e.g., disruptions during wait periods)
 //
 // Returns a PerformanceReport with consolidation metrics and timing information.
-func ReportConsolidation(env *common.Environment, testName string, initialPods, finalPods, initialNodes int, timeout time.Duration, sizeClassLockThreshold int) (*PerformanceReport, error) {
+func ReportConsolidation(env *common.Environment, testName string, initialPods, finalPods, initialNodes int, timeout time.Duration, sizeClassLockThreshold int, baselineDisruptions int) (*PerformanceReport, error) {
 	startTime := time.Now()
 
 	// Capture baseline pod disruption count at start of test
@@ -183,8 +184,8 @@ func ReportConsolidation(env *common.Environment, testName string, initialPods, 
 	finalNodes := env.Monitor.CreatedNodeCount()
 	avgCPUUtil := env.Monitor.AvgUtilization(corev1.ResourceCPU)
 	avgMemUtil := env.Monitor.AvgUtilization(corev1.ResourceMemory)
-	// Calculate delta: only count disruptions during this test
-	podsDisrupted := getPodsDisruptedCount(env) - baselinePodsDisrupted
+	// Calculate delta: only count disruptions during this test, excluding baseline disruptions
+	podsDisrupted := getPodsDisruptedCount(env) - baselinePodsDisrupted - baselineDisruptions
 
 	// Calculate derived metrics
 	resourceEfficiencyScore := (avgCPUUtil*90 + avgMemUtil*10)
@@ -399,8 +400,8 @@ func ReportScaleOutWithOutput(env *common.Environment, testName string, expected
 }
 
 // ReportConsolidationWithOutput monitors consolidation and automatically outputs the report
-func ReportConsolidationWithOutput(env *common.Environment, testName string, initialPods, finalPods, initialNodes int, timeout time.Duration, filePrefix string, sizeClassLockThreshold int) (*PerformanceReport, error) {
-	report, err := ReportConsolidation(env, testName, initialPods, finalPods, initialNodes, timeout, sizeClassLockThreshold)
+func ReportConsolidationWithOutput(env *common.Environment, testName string, initialPods, finalPods, initialNodes int, timeout time.Duration, filePrefix string, sizeClassLockThreshold int, baselineDisruptions int) (*PerformanceReport, error) {
+	report, err := ReportConsolidation(env, testName, initialPods, finalPods, initialNodes, timeout, sizeClassLockThreshold, baselineDisruptions)
 	if err != nil {
 		return nil, err
 	}

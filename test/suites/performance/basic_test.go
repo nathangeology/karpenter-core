@@ -92,17 +92,17 @@ var _ = Describe("Performance", Label(debug.NoWatch), func() {
 			largeDeployment.Spec.Replicas = lo.ToPtr(int32(350))
 			env.ExpectUpdated(smallDeployment, largeDeployment)
 
-			consolidationReport, err := ReportConsolidationWithOutput(env, "Consolidation Test", 1000, 700, initialNodes, 20*time.Minute, "consolidation", sizeClassLockThreshold)
+			// Pass baseline disruptions to exclude them from consolidation report
+			consolidationReport, err := ReportConsolidationWithOutput(env, "Consolidation Test", 1000, 700, initialNodes, 20*time.Minute, "consolidation", sizeClassLockThreshold, disruptionsDuringWait)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(consolidationReport.TestType).To(Equal("consolidation"), "Should be detected as consolidation test")
 			Expect(consolidationReport.TotalPods).To(Equal(700), "Should have 700 total pods after scale-in")
 			Expect(consolidationReport.PodsNetChange).To(Equal(-300), "Should have net reduction of 300 pods")
 
-			// Adjust disruption count to account for disruptions during wait period
-			adjustedDisruptions := consolidationReport.PodsDisrupted - disruptionsDuringWait
+			// Report disruption breakdown if any occurred during wait period
 			if disruptionsDuringWait > 0 {
-				GinkgoWriter.Printf("Consolidation disruptions: %d total, %d during wait period, %d during actual consolidation\n",
-					consolidationReport.PodsDisrupted, disruptionsDuringWait, adjustedDisruptions)
+				GinkgoWriter.Printf("Disruption breakdown: %d excluded from wait period, %d during consolidation (reported)\n",
+					disruptionsDuringWait, consolidationReport.PodsDisrupted)
 			}
 
 			Expect(consolidationReport.TotalTime).To(BeNumerically("<", 20*time.Minute),

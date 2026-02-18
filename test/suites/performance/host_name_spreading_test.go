@@ -74,7 +74,7 @@ var _ = Describe("Performance", Label(debug.NoWatch), func() {
 			env.ExpectUpdated(smallDeployment, largeDeployment)
 
 			By("Monitoring consolidation performance")
-			consolidationReport, err := ReportConsolidationWithOutput(env, "Hostname Spread Consolidation Test", 1000, 700, initialNodes, 30*time.Minute, "hostname_spread_consolidation", sizeClassLockThreshold)
+			consolidationReport, err := ReportConsolidationWithOutput(env, "Hostname Spread Consolidation Test", 1000, 700, initialNodes, 30*time.Minute, "hostname_spread_consolidation", sizeClassLockThreshold, 0)
 			Expect(err).ToNot(HaveOccurred(), "Consolidation should execute successfully")
 
 			By("Validating consolidation performance")

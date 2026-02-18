@@ -93,7 +93,7 @@ var _ = Describe("Performance", Label(debug.NoWatch), func() {
 			env.ExpectUpdated(smallDeployment, largeDeployment)
 
 			By("Monitoring consolidation with disruption protection")
-			consolidationReport, err := ReportConsolidationWithOutput(env, "Do Not Disrupt Consolidation Test", 1100, 600, initialNodes, 25*time.Minute, "do_not_disrupt_consolidation", sizeClassLockThreshold)
+			consolidationReport, err := ReportConsolidationWithOutput(env, "Do Not Disrupt Consolidation Test", 1100, 600, initialNodes, 25*time.Minute, "do_not_disrupt_consolidation", sizeClassLockThreshold, 0)
 			Expect(err).ToNot(HaveOccurred(), "Consolidation should execute successfully")
 
 			By("Validating disruption protection during consolidation")

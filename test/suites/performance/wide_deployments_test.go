@@ -193,7 +193,7 @@ var _ = Describe("Performance", Label(debug.NoWatch), func() {
 			}
 
 			By("Monitoring wide consolidation performance")
-			consolidationReport, err := ReportConsolidationWithOutput(env, "Wide Deployments Consolidation Test", 1000, 700, initialNodes, 30*time.Minute, "wide_deployments_consolidation", sizeClassLockThreshold)
+			consolidationReport, err := ReportConsolidationWithOutput(env, "Wide Deployments Consolidation Test", 1000, 700, initialNodes, 30*time.Minute, "wide_deployments_consolidation", sizeClassLockThreshold, 0)
 			Expect(err).ToNot(HaveOccurred(), "Wide consolidation should execute successfully")
 
 			By("Validating wide consolidation performance")

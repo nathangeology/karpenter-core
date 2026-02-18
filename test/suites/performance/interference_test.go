@@ -102,7 +102,7 @@ var _ = Describe("Performance", Label(debug.NoWatch), func() {
 			env.ExpectUpdated(smallDeployment, largeDeployment)
 
 			By("Monitoring consolidation activity during mixed scaling operations")
-			consolidationReport, err := ReportConsolidationWithOutput(env, "Interference Consolidation Test", 750, 600, initialNodes, 15*time.Minute, "self_antiaffinity_interference_consolidation", sizeClassLockThreshold)
+			consolidationReport, err := ReportConsolidationWithOutput(env, "Interference Consolidation Test", 750, 600, initialNodes, 15*time.Minute, "self_antiaffinity_interference_consolidation", sizeClassLockThreshold, 0)
 			Expect(err).ToNot(HaveOccurred(), "Interference consolidation test should execute successfully")
 
 			By("Validating consolidation performance during interference")
