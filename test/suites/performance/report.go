@@ -160,7 +160,9 @@ func ReportScaleOut(env *common.Environment, testName string, expectedPods int, 
 //   - initialNodes: Initial number of nodes before consolidation
 //   - timeout: Maximum time to wait for consolidation completion
 //   - sizeClassLockThreshold: The size class lock threshold setting (0 = disabled)
-//   - baselineDisruptions: Baseline disruption count to exclude from the report (e.g., disruptions during wait periods)
+//   - baselineDisruptions: Additional disruptions to exclude from the report (typically 0, as the function
+//     captures its own baseline at start). Only use this if you need to exclude disruptions that occurred
+//     BEFORE calling this function but AFTER the previous test's baseline was captured.
 //
 // Returns a PerformanceReport with consolidation metrics and timing information.
 func ReportConsolidation(env *common.Environment, testName string, initialPods, finalPods, initialNodes int, timeout time.Duration, sizeClassLockThreshold int, baselineDisruptions int) (*PerformanceReport, error) {
