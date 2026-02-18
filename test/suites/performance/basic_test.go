@@ -60,7 +60,7 @@ var _ = Describe("Performance", Label(debug.NoWatch), func() {
 			deletionCostDetected := checkPodDeletionCostAnnotations(env)
 			if !deletionCostDetected {
 				By("Pod deletion cost not detected, waiting 1 minute and checking again")
-				time.Sleep(1 * time.Minute)
+				time.Sleep(2 * time.Minute)
 				deletionCostDetected = checkPodDeletionCostAnnotations(env)
 			}
 
