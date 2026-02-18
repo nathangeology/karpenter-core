@@ -19,6 +19,7 @@ package deletioncost
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/awslabs/operatorpkg/reconciler"
 	"github.com/awslabs/operatorpkg/singleton"
@@ -34,6 +35,8 @@ import (
 	"sigs.k8s.io/karpenter/pkg/operator/injection"
 	"sigs.k8s.io/karpenter/pkg/operator/options"
 )
+
+const reconcileInterval = time.Minute
 
 // Controller manages pod deletion cost annotations for Karpenter-managed nodes
 type Controller struct {
@@ -91,7 +94,7 @@ func (c *Controller) Reconcile(ctx context.Context) (reconciler.Result, error) {
 
 	// Check if feature is enabled via feature gate
 	if !opts.FeatureGates.PodDeletionCostManagement {
-		return reconciler.Result{}, nil
+		return reconciler.Result{RequeueAfter: reconcileInterval}, nil
 	}
 
 	// Initialize ranking engine with configured strategy if not already done
@@ -107,7 +110,7 @@ func (c *Controller) Reconcile(ctx context.Context) (reconciler.Result, error) {
 
 	// If no nodes, nothing to do
 	if len(nodes) == 0 {
-		return reconciler.Result{}, nil
+		return reconciler.Result{RequeueAfter: reconcileInterval}, nil
 	}
 
 	// Check change detection if enabled
@@ -120,7 +123,7 @@ func (c *Controller) Reconcile(ctx context.Context) (reconciler.Result, error) {
 			// No changes detected, skip ranking
 			log.FromContext(ctx).V(1).Info("no changes detected, skipping pod deletion cost update")
 			SkippedNoChangesTotal.Add(1, map[string]string{})
-			return reconciler.Result{}, nil
+			return reconciler.Result{RequeueAfter: reconcileInterval}, nil
 		}
 	}
 
@@ -130,7 +133,7 @@ func (c *Controller) Reconcile(ctx context.Context) (reconciler.Result, error) {
 		log.FromContext(ctx).Error(err, "failed to rank nodes")
 		// Publish disabled event for fatal ranking errors
 		c.recorder.Publish(DisabledEvent(fmt.Sprintf("failed to rank nodes: %v", err)))
-		return reconciler.Result{}, err
+		return reconciler.Result{RequeueAfter: reconcileInterval}, err
 	}
 
 	// Publish ranking completed event
@@ -141,10 +144,10 @@ func (c *Controller) Reconcile(ctx context.Context) (reconciler.Result, error) {
 		log.FromContext(ctx).Error(err, "failed to update pod deletion costs")
 		// Publish disabled event for fatal annotation errors
 		c.recorder.Publish(DisabledEvent(fmt.Sprintf("failed to update pod deletion costs: %v", err)))
-		return reconciler.Result{}, err
+		return reconciler.Result{RequeueAfter: reconcileInterval}, err
 	}
 
 	log.FromContext(ctx).V(1).WithValues("nodeCount", len(nodeRanks)).Info("updated pod deletion costs")
 
-	return reconciler.Result{}, nil
+	return reconciler.Result{RequeueAfter: reconcileInterval}, nil
 }
