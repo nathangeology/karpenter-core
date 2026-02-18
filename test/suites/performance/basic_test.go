@@ -55,6 +55,21 @@ var _ = Describe("Performance", Label(debug.NoWatch), func() {
 			Expect(scaleOutReport.TotalReservedMemoryUtil).To(BeNumerically(">", 0.65),
 				"Average memory utilization should be greater than 65%")
 
+			// ========== POD DELETION COST CHECK ==========
+			By("Checking for pod deletion cost annotations")
+			deletionCostDetected := checkPodDeletionCostAnnotations(env)
+			if !deletionCostDetected {
+				By("Pod deletion cost not detected, waiting 1 minute and checking again")
+				time.Sleep(1 * time.Minute)
+				deletionCostDetected = checkPodDeletionCostAnnotations(env)
+			}
+
+			if deletionCostDetected {
+				GinkgoWriter.Printf("✓ Pod deletion cost annotations detected and working\n")
+			} else {
+				GinkgoWriter.Printf("⚠ Pod deletion cost annotations not detected (feature may be disabled)\n")
+			}
+
 			// ========== PHASE 2: CONSOLIDATION TEST ==========
 			By("Executing consolidation performance test (scaling down to 700 pods)")
 			// Phase 2: Scale-down and consolidation

@@ -40,39 +40,26 @@ var env *common.Environment
 // Set to 0 to disable, or set to a positive value (e.g., 5, 10, 20) to enable
 var sizeClassLockThreshold int = 0
 
-// Pod deletion cost configuration - reads from environment or uses defaults
-var (
-	// podDeletionCostEnabled controls whether pod deletion cost management is enabled
-	// Reads from POD_DELETION_COST_ENABLED environment variable, defaults to true for performance tests
-	podDeletionCostEnabled = func() bool {
-		if val := os.Getenv("POD_DELETION_COST_ENABLED"); val != "" {
-			return val == "true"
-		}
-		return true // Default for performance tests
-	}()
-
-	// podDeletionCostRankingStrategy controls the ranking strategy for pod deletion cost
-	// Valid values: "Random", "LargestToSmallest", "SmallestToLargest", "UnallocatedVCPUPerPodCost"
-	// Reads from POD_DELETION_COST_RANKING_STRATEGY environment variable, defaults to UnallocatedVCPUPerPodCost
-	podDeletionCostRankingStrategy = func() string {
-		if val := os.Getenv("POD_DELETION_COST_RANKING_STRATEGY"); val != "" {
-			return val
-		}
-		return "UnallocatedVCPUPerPodCost" // Default for performance tests
-	}()
-
-	// podDeletionCostChangeDetection controls whether change detection optimization is enabled
-	// Set to true to enable change detection (skip ranking when no changes), false to always rank
-	// Reads from POD_DELETION_COST_CHANGE_DETECTION environment variable, defaults to true
-	podDeletionCostChangeDetection = func() bool {
-		if val := os.Getenv("POD_DELETION_COST_CHANGE_DETECTION"); val != "" {
-			return val == "true"
-		}
-		return true // Default
-	}()
-)
-
 func init() {
+	// Initialize pod deletion cost configuration from environment variables
+	if val := os.Getenv("POD_DELETION_COST_ENABLED"); val != "" {
+		podDeletionCostEnabled = val == "true"
+	} else {
+		podDeletionCostEnabled = true // Default for performance tests
+	}
+
+	if val := os.Getenv("POD_DELETION_COST_RANKING_STRATEGY"); val != "" {
+		podDeletionCostRankingStrategy = val
+	} else {
+		podDeletionCostRankingStrategy = "UnallocatedVCPUPerPodCost" // Default for performance tests
+	}
+
+	if val := os.Getenv("POD_DELETION_COST_CHANGE_DETECTION"); val != "" {
+		podDeletionCostChangeDetection = val == "true"
+	} else {
+		podDeletionCostChangeDetection = true // Default
+	}
+
 	// Log configuration at startup for debugging
 	fmt.Printf("=== Pod Deletion Cost Configuration ===\n")
 	fmt.Printf("  Enabled: %v\n", podDeletionCostEnabled)
@@ -135,3 +122,42 @@ var _ = AfterEach(func() {
 	env.Cleanup()
 	env.AfterEach()
 })
+
+// checkPodDeletionCostAnnotations checks if pods have deletion cost annotations
+// Returns true if at least one pod has the annotation, false otherwise
+func checkPodDeletionCostAnnotations(env *common.Environment) bool {
+	podList := &corev1.PodList{}
+	if err := env.Client.List(env.Context, podList); err != nil {
+		GinkgoWriter.Printf("Failed to list pods: %v\n", err)
+		return false
+	}
+
+	annotatedCount := 0
+	totalPods := 0
+
+	for _, pod := range podList.Items {
+		// Skip system pods
+		if pod.Namespace == "kube-system" || pod.Namespace == "karpenter" {
+			continue
+		}
+
+		totalPods++
+
+		// Check for deletion cost annotation
+		if _, hasDeletionCost := pod.Annotations["controller.kubernetes.io/pod-deletion-cost"]; hasDeletionCost {
+			annotatedCount++
+		}
+	}
+
+	if totalPods == 0 {
+		GinkgoWriter.Printf("No application pods found to check\n")
+		return false
+	}
+
+	GinkgoWriter.Printf("Pod deletion cost check: %d/%d pods have annotations (%.1f%%)\n",
+		annotatedCount, totalPods, float64(annotatedCount)/float64(totalPods)*100)
+
+	// Consider it detected if at least 50% of pods have the annotation
+	// (allows for some pods that might be in transition)
+	return annotatedCount > 0 && float64(annotatedCount)/float64(totalPods) >= 0.5
+}

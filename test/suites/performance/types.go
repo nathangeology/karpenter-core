@@ -51,3 +51,15 @@ type PerformanceReport struct {
 	PodDeletionCostChangeDetection bool          `json:"pod_deletion_cost_change_detection"`
 	Timestamp                      time.Time     `json:"timestamp"`
 }
+
+// Pod deletion cost configuration variables
+var (
+	// podDeletionCostEnabled controls whether pod deletion cost management is enabled
+	podDeletionCostEnabled bool
+
+	// podDeletionCostRankingStrategy controls the ranking strategy for pod deletion cost
+	podDeletionCostRankingStrategy string
+
+	// podDeletionCostChangeDetection controls whether change detection optimization is enabled
+	podDeletionCostChangeDetection bool
+)
