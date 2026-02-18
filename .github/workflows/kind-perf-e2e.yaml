@@ -37,5 +37,5 @@ jobs:
       focus: ${{ matrix.test.focus }}
       test_name: ${{ matrix.test.name }}
       pod_deletion_cost_enabled: ${{ format('{0}', 'true') }}
-      pod_deletion_cost_ranking_strategy: UnallocatedVCPUPerPodCost
+      pod_deletion_cost_ranking_strategy: Random
       pod_deletion_cost_change_detection: ${{ format('{0}', 'true') }}

@@ -57,11 +57,23 @@ var _ = Describe("Performance", Label(debug.NoWatch), func() {
 
 			// ========== POD DELETION COST CHECK ==========
 			By("Checking for pod deletion cost annotations")
+
+			// Get initial disruption count before waiting
+			disruptionsBeforeWait := getPodsDisruptedCount(env)
+
 			deletionCostDetected := checkPodDeletionCostAnnotations(env)
 			if !deletionCostDetected {
 				By("Pod deletion cost not detected, waiting 1 minute and checking again")
-				time.Sleep(2 * time.Minute)
+				time.Sleep(1 * time.Minute)
 				deletionCostDetected = checkPodDeletionCostAnnotations(env)
+			}
+
+			// Get disruption count after waiting and calculate any disruptions during wait
+			disruptionsAfterWait := getPodsDisruptedCount(env)
+			disruptionsDuringWait := disruptionsAfterWait - disruptionsBeforeWait
+
+			if disruptionsDuringWait > 0 {
+				GinkgoWriter.Printf("⚠ %d pod disruptions occurred during deletion cost check wait period\n", disruptionsDuringWait)
 			}
 
 			if deletionCostDetected {
@@ -85,6 +97,14 @@ var _ = Describe("Performance", Label(debug.NoWatch), func() {
 			Expect(consolidationReport.TestType).To(Equal("consolidation"), "Should be detected as consolidation test")
 			Expect(consolidationReport.TotalPods).To(Equal(700), "Should have 700 total pods after scale-in")
 			Expect(consolidationReport.PodsNetChange).To(Equal(-300), "Should have net reduction of 300 pods")
+
+			// Adjust disruption count to account for disruptions during wait period
+			adjustedDisruptions := consolidationReport.PodsDisrupted - disruptionsDuringWait
+			if disruptionsDuringWait > 0 {
+				GinkgoWriter.Printf("Consolidation disruptions: %d total, %d during wait period, %d during actual consolidation\n",
+					consolidationReport.PodsDisrupted, disruptionsDuringWait, adjustedDisruptions)
+			}
+
 			Expect(consolidationReport.TotalTime).To(BeNumerically("<", 20*time.Minute),
 				"Consolidation should complete within 20 minutes")
 
