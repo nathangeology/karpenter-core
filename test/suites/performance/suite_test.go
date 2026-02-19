@@ -45,13 +45,13 @@ func init() {
 	if val := os.Getenv("POD_DELETION_COST_ENABLED"); val != "" {
 		podDeletionCostEnabled = val == "true"
 	} else {
-		podDeletionCostEnabled = false // Default for performance tests
+		podDeletionCostEnabled = true // Default for performance tests
 	}
 
 	if val := os.Getenv("POD_DELETION_COST_RANKING_STRATEGY"); val != "" {
 		podDeletionCostRankingStrategy = val
 	} else {
-		podDeletionCostRankingStrategy = "UnallocatedVCPUPerPodCost" // Default for performance tests
+		podDeletionCostRankingStrategy = "SmallestToLargest" // Default for performance tests
 	}
 
 	if val := os.Getenv("POD_DELETION_COST_CHANGE_DETECTION"); val != "" {
