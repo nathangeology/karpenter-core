@@ -51,7 +51,7 @@ func init() {
 	if val := os.Getenv("POD_DELETION_COST_RANKING_STRATEGY"); val != "" {
 		podDeletionCostRankingStrategy = val
 	} else {
-		podDeletionCostRankingStrategy = "Random" // Default for performance tests
+		podDeletionCostRankingStrategy = "UnallocatedVCPUPerPodCost" // Default for performance tests
 	}
 
 	if val := os.Getenv("POD_DELETION_COST_CHANGE_DETECTION"); val != "" {
