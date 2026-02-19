@@ -45,7 +45,7 @@ func init() {
 	if val := os.Getenv("POD_DELETION_COST_ENABLED"); val != "" {
 		podDeletionCostEnabled = val == "true"
 	} else {
-		podDeletionCostEnabled = true // Default for performance tests
+		podDeletionCostEnabled = false // Default for performance tests
 	}
 
 	if val := os.Getenv("POD_DELETION_COST_RANKING_STRATEGY"); val != "" {
