@@ -49,6 +49,8 @@ type PerformanceReport struct {
 	PodDeletionCostEnabled         bool          `json:"pod_deletion_cost_enabled"`
 	PodDeletionCostRankingStrategy string        `json:"pod_deletion_cost_ranking_strategy"`
 	PodDeletionCostChangeDetection bool          `json:"pod_deletion_cost_change_detection"`
+	ConsolidateWhen                string        `json:"consolidate_when"`
+	DecisionRatioThreshold         float64       `json:"decision_ratio_threshold"`
 	Timestamp                      time.Time     `json:"timestamp"`
 }
 

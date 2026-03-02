@@ -19,6 +19,7 @@ package performance
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -40,7 +41,22 @@ var env *common.Environment
 // Set to 0 to disable, or set to a positive value (e.g., 5, 10, 20) to enable
 var sizeClassLockThreshold int = 0
 
+// decisionRatioThreshold controls the minimum decision ratio for consolidation
+// when using WhenCostJustifiesDisruption policy. Default is 1.5 (conservative)
+// Can be overridden via DECISION_RATIO_THRESHOLD environment variable
+var decisionRatioThreshold float64 = 1.5
+
 func init() {
+	// Initialize decision ratio threshold from environment variable if set
+	if val := os.Getenv("DECISION_RATIO_THRESHOLD"); val != "" {
+		if threshold, err := strconv.ParseFloat(val, 64); err == nil && threshold > 0 {
+			decisionRatioThreshold = threshold
+			fmt.Printf("=== Decision Ratio Threshold set to %.2f from environment ===\n", decisionRatioThreshold)
+		} else {
+			fmt.Printf("WARNING: Invalid DECISION_RATIO_THRESHOLD value '%s', using default %.2f\n", val, decisionRatioThreshold)
+		}
+	}
+
 	// Initialize pod deletion cost configuration from environment variables
 	if val := os.Getenv("POD_DELETION_COST_ENABLED"); val != "" {
 		podDeletionCostEnabled = val == "true"
@@ -109,6 +125,10 @@ var _ = BeforeEach(func() {
 	nodePool.Spec.Disruption.ConsolidateAfter = v1.MustParseNillableDuration("30s")
 	nodePool.Spec.Disruption.Budgets = []v1.Budget{{Nodes: "100%"}}
 
+	// Configure consolidation policy and decision ratio threshold
+	nodePool.Spec.Disruption.ConsolidateWhen = v1.ConsolidateWhenCostJustifiesDisruption
+	nodePool.Spec.Disruption.DecisionRatioThreshold = &decisionRatioThreshold
+
 	// Configure size class locking if threshold is set
 	if sizeClassLockThreshold > 0 {
 		if nodePool.Annotations == nil {
@@ -122,6 +142,13 @@ var _ = AfterEach(func() {
 	env.Cleanup()
 	env.AfterEach()
 })
+
+// getConsolidationSettings returns the current consolidation policy and decision ratio threshold
+func getConsolidationSettings() (string, float64) {
+	consolidateWhen := string(nodePool.Spec.Disruption.ConsolidateWhen)
+	decisionRatio := nodePool.Spec.Disruption.GetDecisionRatioThreshold()
+	return consolidateWhen, decisionRatio
+}
 
 // checkPodDeletionCostAnnotations checks if pods have deletion cost annotations
 // Returns true if at least one pod has the annotation, false otherwise

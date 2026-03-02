@@ -31,6 +31,15 @@ import (
 var _ = Describe("Performance", Label(debug.NoWatch), func() {
 	Context("Basic Deployment", func() {
 		It("should efficiently scale two deployments with different resource profiles", func() {
+			// Get consolidation settings from nodepool
+			consolidateWhen := string(nodePool.Spec.Disruption.ConsolidateWhen)
+			currentDecisionRatio := nodePool.Spec.Disruption.GetDecisionRatioThreshold()
+
+			GinkgoWriter.Printf("\n=== TEST CONFIGURATION ===\n")
+			GinkgoWriter.Printf("Consolidate When: %s\n", consolidateWhen)
+			GinkgoWriter.Printf("Decision Ratio Threshold: %.2f\n", currentDecisionRatio)
+			GinkgoWriter.Printf("==========================\n\n")
+
 			// ========== PHASE 1: SCALE-OUT TEST ==========
 			By("Executing scale-out performance test with 1000 pods")
 			// Create deployments directly using the template
@@ -42,7 +51,7 @@ var _ = Describe("Performance", Label(debug.NoWatch), func() {
 
 			env.ExpectCreated(nodePool, nodeClass, smallDeployment, largeDeployment)
 
-			scaleOutReport, err := ReportScaleOutWithOutput(env, "Scale Out Test", 1000, 15*time.Minute, "scale_out", sizeClassLockThreshold)
+			scaleOutReport, err := ReportScaleOutWithOutput(env, "Scale Out Test", 1000, 15*time.Minute, "scale_out", sizeClassLockThreshold, consolidateWhen, currentDecisionRatio)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(scaleOutReport.TestType).To(Equal("scale-out"), "Should be detected as scale-out test")
 			Expect(scaleOutReport.TotalPods).To(Equal(1000), "Should have 1000 total pods")
@@ -94,7 +103,7 @@ var _ = Describe("Performance", Label(debug.NoWatch), func() {
 
 			// Note: ReportConsolidation captures its own baseline at the start, so wait-period
 			// disruptions are automatically excluded. We pass 0 for baselineDisruptions.
-			consolidationReport, err := ReportConsolidationWithOutput(env, "Consolidation Test", 1000, 700, initialNodes, 20*time.Minute, "consolidation", sizeClassLockThreshold, 0)
+			consolidationReport, err := ReportConsolidationWithOutput(env, "Consolidation Test", 1000, 700, initialNodes, 20*time.Minute, "consolidation", sizeClassLockThreshold, 0, consolidateWhen, currentDecisionRatio)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(consolidationReport.TestType).To(Equal("consolidation"), "Should be detected as consolidation test")
 			Expect(consolidationReport.TotalPods).To(Equal(700), "Should have 700 total pods after scale-in")

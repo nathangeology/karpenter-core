@@ -74,6 +74,8 @@ func OutputPerformanceReport(report *PerformanceReport, filePrefix string) {
 	} else {
 		GinkgoWriter.Printf("Pod Deletion Cost: disabled\n")
 	}
+	GinkgoWriter.Printf("Consolidate When: %s\n", report.ConsolidateWhen)
+	GinkgoWriter.Printf("Decision Ratio Threshold: %.2f\n", report.DecisionRatioThreshold)
 
 	// File output
 	if outputDir := os.Getenv("OUTPUT_DIR"); outputDir != "" {
@@ -97,9 +99,11 @@ func OutputPerformanceReport(report *PerformanceReport, filePrefix string) {
 //   - expectedPods: Expected number of healthy pods
 //   - timeout: Maximum time to wait for scale-out completion
 //   - sizeClassLockThreshold: The size class lock threshold setting (0 = disabled)
+//   - consolidateWhen: The consolidation policy (e.g., "WhenEmptyOrUnderutilized", "WhenCostJustifiesDisruption")
+//   - decisionRatioThreshold: The decision ratio threshold value
 //
 // Returns a PerformanceReport with scale-out metrics and timing information.
-func ReportScaleOut(env *common.Environment, testName string, expectedPods int, timeout time.Duration, sizeClassLockThreshold int) (*PerformanceReport, error) {
+func ReportScaleOut(env *common.Environment, testName string, expectedPods int, timeout time.Duration, sizeClassLockThreshold int, consolidateWhen string, decisionRatioThreshold float64) (*PerformanceReport, error) {
 	startTime := time.Now()
 
 	// Capture baseline pod disruption count at start of test
@@ -145,6 +149,8 @@ func ReportScaleOut(env *common.Environment, testName string, expectedPods int, 
 		PodDeletionCostEnabled:         podDeletionCostEnabled,
 		PodDeletionCostRankingStrategy: podDeletionCostRankingStrategy,
 		PodDeletionCostChangeDetection: podDeletionCostChangeDetection,
+		ConsolidateWhen:                consolidateWhen,
+		DecisionRatioThreshold:         decisionRatioThreshold,
 		Timestamp:                      time.Now(),
 	}, nil
 }
@@ -163,9 +169,11 @@ func ReportScaleOut(env *common.Environment, testName string, expectedPods int, 
 //   - baselineDisruptions: Additional disruptions to exclude from the report (typically 0, as the function
 //     captures its own baseline at start). Only use this if you need to exclude disruptions that occurred
 //     BEFORE calling this function but AFTER the previous test's baseline was captured.
+//   - consolidateWhen: The consolidation policy (e.g., "WhenEmptyOrUnderutilized", "WhenCostJustifiesDisruption")
+//   - decisionRatioThreshold: The decision ratio threshold value
 //
 // Returns a PerformanceReport with consolidation metrics and timing information.
-func ReportConsolidation(env *common.Environment, testName string, initialPods, finalPods, initialNodes int, timeout time.Duration, sizeClassLockThreshold int, baselineDisruptions int) (*PerformanceReport, error) {
+func ReportConsolidation(env *common.Environment, testName string, initialPods, finalPods, initialNodes int, timeout time.Duration, sizeClassLockThreshold int, baselineDisruptions int, consolidateWhen string, decisionRatioThreshold float64) (*PerformanceReport, error) {
 	startTime := time.Now()
 
 	// Capture baseline pod disruption count at start of test
@@ -214,6 +222,8 @@ func ReportConsolidation(env *common.Environment, testName string, initialPods, 
 		PodDeletionCostEnabled:         podDeletionCostEnabled,
 		PodDeletionCostRankingStrategy: podDeletionCostRankingStrategy,
 		PodDeletionCostChangeDetection: podDeletionCostChangeDetection,
+		ConsolidateWhen:                consolidateWhen,
+		DecisionRatioThreshold:         decisionRatioThreshold,
 		Timestamp:                      time.Now(),
 	}, nil
 }
@@ -391,8 +401,8 @@ func monitorConsolidationRounds(env *common.Environment, timeout time.Duration) 
 // Convenience functions for common monitoring patterns
 
 // ReportScaleOutWithOutput monitors scale-out and automatically outputs the report
-func ReportScaleOutWithOutput(env *common.Environment, testName string, expectedPods int, timeout time.Duration, filePrefix string, sizeClassLockThreshold int) (*PerformanceReport, error) {
-	report, err := ReportScaleOut(env, testName, expectedPods, timeout, sizeClassLockThreshold)
+func ReportScaleOutWithOutput(env *common.Environment, testName string, expectedPods int, timeout time.Duration, filePrefix string, sizeClassLockThreshold int, consolidateWhen string, decisionRatioThreshold float64) (*PerformanceReport, error) {
+	report, err := ReportScaleOut(env, testName, expectedPods, timeout, sizeClassLockThreshold, consolidateWhen, decisionRatioThreshold)
 	if err != nil {
 		return nil, err
 	}
@@ -402,8 +412,8 @@ func ReportScaleOutWithOutput(env *common.Environment, testName string, expected
 }
 
 // ReportConsolidationWithOutput monitors consolidation and automatically outputs the report
-func ReportConsolidationWithOutput(env *common.Environment, testName string, initialPods, finalPods, initialNodes int, timeout time.Duration, filePrefix string, sizeClassLockThreshold int, baselineDisruptions int) (*PerformanceReport, error) {
-	report, err := ReportConsolidation(env, testName, initialPods, finalPods, initialNodes, timeout, sizeClassLockThreshold, baselineDisruptions)
+func ReportConsolidationWithOutput(env *common.Environment, testName string, initialPods, finalPods, initialNodes int, timeout time.Duration, filePrefix string, sizeClassLockThreshold int, baselineDisruptions int, consolidateWhen string, decisionRatioThreshold float64) (*PerformanceReport, error) {
+	report, err := ReportConsolidation(env, testName, initialPods, finalPods, initialNodes, timeout, sizeClassLockThreshold, baselineDisruptions, consolidateWhen, decisionRatioThreshold)
 	if err != nil {
 		return nil, err
 	}

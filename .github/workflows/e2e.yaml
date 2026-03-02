@@ -31,6 +31,11 @@ on:
         required: false
         default: "true"
         description: "Enable change detection optimization"
+      decision_ratio_threshold:
+        type: string
+        required: false
+        default: "1.5"
+        description: "Decision ratio threshold for WhenCostJustifiesDisruption consolidation policy"
 jobs:
   e2e:
     permissions:
@@ -172,6 +177,7 @@ jobs:
       env:
           SUITE: ${{ inputs.suite }}
           FOCUS: ${{ inputs.focus }}
+          DECISION_RATIO_THRESHOLD: ${{ inputs.decision_ratio_threshold }}
       shell: bash
       run: |
         OUTPUT_DIR=$(mktemp -d)
