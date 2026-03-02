@@ -1,8 +1,8 @@
 # This is the format of an AWS ECR Public Repo as an example.
-#AWS_ACCOUNT_ID="480091713227"
-#AWS_DEFAULT_REGION="us-east-1"
+AWS_ACCOUNT_ID="480091713227"
+AWS_DEFAULT_REGION="us-east-1"
 export KWOK_REPO ?= ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com
-export KARPENTER_NAMESPACE=kube-system
+export KARPENTER_NAMESPACE=karpenter
 
 HELM_OPTS ?= --set logLevel=debug \
 			--set controller.resources.requests.cpu=1 \
@@ -60,7 +60,6 @@ apply-with-kind: verify build-with-kind ## Deploy the kwok controller from the c
 		--set-string controller.env[3].name=POD_DELETION_COST_CHANGE_DETECTION \
 		--set-string controller.env[3].value="$${POD_DELETION_COST_CHANGE_DETECTION:-true}"
 
-JUNIT_REPORT := $(if $(ARTIFACT_DIR), --ginkgo.junit-report="$(ARTIFACT_DIR)/junit_report.xml")
 e2etests: ## Run the e2e suite against your local cluster
 	cd test && go test \
 		-count 1 \
@@ -75,6 +74,15 @@ e2etests: ## Run the e2e suite against your local cluster
 		--ginkgo.vv
 
 # Run make install-kwok to install the kwok controller in your cluster first
+## To enable size class locking, add this annotation to your NodePool resource:
+##   annotations:
+##     karpenter.sh/size-class-lock-threshold: "10"  # Set to desired pod count threshold
+## The SIZE_CLASS_LOCK_THRESHOLD environment variable below is for reference/testing only
+## and does not automatically configure NodePools.
+## Environment variables:
+##   POD_DELETION_COST_ENABLED=true|false (default: false)
+##   POD_DELETION_COST_RANKING_STRATEGY=Random|LargestToSmallest|SmallestToLargest|UnallocatedVCPUPerPodCost (default: Random)
+##   POD_DELETION_COST_CHANGE_DETECTION=true|false (default: true)
 # Webhooks are currently not supported in the kwok provider.
 apply: verify build ## Deploy the kwok controller from the current state of your git repository into your ~/.kube/config cluster
 	kubectl apply -f kwok/charts/crds
@@ -85,7 +93,16 @@ apply: verify build ## Deploy the kwok controller from the current state of your
 		--set controller.image.digest=$(IMG_DIGEST) \
 		--set settings.preferencePolicy=Ignore \
 		--set-string controller.env[0].name=ENABLE_PROFILING \
-		--set-string controller.env[0].value=true
+		--set-string controller.env[0].value=true \
+		--set-string controller.env[1].name=FEATURE_GATES \
+		--set-string controller.env[1].value=PodDeletionCostManagement=$${POD_DELETION_COST_ENABLED:-false} \
+		--set-string controller.env[2].name=POD_DELETION_COST_RANKING_STRATEGY \
+		--set-string controller.env[2].value=$${POD_DELETION_COST_RANKING_STRATEGY:-Random} \
+		--set-string controller.env[3].name=POD_DELETION_COST_CHANGE_DETECTION \
+		--set-string controller.env[3].value=$${POD_DELETION_COST_CHANGE_DETECTION:-true}
+
+deploy: ## Deploy Karpenter using the deployment script with pod deletion cost configuration
+	./scripts/deploy-karpenter.sh
 
 delete: ## Delete the controller from your ~/.kube/config cluster
 	helm uninstall karpenter --namespace $(KARPENTER_NAMESPACE)
