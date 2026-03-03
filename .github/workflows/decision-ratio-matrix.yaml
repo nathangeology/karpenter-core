@@ -31,7 +31,7 @@ jobs:
       suite: Performance
       focus: ${{ inputs.test_focus }}
       test_name: "${{ inputs.test_name }} (threshold=${{ matrix.threshold.value }})"
-      pod_deletion_cost_enabled: "true"
+      pod_deletion_cost_enabled: ${{ format('{0}', 'true') }}
       pod_deletion_cost_ranking_strategy: SmallestToLargest
-      pod_deletion_cost_change_detection: "true"
+      pod_deletion_cost_change_detection: ${{ format('{0}', 'true') }}
       decision_ratio_threshold: ${{ matrix.threshold.value }}
