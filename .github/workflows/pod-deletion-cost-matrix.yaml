@@ -1,0 +1,54 @@
+name: Pod Deletion Cost Matrix Testing
+on:
+  workflow_dispatch:
+    inputs:
+      test_focus:
+        description: 'Ginkgo focus pattern to run specific tests'
+        required: false
+        default: 'Basic Deployment'
+        type: string
+
+jobs:
+  matrix-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - name: "Baseline (Disabled)"
+            enabled: "false"
+            strategy: "Random"
+            change_detection: "true"
+          
+          - name: "Random Strategy"
+            enabled: "true"
+            strategy: "Random"
+            change_detection: "true"
+          
+          - name: "Largest First"
+            enabled: "true"
+            strategy: "LargestToSmallest"
+            change_detection: "true"
+          
+          - name: "Smallest First"
+            enabled: "true"
+            strategy: "SmallestToLargest"
+            change_detection: "true"
+          
+          - name: "Unallocated vCPU"
+            enabled: "true"
+            strategy: "UnallocatedVCPUPerPodCost"
+            change_detection: "true"
+          
+#          - name: "No Change Detection"
+#            enabled: "true"
+#            strategy: "UnallocatedVCPUPerPodCost"
+#            change_detection: "false"
+    
+    uses: ./.github/workflows/e2e.yaml
+    with:
+      suite: Performance
+      focus: ${{ inputs.test_focus }}
+      test_name: ${{ matrix.config.name }}
+      pod_deletion_cost_enabled: ${{ format('{0}', matrix.config.enabled) }}
+      pod_deletion_cost_ranking_strategy: ${{ matrix.config.strategy }}
+      pod_deletion_cost_change_detection: ${{ format('{0}', matrix.config.change_detection) }}

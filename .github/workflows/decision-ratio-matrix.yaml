@@ -1,0 +1,37 @@
+name: Decision Ratio Threshold Matrix
+on:
+  workflow_dispatch:
+    inputs:
+      test_focus:
+        description: 'Test focus pattern (e.g., "Basic Deployment")'
+        required: false
+        default: "Basic Deployment"
+      test_name:
+        description: 'Test name for identification'
+        required: false
+        default: "Decision Ratio Matrix Test"
+jobs:
+  decision-ratio-matrix:
+    permissions:
+      issues: write
+    strategy:
+      fail-fast: false
+      matrix:
+        threshold:
+          - value: "0.5"
+            description: "aggressive"
+          - value: "1.0"
+            description: "balanced"
+          - value: "1.5"
+            description: "conservative"
+          - value: "2.0"
+            description: "very-conservative"
+    uses: ./.github/workflows/e2e.yaml
+    with:
+      suite: Performance
+      focus: ${{ inputs.test_focus }}
+      test_name: "${{ inputs.test_name }} (threshold=${{ matrix.threshold.value }})"
+      pod_deletion_cost_enabled: ${{ format('{0}', 'true') }}
+      pod_deletion_cost_ranking_strategy: SmallestToLargest
+      pod_deletion_cost_change_detection: ${{ format('{0}', 'true') }}
+      decision_ratio_threshold: ${{ matrix.threshold.value }}

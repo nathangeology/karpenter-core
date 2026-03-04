@@ -36,3 +36,4 @@ jobs:
       suite: Performance
       focus: ${{ matrix.test.focus }}
       test_name: ${{ matrix.test.name }}
+      decision_ratio_threshold: "1.0"
