@@ -37,6 +37,7 @@ import (
 	pscheduling "sigs.k8s.io/karpenter/pkg/controllers/provisioning/scheduling"
 	"sigs.k8s.io/karpenter/pkg/controllers/state"
 	"sigs.k8s.io/karpenter/pkg/events"
+	"sigs.k8s.io/karpenter/pkg/metrics"
 	"sigs.k8s.io/karpenter/pkg/operator/options"
 	"sigs.k8s.io/karpenter/pkg/scheduling"
 )
@@ -85,10 +86,29 @@ func (c *consolidation) markConsolidated() {
 }
 
 // ShouldDisrupt is a predicate used to filter candidates
-func (c *consolidation) ShouldDisrupt(_ context.Context, cn *Candidate) bool {
+func (c *consolidation) ShouldDisrupt(ctx context.Context, cn *Candidate) bool {
 	// Disable consolidation for static NodePool
 	if cn.OwnedByStaticNodePool() {
 		return false
+	}
+	// When the IPVS feature gate is enabled, check for actively resizing pods
+	// and the consolidation grace period before proceeding with other checks.
+	if options.FromContext(ctx).FeatureGates.InPlacePodVerticalScaling {
+		pods, err := cn.Pods(ctx, c.kubeClient)
+		if err == nil {
+			for _, pod := range pods {
+				if hasActiveResize(pod) {
+					metrics.IPVSConsolidationDeferredTotal.Inc(map[string]string{metrics.ReasonLabel: "active_resize"})
+					c.recorder.Publish(disruptionevents.Unconsolidatable(cn.Node, cn.NodeClaim, "node has pods with active in-place resize")...)
+					return false
+				}
+			}
+		}
+		if c.isInResizeGracePeriod(cn) {
+			metrics.IPVSConsolidationDeferredTotal.Inc(map[string]string{metrics.ReasonLabel: "grace_period"})
+			c.recorder.Publish(disruptionevents.Unconsolidatable(cn.Node, cn.NodeClaim, "node is within IPVS consolidation grace period")...)
+			return false
+		}
 	}
 	// We need the following to know what the price of the instance for price comparison. If one of these doesn't exist, we can't
 	// compute consolidation decisions for this candidate.
@@ -334,4 +354,29 @@ func getCandidatePrices(candidates []*Candidate) float64 {
 		price += compatibleOfferings.Cheapest().Price
 	}
 	return price
+}
+
+// defaultIPVSConsolidationGracePeriod is the default grace period to wait after
+// a pod resize completes before reconsidering the node for consolidation.
+const defaultIPVSConsolidationGracePeriod = 5 * time.Minute
+
+// hasActiveResize returns true if the pod has an active in-place resize,
+// indicated by a Resize status of "Proposed" or "InProgress".
+func hasActiveResize(pod *corev1.Pod) bool {
+	return pod.Status.Resize == corev1.PodResizeStatusInProgress ||
+		pod.Status.Resize == corev1.PodResizeStatus("Proposed")
+}
+
+// isInResizeGracePeriod returns true if the candidate node recently had a pod
+// resize complete and is still within the IPVS consolidation grace period.
+func (c *consolidation) isInResizeGracePeriod(cn *Candidate) bool {
+	lastResize := cn.LastResizeCompletionTime()
+	if lastResize.IsZero() {
+		return false
+	}
+	gracePeriod := defaultIPVSConsolidationGracePeriod
+	if cn.NodePool.Spec.Disruption.IPVSConsolidationGracePeriod != nil {
+		gracePeriod = cn.NodePool.Spec.Disruption.IPVSConsolidationGracePeriod.Duration
+	}
+	return c.clock.Since(lastResize) < gracePeriod
 }

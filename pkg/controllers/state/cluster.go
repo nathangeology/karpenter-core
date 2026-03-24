@@ -644,16 +644,18 @@ func (c *Cluster) newStateFromNodeClaim(nodeClaim *v1.NodeClaim, oldNode *StateN
 		oldNode = NewNode()
 	}
 	n := &StateNode{
-		Node:              oldNode.Node,
-		NodeClaim:         nodeClaim,
-		daemonSetRequests: oldNode.daemonSetRequests,
-		daemonSetLimits:   oldNode.daemonSetLimits,
-		podRequests:       oldNode.podRequests,
-		podLimits:         oldNode.podLimits,
-		hostPortUsage:     oldNode.hostPortUsage,
-		volumeUsage:       oldNode.volumeUsage,
-		markedForDeletion: oldNode.markedForDeletion,
-		nominatedUntil:    oldNode.nominatedUntil,
+		Node:                     oldNode.Node,
+		NodeClaim:                nodeClaim,
+		daemonSetRequests:        oldNode.daemonSetRequests,
+		daemonSetLimits:          oldNode.daemonSetLimits,
+		podRequests:              oldNode.podRequests,
+		podLimits:                oldNode.podLimits,
+		hostPortUsage:            oldNode.hostPortUsage,
+		volumeUsage:              oldNode.volumeUsage,
+		markedForDeletion:        oldNode.markedForDeletion,
+		nominatedUntil:           oldNode.nominatedUntil,
+		lastResizeCompletionTime: oldNode.lastResizeCompletionTime,
+		podResizeStatuses:        oldNode.podResizeStatuses,
 	}
 	// Cleanup the old nodeClaim with its old providerID if its providerID changes
 	// This can happen since nodes don't get created with providerIDs. Rather, CCM picks up the
@@ -702,6 +704,7 @@ func (c *Cluster) newStateFromNode(ctx context.Context, node *corev1.Node, oldNo
 		volumeUsage:       scheduling.NewVolumeUsage(),
 		markedForDeletion: oldNode.markedForDeletion,
 		nominatedUntil:    oldNode.nominatedUntil,
+		podResizeStatuses: map[types.NamespacedName]corev1.PodResizeStatus{},
 	}
 	if err := multierr.Combine(
 		c.populateResourceRequests(ctx, n),

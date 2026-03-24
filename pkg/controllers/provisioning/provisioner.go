@@ -57,6 +57,7 @@ import (
 	nodeutils "sigs.k8s.io/karpenter/pkg/utils/node"
 	nodepoolutils "sigs.k8s.io/karpenter/pkg/utils/nodepool"
 	"sigs.k8s.io/karpenter/pkg/utils/pretty"
+	"sigs.k8s.io/karpenter/pkg/utils/resources"
 )
 
 // LaunchOptions are the set of options that can be used to trigger certain
@@ -85,6 +86,11 @@ type Provisioner struct {
 	recorder       events.Recorder
 	cm             *pretty.ChangeMonitor
 	clock          clock.Clock
+
+	// podFirstSeen tracks the first time a pod with steady-state annotations
+	// was observed as pending. Used by the IPVS provisioning patience mechanism
+	// to defer provisioning until the patience duration has elapsed.
+	podFirstSeen map[types.UID]time.Time
 }
 
 func NewProvisioner(kubeClient client.Client, recorder events.Recorder,
@@ -100,6 +106,7 @@ func NewProvisioner(kubeClient client.Client, recorder events.Recorder,
 		recorder:       recorder,
 		cm:             pretty.NewChangeMonitor(),
 		clock:          clock,
+		podFirstSeen:   make(map[types.UID]time.Time),
 	}
 	return p
 }
@@ -234,6 +241,112 @@ func (p *Provisioner) consolidationWarnings(ctx context.Context, pods []*corev1.
 
 var ErrNodePoolsNotFound = errors.New("no nodepools found")
 
+// filterPatiencePods separates pending pods into those ready for provisioning and those
+// that should be deferred due to the IPVS provisioning patience mechanism. When the
+// InPlacePodVerticalScaling feature gate is enabled and a pod has steady-state annotations,
+// the provisioner tracks when the pod was first seen and defers provisioning until the
+// configured patience duration has elapsed. This gives pods time to scale down in place
+// before new nodes are created.
+//
+// During the patience window, the provisioner evaluates whether the pod could fit on
+// existing nodes using its steady-state resource values (lower than current spec requests).
+// If the pod fits at steady-state, provisioning is deferred — the expectation is that the
+// pod will scale down in place and become schedulable. If the pod does not fit on any
+// existing node even at steady-state values, it is provisioned immediately since waiting
+// would not help.
+//
+// Pods without steady-state annotations are always returned as ready for provisioning.
+// Pods whose patience duration has expired are also returned as ready.
+// The method also cleans up tracking entries for pods that are no longer in the pending set.
+func (p *Provisioner) filterPatiencePods(ctx context.Context, pods []*corev1.Pod) (ready []*corev1.Pod, deferred []*corev1.Pod) {
+	opts := options.FromContext(ctx)
+	if !opts.FeatureGates.InPlacePodVerticalScaling {
+		return pods, nil
+	}
+
+	now := p.clock.Now()
+	patienceDuration := opts.IPVSPatienceDuration
+
+	// Build a set of current pending pod UIDs for cleanup
+	pendingUIDs := make(map[types.UID]struct{}, len(pods))
+	for _, pod := range pods {
+		pendingUIDs[pod.UID] = struct{}{}
+	}
+
+	// Clean up entries for pods that are no longer pending
+	for uid := range p.podFirstSeen {
+		if _, exists := pendingUIDs[uid]; !exists {
+			delete(p.podFirstSeen, uid)
+		}
+	}
+
+	for _, pod := range pods {
+		steadyStateRequests, hasSteadyState := resources.SteadyStateRequestsForPod(pod)
+		if !hasSteadyState {
+			ready = append(ready, pod)
+			continue
+		}
+
+		// Debug log when steady-state annotations are used for scheduling evaluation
+		specRequests := resources.Ceiling(pod).Requests
+		log.FromContext(ctx).V(4).Info("evaluating pod with steady-state annotations for provisioning patience",
+			"Pod", klog.KObj(pod),
+			"specRequests", resources.String(specRequests),
+			"steadyStateRequests", resources.String(steadyStateRequests))
+
+		firstSeen, tracked := p.podFirstSeen[pod.UID]
+		if !tracked {
+			// First time seeing this pod — record first-seen time
+			p.podFirstSeen[pod.UID] = now
+			firstSeen = now
+		}
+
+		if now.Sub(firstSeen) >= patienceDuration {
+			// Patience expired — provision with current spec requests
+			ready = append(ready, pod)
+			log.FromContext(ctx).WithValues("Pod", klog.KObj(pod), "elapsed", now.Sub(firstSeen)).V(1).Info("patience duration expired for pod with steady-state annotations, proceeding with provisioning")
+			continue
+		}
+
+		// Patience hasn't expired yet — evaluate if pod fits at steady-state on existing nodes
+		if p.podFitsAtSteadyState(steadyStateRequests) {
+			deferred = append(deferred, pod)
+			if !tracked {
+				log.FromContext(ctx).WithValues("Pod", klog.KObj(pod)).V(1).Info("deferring provisioning for pod with steady-state annotations, fits at steady-state on existing node")
+			}
+		} else {
+			// Pod doesn't fit on any existing node even at steady-state — provision immediately
+			ready = append(ready, pod)
+			log.FromContext(ctx).WithValues("Pod", klog.KObj(pod)).V(1).Info("pod with steady-state annotations does not fit on any existing node at steady-state, provisioning immediately")
+		}
+	}
+
+	if len(deferred) > 0 {
+		log.FromContext(ctx).WithValues("deferred-pods", len(deferred), "patience-duration", patienceDuration).V(1).Info("deferred provisioning for pod(s) with steady-state annotations within patience window")
+	}
+
+	return ready, deferred
+}
+
+// podFitsAtSteadyState checks whether the given steady-state resource requests
+// could fit on any existing node in the cluster. This is used during the patience
+// window to determine if deferring provisioning is worthwhile — if the pod could
+// fit at steady-state, it's likely the pod will scale down and become schedulable
+// without needing a new node.
+func (p *Provisioner) podFitsAtSteadyState(steadyStateRequests corev1.ResourceList) bool {
+	for node := range p.cluster.Nodes() {
+		// Only consider initialized nodes that are not being deleted
+		if !node.Initialized() || node.MarkedForDeletion() {
+			continue
+		}
+		available := node.Available()
+		if resources.Fits(steadyStateRequests, available) {
+			return true
+		}
+	}
+	return false
+}
+
 //nolint:gocyclo
 func (p *Provisioner) NewScheduler(
 	ctx context.Context,
@@ -319,12 +432,31 @@ func (p *Provisioner) Schedule(ctx context.Context) (scheduler.Results, error) {
 	// We don't consider the nodes that are MarkedForDeletion since this capacity shouldn't be considered
 	// as persistent capacity for the cluster (since it will soon be removed). Additionally, we are scheduling for
 	// the pods that are on these nodes so the MarkedForDeletion node capacity can't be considered.
+	//
+	// IPVS Awareness: When the InPlacePodVerticalScaling feature gate is enabled, the scheduler's
+	// updateCachedPodData uses resources.IPVSAwareRequestsForPod to compute each pod's resource
+	// requirements as max(spec.requests, allocatedResources, peak annotations). This flows through
+	// NodeClaim.CanAdd (for instance type filtering) and NodeClaim.Add (which sums peak envelopes
+	// when multiple annotated pods are scheduled to the same NodeClaim). Unannotated pods fall back
+	// to spec requests. No additional provisioner-specific logic is needed because the scheduler
+	// handles all IPVS-aware resource computation.
 	nodes := p.cluster.DeepCopyNodes()
 
 	// Get pods, exit if nothing to do
 	pendingPods, err := p.GetPendingPods(ctx)
 	if err != nil {
 		return scheduler.Results{}, err
+	}
+
+	// IPVS Provisioning Patience: When the feature gate is enabled, pods with
+	// steady-state annotations are deferred during the patience window to give
+	// them time to scale down in place before provisioning new nodes.
+	pendingPods, deferredPods := p.filterPatiencePods(ctx, pendingPods)
+	// Mark deferred pods so the cluster state knows they were intentionally held back
+	if len(deferredPods) > 0 {
+		p.cluster.MarkPodSchedulingDecisions(ctx, lo.SliceToMap(deferredPods, func(po *corev1.Pod) (*corev1.Pod, error) {
+			return po, fmt.Errorf("deferred by IPVS provisioning patience, waiting for steady-state scale-down")
+		}), nil, nil)
 	}
 
 	// Get pods from nodes that are preparing for deletion
