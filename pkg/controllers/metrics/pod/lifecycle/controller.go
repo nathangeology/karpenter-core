@@ -42,16 +42,18 @@ import (
 type Controller struct {
 	kubeClient client.Client
 	cluster    *state.Cluster
+	aggregator *Aggregator
 	// Track pods we've already recorded startup metrics for
 	recordedStartup sets.Set[string]
 	// Track pods we've already recorded shutdown metrics for
 	recordedShutdown sets.Set[string]
 }
 
-func NewController(kubeClient client.Client, cluster *state.Cluster) *Controller {
+func NewController(kubeClient client.Client, cluster *state.Cluster, aggregator *Aggregator) *Controller {
 	return &Controller{
 		kubeClient:       kubeClient,
 		cluster:          cluster,
+		aggregator:       aggregator,
 		recordedStartup:  sets.New[string](),
 		recordedShutdown: sets.New[string](),
 	}
@@ -95,7 +97,13 @@ func (c *Controller) recordStartupMetrics(ctx context.Context, pod *corev1.Pod, 
 	creationTime := pod.CreationTimestamp.Time
 
 	// Total startup: creation → ready
-	LifecycleStartupTotalDurationSeconds.Observe(readyTime.Sub(creationTime).Seconds(), labels)
+	startupDur := readyTime.Sub(creationTime).Seconds()
+	LifecycleStartupTotalDurationSeconds.Observe(startupDur, labels)
+
+	// Feed into Bayesian aggregator
+	if c.aggregator != nil {
+		c.aggregator.RecordStartup(labels[namespaceLabel], labels[deploymentLabel], startupDur)
+	}
 
 	// Scheduling decision duration from cluster state
 	nn := types.NamespacedName{Name: pod.Name, Namespace: pod.Namespace}
@@ -240,9 +248,13 @@ func (c *Controller) recordShutdownMetrics(ctx context.Context, pod *corev1.Pod,
 		shutdownEnd = terminalTime
 	}
 	if !shutdownEnd.IsZero() {
-		dur := shutdownEnd.Sub(deletionTime).Seconds()
-		if dur >= 0 {
-			LifecycleShutdownTotalDurationSeconds.Observe(dur, labels)
+		shutdownDur := shutdownEnd.Sub(deletionTime).Seconds()
+		if shutdownDur >= 0 {
+			LifecycleShutdownTotalDurationSeconds.Observe(shutdownDur, labels)
+			// Feed into Bayesian aggregator
+			if c.aggregator != nil {
+				c.aggregator.RecordShutdown(labels[namespaceLabel], labels[deploymentLabel], shutdownDur)
+			}
 		}
 	}
 
