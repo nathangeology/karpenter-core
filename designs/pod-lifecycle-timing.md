@@ -28,15 +28,17 @@ Pod Events (watch)
 │  (per-pod breakdown) │
 └─────────┬───────────┘
           │
-          ▼
-┌─────────────────────┐
-│  Bayesian Aggregator │  ← Updates sufficient statistics per deployment
-│  (Normal-Gamma model)│
-└─────────┬───────────┘
+          ├──────────────────────┐
+          ▼                      ▼
+┌─────────────────────┐  ┌──────────────────┐
+│  Bayesian Aggregator │  │ Prometheus Metrics│  ← Histograms recorded immediately
+│  (Normal-Gamma model)│  │ (per-observation) │
+└─────────┬───────────┘  └──────────────────┘
           │
           ▼
 ┌─────────────────────┐
 │  Annotation Writer   │  ← Periodic (~hourly) annotation on Deployment/ReplicaSet
+│  + Gauge Updater     │     + updates Prometheus gauges with posterior estimates
 └─────────────────────┘
 ```
 
@@ -92,7 +94,7 @@ beta'  = beta + (kappa * (x - mu)^2) / (2 * kappa')
 n'     = n + 1
 ```
 
-**Prior initialization:** `mu=0, kappa=1, alpha=1, beta=1` (weakly informative). After ~5 observations the prior is washed out by data.
+**Prior initialization:** `mu=0, kappa=20, alpha=10, beta=10` (moderately informative). With `kappa=20`, approximately 20 real observations are needed before data dominates the prior. This prevents early outliers (e.g., a cold image pull or a one-off slow node launch) from permanently skewing estimates. The prior washes out gradually, giving the model stability during the initial observation window while still converging to accurate estimates as data accumulates.
 
 **Point estimates** exposed in annotations:
 - Mean: `mu`
@@ -145,19 +147,59 @@ The `node_provisioning` phase is further decomposed when Karpenter is the provis
 
 These sub-phases are tracked with the same Bayesian model and included in the annotation under `startup.node_provisioning_breakout` when available.
 
+### Prometheus Metrics
+
+In addition to annotations, the controller exposes per-phase timing as Prometheus metrics. This enables dashboarding, alerting, and integration with existing monitoring stacks without requiring operators to parse annotation JSON.
+
+**Histogram metrics** — each pod lifecycle observation is recorded as a histogram sample:
+
+```
+# Startup phase durations (seconds), labeled by namespace, deployment, and phase
+karpenter_pod_lifecycle_startup_duration_seconds_bucket{namespace="default", deployment="web", phase="node_provisioning", le="10"} 4
+karpenter_pod_lifecycle_startup_duration_seconds_bucket{namespace="default", deployment="web", phase="node_provisioning", le="30"} 18
+...
+karpenter_pod_lifecycle_startup_duration_seconds_sum{namespace="default", deployment="web", phase="node_provisioning"} 1023.4
+karpenter_pod_lifecycle_startup_duration_seconds_count{namespace="default", deployment="web", phase="node_provisioning"} 23
+
+# Shutdown phase durations
+karpenter_pod_lifecycle_shutdown_duration_seconds_bucket{namespace="default", deployment="web", phase="graceful_termination", le="5"} 12
+...
+
+# Node provisioning sub-phase durations (when Karpenter provisions)
+karpenter_node_provisioning_phase_duration_seconds_bucket{namespace="default", deployment="web", phase="instance_launch", le="60"} 15
+...
+```
+
+**Gauge metrics** — the Bayesian posterior summaries, updated on each annotation write:
+
+```
+# Current mean estimate per phase
+karpenter_pod_lifecycle_timing_mean_seconds{namespace="default", deployment="web", phase="node_provisioning"} 45.2
+
+# Current standard deviation estimate per phase
+karpenter_pod_lifecycle_timing_stddev_seconds{namespace="default", deployment="web", phase="node_provisioning"} 8.1
+
+# Observation count per phase
+karpenter_pod_lifecycle_timing_observations_total{namespace="default", deployment="web", phase="node_provisioning"} 23
+```
+
+Histograms provide raw distribution data for percentile queries (`histogram_quantile(0.99, ...)`), while gauges expose the Bayesian estimates directly for lightweight dashboards. Both use standard Prometheus client libraries already vendored by Karpenter.
+
 ### Controller Design
 
 The controller runs as part of the Karpenter controller manager:
 
 1. **Pod watcher** — Watches pod condition transitions and records timestamps in an in-memory ring buffer (bounded, per-deployment, evicted after annotation write).
 2. **NodeClaim correlator** — Joins pod scheduling events with NodeClaim lifecycle to attribute node provisioning time to specific pods.
-3. **Annotation writer** — Periodic reconciliation loop that:
+3. **Metrics recorder** — Records each per-phase duration as a Prometheus histogram observation immediately upon pod lifecycle completion. This is fire-and-forget; no buffering required since Prometheus scrapes handle aggregation.
+4. **Annotation writer** — Periodic reconciliation loop that:
    - Computes Bayesian updates from buffered observations
    - Serializes summary stats to the Deployment annotation
+   - Updates Prometheus gauge metrics with current posterior estimates
    - Persists full sufficient statistics to a ConfigMap `karpenter-lifecycle-stats-<namespace>-<deployment>`
    - Clears the observation buffer
 
-The controller is stateless across restarts — sufficient statistics are recovered from the ConfigMap. Observations buffered but not yet written are lost on crash (acceptable: they represent at most one annotation interval of data).
+The controller is stateless across restarts — sufficient statistics are recovered from the ConfigMap. Observations buffered but not yet written are lost on crash (acceptable: they represent at most one annotation interval of data). Prometheus histogram data is similarly lost on restart, but this is standard behavior for in-process metrics.
 
 ## Design Questions
 
@@ -165,9 +207,9 @@ The controller is stateless across restarts — sufficient statistics are recove
 
 An EMA provides a point estimate of the mean but discards uncertainty information. The Normal-Gamma model provides both mean and variance estimates, plus a natural confidence measure (`n` / `kappa`). This lets operators distinguish "we think it's 45s but we've only seen 3 pods" from "we're confident it's 45s based on 200 pods." The computational cost is identical — both are O(1) per update with O(1) storage.
 
-### Why annotate Deployments instead of emitting Prometheus metrics?
+### Why both annotations and Prometheus metrics?
 
-Annotations are zero-dependency: no metrics pipeline required, visible via `kubectl`, and travel with the object. Prometheus metrics are a natural future extension but require the operator to have a monitoring stack. The annotation approach works out of the box. A future iteration can expose the same data as Prometheus metrics for dashboarding.
+Annotations are zero-dependency: no metrics pipeline required, visible via `kubectl`, and travel with the object. They serve as the portable, always-available interface. Prometheus metrics complement this by enabling dashboarding, alerting, and percentile queries (`p99 startup latency`) that annotations cannot support. Since Karpenter already vendors the Prometheus client library, the incremental cost of emitting histograms and gauges is minimal. Operators without a monitoring stack still get full value from annotations alone.
 
 ### Why not store per-pod timing as Events?
 
@@ -179,7 +221,6 @@ Frequent annotation writes create unnecessary API server load and etcd churn. Ho
 
 ## Out of Scope (Initial Implementation)
 
-- **Prometheus metrics exporter** — Future iteration; annotations are the initial interface
 - **Per-node-type breakdowns** — Tracking timing by instance type adds cardinality; deferred until annotation schema is validated
 - **Historical trend analysis** — The Bayesian model captures current state, not time-series history; external tooling can snapshot annotations over time
 - **Custom phase definitions** — Users cannot define arbitrary phases initially; the fixed phase set covers the common cases
