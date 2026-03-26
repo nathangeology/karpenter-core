@@ -128,6 +128,7 @@ var _ = Describe("Options", func() {
 					NodeOverlay:               lo.ToPtr(false),
 					StaticCapacity:            lo.ToPtr(false),
 					InPlacePodVerticalScaling: lo.ToPtr(false),
+					PodLifecycleTiming:        lo.ToPtr(false),
 				},
 				IgnoreDRARequests:    lo.ToPtr(true),
 				IPVSPatienceDuration: lo.ToPtr(60 * time.Second),
@@ -346,6 +347,7 @@ var _ = Describe("Options", func() {
 			Entry("when NodeOverlay is overridden", "NodeOverlay"),
 			Entry("when StaticCapacity is overridden", "StaticCapacity"),
 			Entry("when InPlacePodVerticalScaling is overridden", "InPlacePodVerticalScaling"),
+			Entry("when PodLifecycleTiming is overridden", "PodLifecycleTiming"),
 		)
 	})
 
@@ -442,6 +444,7 @@ func expectOptionsMatch(optsA, optsB *options.Options) {
 	Expect(optsA.FeatureGates.StaticCapacity).To(Equal(optsB.FeatureGates.StaticCapacity))
 	Expect(optsA.FeatureGates.SpotToSpotConsolidation).To(Equal(optsB.FeatureGates.SpotToSpotConsolidation))
 	Expect(optsA.FeatureGates.InPlacePodVerticalScaling).To(Equal(optsB.FeatureGates.InPlacePodVerticalScaling))
+	Expect(optsA.FeatureGates.PodLifecycleTiming).To(Equal(optsB.FeatureGates.PodLifecycleTiming))
 	Expect(optsA.IgnoreDRARequests).To(Equal(optsB.IgnoreDRARequests))
 	Expect(optsA.IPVSPatienceDuration).To(Equal(optsB.IPVSPatienceDuration))
 }
