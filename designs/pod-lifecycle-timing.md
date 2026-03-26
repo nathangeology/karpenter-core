@@ -15,32 +15,42 @@ Without per-phase timing breakdowns, operators resort to ad-hoc log scraping, cu
 
 ## Recommended Solution
 
-Introduce a controller that observes pod lifecycle events, computes per-phase timing breakdowns, and annotates Deployment (and ReplicaSet) objects with rolling Bayesian statistics. The design avoids storing raw event history by maintaining sufficient statistics that update incrementally.
+Introduce a controller within the existing Karpenter controller manager that observes pod lifecycle events, computes per-phase timing breakdowns, and exposes them via Prometheus metrics (per-phase histograms) and Deployment annotations (end-to-end Bayesian summaries). The controller leverages the existing `state.Cluster` pod scheduling tracking, `operatorpkg/metrics` wrappers, and the standard controller-runtime reconciler pattern already used by `pkg/controllers/metrics/pod`.
+
+The feature is gated behind a `PodLifecycleTiming=false` feature flag in the `FeatureGates` struct, following the same pattern as `NodeRepair`, `SpotToSpotConsolidation`, etc.
 
 ### Architecture
 
 ```
-Pod Events (watch)
-       │
-       ▼
-┌─────────────────────┐
-│  Timing Collector    │  ← Observes pod condition transitions, node events
-│  (per-pod breakdown) │
-└─────────┬───────────┘
-          │
-          ├──────────────────────┐
-          ▼                      ▼
-┌─────────────────────┐  ┌──────────────────┐
-│  Bayesian Aggregator │  │ Prometheus Metrics│  ← Histograms recorded immediately
-│  (Normal-Gamma model)│  │ (per-observation) │
-└─────────┬───────────┘  └──────────────────┘
-          │
-          ▼
-┌─────────────────────┐
-│  Annotation Writer   │  ← Periodic (~hourly) annotation on Deployment/ReplicaSet
-│  + Gauge Updater     │     + updates Prometheus gauges with posterior estimates
-└─────────────────────┘
+Pod Events (watch)                NodeClaim Events (watch)
+       │                                  │
+       └──────────┬───────────────────────┘
+                  ▼
+       ┌─────────────────────┐
+       │  Timing Collector    │  ← Correlates pod conditions with NodeClaim lifecycle
+       │  (per-pod breakdown) │     Extends existing pod metrics controller
+       └─────────┬───────────┘
+                 │
+                 ├──────────────────────┐
+                 ▼                      ▼
+      ┌─────────────────────┐  ┌──────────────────┐
+      │  Bayesian Aggregator │  │ Prometheus Metrics│  ← Per-phase histograms recorded
+      │  (Normal-Gamma model)│  │ (per-observation) │     immediately on pod completion
+      └─────────┬───────────┘  └──────────────────┘
+                │
+                ▼
+      ┌─────────────────────┐
+      │  Annotation Writer   │  ← Periodic (~hourly) end-to-end summary on Deployment
+      └─────────────────────┘
 ```
+
+### Design Decisions
+
+- **Lives in karpenter-core** (`pkg/controllers/metrics/pod/lifecycle/`), not a provider repo. Node provisioning sub-phases use NodeClaim timestamps which are core abstractions.
+- **Runs in existing controller manager** — extends the existing Karpenter ServiceAccount. RBAC additions are minimal: read access to Deployments/ReplicaSets (already available), write access to Deployment annotations and a stats ConfigMap.
+- **Feature gated** as `PodLifecycleTiming=false` (alpha, opt-in).
+- **Annotations carry end-to-end summaries only** (total startup/shutdown time with Bayesian stats). Per-phase detail lives in Prometheus metrics. This keeps annotations small and useful for future consolidation heuristics.
+- **Per-phase metrics use separate metric names** (not a `phase` label), keeping cardinality at `namespace × deployment` per metric rather than multiplying by phase count.
 
 ### Phase Breakdown
 
@@ -105,7 +115,9 @@ This model is constant-space (5 floats per phase), updates in O(1), and naturall
 
 ### Annotation Schema
 
-Annotations are written to the Deployment object (and optionally the current ReplicaSet) on a periodic cadence (~1 hour, configurable).
+Annotations carry end-to-end timing summaries only — per-phase breakdowns live in Prometheus. This keeps annotations compact and useful as inputs for future consolidation heuristics.
+
+Annotations are written to the Deployment object on a periodic cadence (~1 hour, configurable).
 
 ```yaml
 metadata:
@@ -114,26 +126,25 @@ metadata:
       {
         "version": "v1alpha1",
         "updated": "2026-03-26T19:00:00Z",
-        "startup": {
-          "node_provisioning": {"mu": 45.2, "sigma": 8.1, "n": 23},
-          "image_pull":        {"mu": 12.4, "sigma": 3.2, "n": 47},
-          "init_containers":   {"mu": 5.1,  "sigma": 1.0, "n": 47},
-          "container_start":   {"mu": 1.2,  "sigma": 0.3, "n": 47},
-          "readiness":         {"mu": 8.7,  "sigma": 2.5, "n": 47}
-        },
-        "shutdown": {
-          "graceful_termination": {"mu": 15.3, "sigma": 4.2, "n": 31},
-          "container_stop":      {"mu": 2.1,  "sigma": 0.8, "n": 31},
-          "volume_detach":       {"mu": 3.4,  "sigma": 1.1, "n": 31}
-        }
+        "startup": {"mu": 72.6, "sigma": 12.3, "n": 47},
+        "shutdown": {"mu": 20.8, "sigma": 5.1, "n": 31}
       }
 ```
 
-The annotation exposes `mu` (mean seconds), `sigma` (standard deviation), and `n` (observation count) — the user-facing summary. The full sufficient statistics (`kappa`, `alpha`, `beta`) are stored in a ConfigMap or internal CRD status to avoid annotation bloat.
+The annotation exposes `mu` (mean seconds), `sigma` (standard deviation), and `n` (observation count) for total startup and shutdown time. The full sufficient statistics (`kappa`, `alpha`, `beta`) are stored in a ConfigMap to avoid annotation bloat.
 
 **Key:** `karpenter.sh/lifecycle-timing`
-**Scope:** Deployment and active ReplicaSet
+**Scope:** Deployment
 **Update cadence:** Configurable, default 1 hour
+
+#### Sufficient Statistics Storage: ConfigMap vs CRD
+
+| Approach | Pros | Cons |
+|----------|------|------|
+| **ConfigMap** (`karpenter-lifecycle-stats-<ns>-<deploy>`) | No CRD registration needed, simple RBAC, works immediately | One ConfigMap per deployment — could be many objects; no schema validation; namespace-scoped naming collisions possible |
+| **CRD** (`LifecycleTimingStats`) | Schema validation, single list query, natural kubectl experience, versioned API | Requires CRD registration + code generation, heavier initial implementation, migration path if schema changes |
+
+**Recommendation: Start with ConfigMap.** The data is internal controller state, not user-facing API. ConfigMap count scales linearly with deployments but each is tiny (~500 bytes). If the feature graduates to beta and the number of tracked deployments becomes a concern, migrating to a CRD is straightforward since the data format is the same — only the storage backend changes.
 
 ### Node Provisioning Breakout
 
@@ -149,53 +160,50 @@ These sub-phases are tracked with the same Bayesian model and included in the an
 
 ### Prometheus Metrics
 
-In addition to annotations, the controller exposes per-phase timing as Prometheus metrics. This enables dashboarding, alerting, and integration with existing monitoring stacks without requiring operators to parse annotation JSON.
+The controller exposes per-phase timing as individual Prometheus histogram metrics, following the existing pattern in `pkg/controllers/metrics/pod` which uses `operatorpkg/metrics` wrappers and `controller-runtime/pkg/metrics` registry.
 
-**Histogram metrics** — each pod lifecycle observation is recorded as a histogram sample:
+Each phase gets its own metric name rather than using a `phase` label. This keeps cardinality at `namespace × deployment` per metric and avoids the combinatorial explosion of a phase label dimension.
 
-```
-# Startup phase durations (seconds), labeled by namespace, deployment, and phase
-karpenter_pod_lifecycle_startup_duration_seconds_bucket{namespace="default", deployment="web", phase="node_provisioning", le="10"} 4
-karpenter_pod_lifecycle_startup_duration_seconds_bucket{namespace="default", deployment="web", phase="node_provisioning", le="30"} 18
-...
-karpenter_pod_lifecycle_startup_duration_seconds_sum{namespace="default", deployment="web", phase="node_provisioning"} 1023.4
-karpenter_pod_lifecycle_startup_duration_seconds_count{namespace="default", deployment="web", phase="node_provisioning"} 23
-
-# Shutdown phase durations
-karpenter_pod_lifecycle_shutdown_duration_seconds_bucket{namespace="default", deployment="web", phase="graceful_termination", le="5"} 12
-...
-
-# Node provisioning sub-phase durations (when Karpenter provisions)
-karpenter_node_provisioning_phase_duration_seconds_bucket{namespace="default", deployment="web", phase="instance_launch", le="60"} 15
-...
-```
-
-**Gauge metrics** — the Bayesian posterior summaries, updated on each annotation write:
+**Startup phase histograms** (labeled by `namespace`, `deployment`):
 
 ```
-# Current mean estimate per phase
-karpenter_pod_lifecycle_timing_mean_seconds{namespace="default", deployment="web", phase="node_provisioning"} 45.2
-
-# Current standard deviation estimate per phase
-karpenter_pod_lifecycle_timing_stddev_seconds{namespace="default", deployment="web", phase="node_provisioning"} 8.1
-
-# Observation count per phase
-karpenter_pod_lifecycle_timing_observations_total{namespace="default", deployment="web", phase="node_provisioning"} 23
+karpenter_pods_lifecycle_node_provisioning_duration_seconds{namespace, deployment}
+karpenter_pods_lifecycle_image_pull_duration_seconds{namespace, deployment}
+karpenter_pods_lifecycle_init_containers_duration_seconds{namespace, deployment}
+karpenter_pods_lifecycle_container_start_duration_seconds{namespace, deployment}
+karpenter_pods_lifecycle_readiness_duration_seconds{namespace, deployment}
+karpenter_pods_lifecycle_startup_total_duration_seconds{namespace, deployment}
 ```
 
-Histograms provide raw distribution data for percentile queries (`histogram_quantile(0.99, ...)`), while gauges expose the Bayesian estimates directly for lightweight dashboards. Both use standard Prometheus client libraries already vendored by Karpenter.
+**Shutdown phase histograms:**
+
+```
+karpenter_pods_lifecycle_graceful_termination_duration_seconds{namespace, deployment}
+karpenter_pods_lifecycle_container_stop_duration_seconds{namespace, deployment}
+karpenter_pods_lifecycle_volume_detach_duration_seconds{namespace, deployment}
+karpenter_pods_lifecycle_shutdown_total_duration_seconds{namespace, deployment}
+```
+
+**Node provisioning sub-phase histograms** (when Karpenter provisions the node):
+
+```
+karpenter_pods_lifecycle_scheduling_decision_duration_seconds{namespace, deployment}
+karpenter_pods_lifecycle_instance_launch_duration_seconds{namespace, deployment}
+karpenter_pods_lifecycle_node_registration_duration_seconds{namespace, deployment}
+```
+
+All histograms use `metrics.DurationBuckets()` for consistency with existing Karpenter metrics. Metrics are registered via `opmetrics.NewPrometheusHistogram()` following the established pattern.
 
 ### Controller Design
 
-The controller runs as part of the Karpenter controller manager:
+The controller lives at `pkg/controllers/metrics/pod/lifecycle/` and runs as part of the existing Karpenter controller manager, gated behind `PodLifecycleTiming` feature flag.
 
-1. **Pod watcher** — Watches pod condition transitions and records timestamps in an in-memory ring buffer (bounded, per-deployment, evicted after annotation write).
-2. **NodeClaim correlator** — Joins pod scheduling events with NodeClaim lifecycle to attribute node provisioning time to specific pods.
-3. **Metrics recorder** — Records each per-phase duration as a Prometheus histogram observation immediately upon pod lifecycle completion. This is fire-and-forget; no buffering required since Prometheus scrapes handle aggregation.
-4. **Annotation writer** — Periodic reconciliation loop that:
+1. **Pod watcher** — Reconciles on pod condition transitions. Uses `state.Cluster` to access `PodSchedulingSuccessTime` and `PodSchedulingDecisionTime` (already tracked). Records timestamps in an in-memory ring buffer (bounded, per-deployment, evicted after annotation write).
+2. **NodeClaim correlator** — Joins pod scheduling events with NodeClaim lifecycle timestamps (`Created`, `Launched`, `Registered` conditions on NodeClaim status) to compute provisioning sub-phases.
+3. **Metrics recorder** — Records each per-phase duration as a Prometheus histogram observation immediately upon pod lifecycle completion. Uses `opmetrics.NewPrometheusHistogram()` registered against `controller-runtime/pkg/metrics.Registry`.
+4. **Annotation writer** (PR 2) — Periodic reconciliation loop that:
    - Computes Bayesian updates from buffered observations
-   - Serializes summary stats to the Deployment annotation
-   - Updates Prometheus gauge metrics with current posterior estimates
+   - Serializes end-to-end summary stats to the Deployment annotation
    - Persists full sufficient statistics to a ConfigMap `karpenter-lifecycle-stats-<namespace>-<deployment>`
    - Clears the observation buffer
 
