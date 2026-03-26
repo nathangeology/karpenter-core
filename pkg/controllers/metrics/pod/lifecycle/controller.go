@@ -172,10 +172,17 @@ func (c *Controller) recordStartupMetrics(ctx context.Context, pod *corev1.Pod, 
 		LifecycleNodeProvisioningDurationSeconds.Observe(initialized.LastTransitionTime.Sub(ncCreation).Seconds(), labels)
 	}
 
-	// Image pull estimate: Registered → Scheduled (approximation)
-	if registered != nil && registered.IsTrue() && hasScheduled {
-		dur := scheduledCond.LastTransitionTime.Sub(registered.LastTransitionTime.Time).Seconds()
-		if dur >= 0 {
+	// Image pull estimate: Scheduled → Initialized (approximation)
+	// After a pod is scheduled to a node, the kubelet pulls images before init containers run.
+	// We approximate image pull as the gap between pod scheduled and pod initialized.
+	if hasScheduled && hasInit {
+		dur := initCond.LastTransitionTime.Sub(scheduledCond.LastTransitionTime.Time).Seconds()
+		// Only record if positive and we haven't already attributed this to init containers.
+		// For pods with no init containers, PodInitialized is set immediately, so this captures image pull.
+		// For pods with init containers, this overlaps with init container time — the image pull
+		// component is not separable from pod conditions alone. We skip recording in that case
+		// to avoid double-counting.
+		if dur >= 0 && len(pod.Spec.InitContainers) == 0 {
 			LifecycleImagePullDurationSeconds.Observe(dur, labels)
 		}
 	}
@@ -227,8 +234,17 @@ func (c *Controller) recordShutdownMetrics(ctx context.Context, pod *corev1.Pod,
 		}
 	}
 
-	// Total shutdown: deletion → now (best approximation for completed pods)
-	LifecycleShutdownTotalDurationSeconds.Observe(time.Since(deletionTime).Seconds(), labels)
+	// Total shutdown: deletion → last container finished (or latest condition transition)
+	shutdownEnd := latestFinish
+	if terminalTime.After(shutdownEnd) {
+		shutdownEnd = terminalTime
+	}
+	if !shutdownEnd.IsZero() {
+		dur := shutdownEnd.Sub(deletionTime).Seconds()
+		if dur >= 0 {
+			LifecycleShutdownTotalDurationSeconds.Observe(dur, labels)
+		}
+	}
 
 	// Volume detach duration from NodeClaim conditions
 	if pod.Spec.NodeName != "" {
