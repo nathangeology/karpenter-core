@@ -18,15 +18,15 @@ package lifecycle
 
 import (
 	"context"
-	"strings"
 	"time"
 
+	gocache "github.com/patrickmn/go-cache"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/samber/lo"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/sets"
 	controllerruntime "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
@@ -42,18 +42,18 @@ import (
 type Controller struct {
 	kubeClient client.Client
 	cluster    *state.Cluster
-	// Track pods we've already recorded startup metrics for
-	recordedStartup sets.Set[string]
-	// Track pods we've already recorded shutdown metrics for
-	recordedShutdown sets.Set[string]
+	// Track pods we've already recorded startup metrics for (TTL-bounded to prevent unbounded growth)
+	recordedStartup *gocache.Cache
+	// Track pods we've already recorded shutdown metrics for (TTL-bounded to prevent unbounded growth)
+	recordedShutdown *gocache.Cache
 }
 
 func NewController(kubeClient client.Client, cluster *state.Cluster) *Controller {
 	return &Controller{
 		kubeClient:       kubeClient,
 		cluster:          cluster,
-		recordedStartup:  sets.New[string](),
-		recordedShutdown: sets.New[string](),
+		recordedStartup:  gocache.New(time.Hour, 10*time.Minute),
+		recordedShutdown: gocache.New(time.Hour, 10*time.Minute),
 	}
 }
 
@@ -70,7 +70,7 @@ func (c *Controller) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	}
 
 	key := client.ObjectKeyFromObject(pod).String()
-	labels := c.labelsForPod(pod)
+	labels := c.labelsForPod(ctx, pod)
 
 	c.recordStartupMetrics(ctx, pod, key, labels)
 	c.recordShutdownMetrics(ctx, pod, key, labels)
@@ -79,7 +79,7 @@ func (c *Controller) Reconcile(ctx context.Context, req reconcile.Request) (reco
 }
 
 func (c *Controller) recordStartupMetrics(ctx context.Context, pod *corev1.Pod, key string, labels prometheus.Labels) {
-	if c.recordedStartup.Has(key) {
+	if _, found := c.recordedStartup.Get(key); found {
 		return
 	}
 	// Only record when pod becomes Ready
@@ -89,7 +89,7 @@ func (c *Controller) recordStartupMetrics(ctx context.Context, pod *corev1.Pod, 
 	if !ready {
 		return
 	}
-	c.recordedStartup.Insert(key)
+	c.recordedStartup.SetDefault(key, true)
 
 	readyTime := readyCond.LastTransitionTime.Time
 	creationTime := pod.CreationTimestamp.Time
@@ -139,6 +139,8 @@ func (c *Controller) recordStartupMetrics(ctx context.Context, pod *corev1.Pod, 
 	}
 
 	// NodeClaim-based phases (provisioning sub-phases)
+	// NOTE: This lookup fires at most once per pod due to the recordedStartup guard above,
+	// so the extra API call is acceptable and does not create per-reconcile overhead.
 	if pod.Spec.NodeName == "" {
 		return
 	}
@@ -189,7 +191,7 @@ func (c *Controller) recordStartupMetrics(ctx context.Context, pod *corev1.Pod, 
 }
 
 func (c *Controller) recordShutdownMetrics(ctx context.Context, pod *corev1.Pod, key string, labels prometheus.Labels) {
-	if c.recordedShutdown.Has(key) {
+	if _, found := c.recordedShutdown.Get(key); found {
 		return
 	}
 	if pod.DeletionTimestamp == nil {
@@ -199,7 +201,7 @@ func (c *Controller) recordShutdownMetrics(ctx context.Context, pod *corev1.Pod,
 	if pod.Status.Phase != corev1.PodSucceeded && pod.Status.Phase != corev1.PodFailed {
 		return
 	}
-	c.recordedShutdown.Insert(key)
+	c.recordedShutdown.SetDefault(key, true)
 
 	deletionTime := pod.DeletionTimestamp.Time
 
@@ -265,15 +267,23 @@ func (c *Controller) recordShutdownMetrics(ctx context.Context, pod *corev1.Pod,
 }
 
 // labelsForPod extracts namespace and deployment name from the pod.
-func (c *Controller) labelsForPod(pod *corev1.Pod) prometheus.Labels {
+// For pods owned by a ReplicaSet, it looks up the ReplicaSet's OwnerReferences
+// to find the actual Deployment name rather than string-splitting, which breaks
+// for deployment names containing hyphens.
+func (c *Controller) labelsForPod(ctx context.Context, pod *corev1.Pod) prometheus.Labels {
 	deployment := ""
 	for _, ref := range pod.OwnerReferences {
-		if strings.EqualFold(ref.Kind, "ReplicaSet") {
-			// ReplicaSet names are typically <deployment>-<hash>
-			parts := strings.Split(ref.Name, "-")
-			if len(parts) > 1 {
-				deployment = strings.Join(parts[:len(parts)-1], "-")
+		if ref.Kind == "ReplicaSet" {
+			rs := &appsv1.ReplicaSet{}
+			if err := c.kubeClient.Get(ctx, types.NamespacedName{Name: ref.Name, Namespace: pod.Namespace}, rs); err == nil {
+				for _, rsRef := range rs.OwnerReferences {
+					if rsRef.Kind == "Deployment" {
+						deployment = rsRef.Name
+						break
+					}
+				}
 			}
+			break
 		}
 	}
 	return prometheus.Labels{
