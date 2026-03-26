@@ -167,7 +167,11 @@ func NewControllers(
 	}
 
 	if options.FromContext(ctx).FeatureGates.PodLifecycleTiming {
-		controllers = append(controllers, metricspodlifecycle.NewController(kubeClient, cluster))
+		aggregator := metricspodlifecycle.NewAggregator()
+		controllers = append(controllers,
+			metricspodlifecycle.NewController(kubeClient, cluster, aggregator),
+			metricspodlifecycle.NewAnnotationWriter(kubeClient, clock, aggregator),
+		)
 	}
 
 	return controllers
