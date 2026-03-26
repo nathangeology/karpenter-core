@@ -60,6 +60,7 @@ type FeatureGates struct {
 	NodeOverlay               *bool
 	StaticCapacity            *bool
 	InPlacePodVerticalScaling *bool
+	PodLifecycleTiming        *bool
 }
 
 func Options(overrides ...OptionsFields) *options.Options {
@@ -98,6 +99,7 @@ func Options(overrides ...OptionsFields) *options.Options {
 			NodeOverlay:               lo.FromPtrOr(opts.FeatureGates.NodeOverlay, false),
 			StaticCapacity:            lo.FromPtrOr(opts.FeatureGates.StaticCapacity, false),
 			InPlacePodVerticalScaling: lo.FromPtrOr(opts.FeatureGates.InPlacePodVerticalScaling, false),
+			PodLifecycleTiming:        lo.FromPtrOr(opts.FeatureGates.PodLifecycleTiming, false),
 		},
 	}
 }
