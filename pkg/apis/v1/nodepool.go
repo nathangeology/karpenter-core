@@ -198,6 +198,9 @@ const (
 	DisruptionReasonUnderutilized DisruptionReason = "Underutilized"
 	DisruptionReasonEmpty         DisruptionReason = "Empty"
 	DisruptionReasonDrifted       DisruptionReason = "Drifted"
+	// DisruptionReasonBalanced is used internally when the Balanced consolidation
+	// policy approves a move via score threshold. It is not a budget reason.
+	DisruptionReasonBalanced DisruptionReason = "Balanced"
 )
 
 type Limits v1.ResourceList

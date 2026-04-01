@@ -161,7 +161,9 @@ func (m *MultiNodeConsolidation) firstNConsolidationOption(ctx context.Context, 
 		}
 		if validDecision {
 			// For Balanced policy, check the consolidation score
-			if !m.checkBalancedScore(ctx, cmd, allCandidates, m.ConsolidationType()) {
+			var ok bool
+			cmd, ok = m.checkBalancedScore(ctx, cmd, allCandidates, m.ConsolidationType())
+			if !ok {
 				validDecision = false
 			}
 		}

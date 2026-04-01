@@ -97,17 +97,18 @@ func isBalancedPolicy(candidates []*Candidate) bool {
 }
 
 // checkBalancedScore evaluates whether a consolidation command meets the Balanced policy score threshold.
-// Returns true if the move should proceed, false if it should be rejected.
-// For non-Balanced policies, always returns true.
-func (c *consolidation) checkBalancedScore(ctx context.Context, cmd Command, allCandidates []*Candidate, consolidationType string) bool {
+// Returns the (possibly modified) command and true if the move should proceed, false if it should be rejected.
+// For Balanced policies that pass the threshold, the command's ReasonOverride is set to Balanced.
+// For non-Balanced policies, always returns true with the command unchanged.
+func (c *consolidation) checkBalancedScore(ctx context.Context, cmd Command, allCandidates []*Candidate, consolidationType string) (Command, bool) {
 	if !isBalancedPolicy(cmd.Candidates) {
-		return true
+		return cmd, true
 	}
 
 	// Compute nodepool-level totals from all eligible candidates
 	totalCost, totalDisruption := ComputeNodePoolMetrics(ctx, allCandidates)
 	if totalCost == 0 {
-		return false
+		return cmd, false
 	}
 
 	// Compute deleted node cost
@@ -145,12 +146,17 @@ func (c *consolidation) checkBalancedScore(ctx context.Context, cmd Command, all
 		"score", score,
 		"threshold", threshold,
 		"decision", decision,
+		"consolidation_score", score,
 		"candidates", len(cmd.Candidates),
 		"deletedCost", deletedCost,
 		"replacementCost", replacementCost,
 	)
 
-	return score >= threshold
+	if score >= threshold {
+		cmd.ReasonOverride = v1.DisruptionReasonBalanced
+		return cmd, true
+	}
+	return cmd, false
 }
 
 // ShouldDisrupt is a predicate used to filter candidates

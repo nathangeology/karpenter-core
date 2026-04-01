@@ -101,7 +101,9 @@ func (s *SingleNodeConsolidation) ComputeCommands(ctx context.Context, disruptio
 			continue
 		}
 		// For Balanced policy, check the consolidation score before validation
-		if !s.checkBalancedScore(ctx, cmd, candidates, s.ConsolidationType()) {
+		var ok bool
+		cmd, ok = s.checkBalancedScore(ctx, cmd, candidates, s.ConsolidationType())
+		if !ok {
 			continue
 		}
 		if _, err = s.validator.Validate(ctx, cmd, consolidationTTL); err != nil {
