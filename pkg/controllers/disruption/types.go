@@ -157,9 +157,23 @@ type Command struct {
 	CreationTimestamp time.Time
 	ID                uuid.UUID
 
-	Results      scheduling.Results
-	Candidates   []*Candidate
-	Replacements []*Replacement
+	Results        scheduling.Results
+	Candidates     []*Candidate
+	Replacements   []*Replacement
+	ReasonOverride v1.DisruptionReason
+}
+
+// Reason returns the disruption reason for this command. If ReasonOverride is
+// set (e.g. for Balanced consolidation), it takes precedence over the Method's
+// default reason.
+func (c Command) Reason() v1.DisruptionReason {
+	if c.ReasonOverride != "" {
+		return c.ReasonOverride
+	}
+	if c.Method != nil {
+		return c.Method.Reason()
+	}
+	return ""
 }
 
 type Decision string

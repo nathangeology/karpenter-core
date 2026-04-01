@@ -27,6 +27,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/utils/clock"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"sigs.k8s.io/karpenter/pkg/utils/pretty"
 
@@ -85,6 +86,79 @@ func (c *consolidation) markConsolidated() {
 	c.lastConsolidationState = c.cluster.ConsolidationState()
 }
 
+// isBalancedPolicy returns true if any candidate in the command uses the Balanced consolidation policy.
+func isBalancedPolicy(candidates []*Candidate) bool {
+	for _, cn := range candidates {
+		if cn.NodePool.Spec.Disruption.ConsolidationPolicy == v1.ConsolidationPolicyBalanced {
+			return true
+		}
+	}
+	return false
+}
+
+// checkBalancedScore evaluates whether a consolidation command meets the Balanced policy score threshold.
+// Returns the (possibly modified) command and true if the move should proceed, false if it should be rejected.
+// For Balanced policies that pass the threshold, the command's ReasonOverride is set to Balanced.
+// For non-Balanced policies, always returns true with the command unchanged.
+func (c *consolidation) checkBalancedScore(ctx context.Context, cmd Command, allCandidates []*Candidate, consolidationType string) (Command, bool) {
+	if !isBalancedPolicy(cmd.Candidates) {
+		return cmd, true
+	}
+
+	// Compute nodepool-level totals from all eligible candidates
+	totalCost, totalDisruption := ComputeNodePoolMetrics(ctx, allCandidates)
+	if totalCost == 0 {
+		return cmd, false
+	}
+
+	// Compute deleted node cost
+	deletedCost := getCandidatePrices(cmd.Candidates)
+
+	// Compute replacement cost
+	replacementCost := 0.0
+	for _, nc := range cmd.Results.NewNodeClaims {
+		if len(nc.InstanceTypeOptions) > 0 {
+			offerings := nc.InstanceTypeOptions[0].Offerings
+			if len(offerings) > 0 {
+				replacementCost += offerings.Cheapest().Price
+			}
+		}
+	}
+
+	score := ComputeMoveScore(ctx, deletedCost, replacementCost, totalCost, cmd.Candidates, totalDisruption)
+
+	// Get threshold from the first Balanced candidate's NodePool
+	threshold := 0.5 // default k=2
+	for _, cn := range cmd.Candidates {
+		if cn.NodePool.Spec.Disruption.ConsolidationPolicy == v1.ConsolidationPolicyBalanced {
+			threshold = cn.NodePool.Spec.Disruption.GetDisruptionToleranceThreshold()
+			break
+		}
+	}
+
+	decision := string(cmd.Decision())
+	ConsolidationScoreHistogram.Observe(score, map[string]string{
+		decisionLabel:          decision,
+		ConsolidationTypeLabel: consolidationType,
+	})
+
+	log.FromContext(ctx).V(1).Info("balanced consolidation score",
+		"score", score,
+		"threshold", threshold,
+		"decision", decision,
+		"consolidation_score", score,
+		"candidates", len(cmd.Candidates),
+		"deletedCost", deletedCost,
+		"replacementCost", replacementCost,
+	)
+
+	if score >= threshold {
+		cmd.ReasonOverride = v1.DisruptionReasonBalanced
+		return cmd, true
+	}
+	return cmd, false
+}
+
 // ShouldDisrupt is a predicate used to filter candidates
 func (c *consolidation) ShouldDisrupt(ctx context.Context, cn *Candidate) bool {
 	// Disable consolidation for static NodePool
@@ -131,10 +205,10 @@ func (c *consolidation) ShouldDisrupt(ctx context.Context, cn *Candidate) bool {
 		c.recorder.Publish(disruptionevents.Unconsolidatable(cn.Node, cn.NodeClaim, fmt.Sprintf("NodePool %q has consolidation disabled", cn.NodePool.Name))...)
 		return false
 	}
-	// If we don't have the "WhenEmptyOrUnderutilized" policy set, we should not do any of the consolidation methods, but
-	// we should also not fire an event here to users since this can be confusing when the field on the NodePool
-	// is named "consolidationPolicy"
-	if cn.NodePool.Spec.Disruption.ConsolidationPolicy != v1.ConsolidationPolicyWhenEmptyOrUnderutilized {
+	// Allow consolidation for WhenEmptyOrUnderutilized and Balanced policies.
+	// WhenEmpty is handled by the Emptiness controller, not here.
+	policy := cn.NodePool.Spec.Disruption.ConsolidationPolicy
+	if policy != v1.ConsolidationPolicyWhenEmptyOrUnderutilized && policy != v1.ConsolidationPolicyBalanced {
 		c.recorder.Publish(disruptionevents.Unconsolidatable(cn.Node, cn.NodeClaim, fmt.Sprintf("NodePool %q has non-empty consolidation disabled", cn.NodePool.Name))...)
 		return false
 	}

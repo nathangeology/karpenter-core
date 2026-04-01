@@ -62,12 +62,22 @@ func (in *Budget) DeepCopy() *Budget {
 func (in *Disruption) DeepCopyInto(out *Disruption) {
 	*out = *in
 	in.ConsolidateAfter.DeepCopyInto(&out.ConsolidateAfter)
+	if in.DisruptionTolerance != nil {
+		in, out := &in.DisruptionTolerance, &out.DisruptionTolerance
+		*out = new(int32)
+		**out = **in
+	}
 	if in.Budgets != nil {
 		in, out := &in.Budgets, &out.Budgets
 		*out = make([]Budget, len(*in))
 		for i := range *in {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
+	}
+	if in.IPVSConsolidationGracePeriod != nil {
+		in, out := &in.IPVSConsolidationGracePeriod, &out.IPVSConsolidationGracePeriod
+		*out = new(metav1.Duration)
+		**out = **in
 	}
 }
 
