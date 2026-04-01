@@ -87,6 +87,30 @@ func sortCandidates(candidates []*Candidate) {
 
 Consider a NodePool with 100 nodes, 10 of which are drifted and underutilized. Today, consolidation might remove 5 non-drifted underutilized nodes while drift separately removes 5 drifted nodes — 10 total disruptions. With Phase 1, consolidation preferentially removes the 5 drifted underutilized nodes — 5 disruptions achieve the same outcome.
 
+### Method Execution Order: Consolidation Before Drift
+
+The current disruption controller method execution order is: Emptiness → StaticDrift → Drift → MultiNodeConsolidation → SingleNodeConsolidation. We propose reordering to make consolidation the primary mechanism for handling drifted nodes:
+
+1. **Emptiness** — fast, batch, no change to current behavior
+2. **MultiNodeConsolidation** (with drift-priority sorting) — highest value: combine multiple drifted underutilized nodes into fewer new nodes. A single multi-node consolidation action can resolve 3+ drifts while also achieving cost savings.
+3. **SingleNodeConsolidation** (with drift-priority sorting) — replace drifted expensive nodes with cheaper alternatives. Achieves drift compliance and cost savings in one action.
+4. **Drift** — cleanup/safety net for drifted nodes that consolidation couldn't handle (fully utilized nodes with no cost savings opportunity, but still need replacement for compliance)
+
+#### Rationale
+
+Drift-only replacement is a degenerate case of consolidation where `replacement_cost ≈ source_cost` (no savings). Consolidation can always do at least as well as drift, and often better — it replaces the node AND optimizes cost. Drift should only run when consolidation explicitly passes on a node (e.g., a fully utilized node with no cheaper alternative that still needs replacement for compliance).
+
+By running consolidation first with drift-priority sorting, most drifted nodes are handled through consolidation actions that also deliver cost savings. The drift method becomes a compliance safety net rather than the primary drift mechanism.
+
+### Drift as Cleanup
+
+With the method reordering above, the drift method's role is reframed:
+
+- **Drift is no longer the primary mechanism** for handling drifted nodes.
+- **Consolidation with drift-priority sorting is the primary mechanism** — it combines cost savings with drift progress in a single disruption.
+- **Drift becomes the compliance safety net**: "I don't care about cost, just replace this node because it's non-compliant." It handles drifted nodes that consolidation couldn't address — fully utilized nodes with no consolidation opportunity that still require replacement.
+- **This naturally resolves the starvation problem**: consolidation handles most drifted nodes as part of its normal operation, and drift only handles the remainder. Since consolidation runs first and preferentially targets drifted nodes, drift has less work to do and consumes less budget.
+
 ### Phase 2: Drift SLO Annotation
 
 A new annotation on NodePool defines the time window within which all current drifts should complete:
@@ -154,6 +178,40 @@ A NodePool has 100 nodes. An AMI update drifts all 100. The operator sets `drift
 
 In this scenario, drift needs only ~1 slot per cycle to meet the SLO, leaving 9 for consolidation. If drift falls behind (e.g., PDB blocks), the share automatically increases.
 
+### Per-Wave Drift Priority (Oldest First)
+
+When new drifts arrive while existing drifts are still in progress, the system must decide which drifted nodes to process first. The SLO deadline is per-drift-wave, not per-node — each wave of drift has its own completion target.
+
+#### Wave Ordering
+
+Candidate sort order for drifted nodes uses `ConditionTypeNodeDrifted.LastTransitionTime` to prioritize oldest-drifted first:
+
+1. **Drifted before non-drifted** — drifted nodes always sort higher than non-drifted
+2. **Oldest-drifted before newest-drifted** — within drifted nodes, sort by `LastTransitionTime` ascending
+3. **Disruption cost** — final tiebreaker within same-wave nodes
+
+```go
+func sortCandidates(candidates []*Candidate) {
+    sort.SliceStable(candidates, func(i, j int) bool {
+        iDrift := candidates[i].StateNode.DriftedCondition()
+        jDrift := candidates[j].StateNode.DriftedCondition()
+        iDrifted := iDrift != nil
+        jDrifted := jDrift != nil
+        if iDrifted != jDrifted {
+            return iDrifted
+        }
+        if iDrifted && jDrifted {
+            return iDrift.LastTransitionTime.Before(&jDrift.LastTransitionTime)
+        }
+        // ... existing sort criteria (cost, utilization, etc.)
+    })
+}
+```
+
+#### SLO Budget Across Waves
+
+The SLO budget computation is driven by the oldest active wave's deadline. As wave 1 completes (all its drifted nodes are disrupted), wave 2's deadline takes over as the driver for `drift_share` computation. This ensures each wave gets its full SLO window while maintaining forward progress on the oldest outstanding drift.
+
 ### Phase 3: Per-Reason Budget Isolation (Contingency)
 
 If Phases 1 and 2 do not fully resolve user pain, we pursue per-reason budget isolation:
@@ -201,6 +259,7 @@ Operators continue to experience consolidation starvation during drift events. T
 | Drift progress tracking adds memory overhead | Low | State is derived from existing NodeClaim conditions, not new storage. |
 | Phase 2 algorithm edge case: zero remaining time | Medium | When past deadline, set drift_share = total_budget (maximum priority). Emit warning. |
 | Consolidation starved if SLO deadline is very tight | Medium | Document that tight SLOs reduce consolidation budget. Users control the trade-off explicitly. |
+| Consolidation timeout blocking drift progress | Medium | If consolidation evaluation takes too long (e.g., large candidate sets), drift may be delayed since it now runs after consolidation. Mitigated by drift running as a fallback after consolidation — even if consolidation times out, drift still executes on remaining drifted nodes in the same cycle. |
 
 ### Backward Compatibility
 
@@ -234,6 +293,7 @@ Phase 1 adds a single boolean comparison to the sort function — negligible ove
 - Drift SLO annotation removed mid-drift (revert to current behavior immediately).
 - Drift SLO annotation changed mid-drift (recompute deadline from new value).
 - PDBs block drift disruptions (drift_share increases but actual throughput is limited — warning emitted).
+- **Multi-wave drift scenario**: Wave 1 (50 nodes drifted at T=0) is in progress when wave 2 (30 new nodes drifted at T=3d) arrives. Verify that wave 1 nodes (older `LastTransitionTime`) are processed before wave 2 nodes, and that the SLO budget computation transitions from wave 1's deadline to wave 2's deadline as wave 1 completes.
 
 ### Metrics and Observability
 
@@ -279,3 +339,5 @@ Deferred. Would require a feature gate and more extensive migration planning due
 4. **What is the right default behavior when drift_share exceeds available budget?** Options: (a) drift takes priority and consolidation gets zero, (b) maintain a minimum consolidation floor (e.g., 1 slot). We lean toward (a) since the user explicitly set a tight SLO. *[For SIG-Autoscaling]*
 
 5. **Should we emit a Kubernetes Event or a Condition when the SLO is at risk?** Events are transient and good for alerts. Conditions are persistent and good for status inspection. We lean toward both: a warning Event when projected to miss SLO, and a Condition on NodePool when SLO is actively exceeded. *[For Karpenter Maintainers]*
+
+6. **Where should StaticDrift sit in the new method order?** With the proposed reordering (Emptiness → MultiNodeConsolidation → SingleNodeConsolidation → Drift), should StaticDrift remain before consolidation (between Emptiness and MultiNodeConsolidation) or move after consolidation (before Drift)? Keeping it early ensures static drift checks are resolved quickly without waiting for consolidation evaluation. Moving it later keeps the consolidation-first principle consistent. *[For Karpenter Maintainers]*
