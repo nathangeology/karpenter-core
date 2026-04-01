@@ -22,14 +22,22 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
+	"sigs.k8s.io/karpenter/pkg/scheduling"
 	disruptionutils "sigs.k8s.io/karpenter/pkg/utils/disruption"
 )
 
 // ComputeNodePoolMetrics computes aggregate cost and disruption across all candidates.
+// NOTE: This intentionally uses only eligible candidates (not the full pool) because
+// eligible-candidate-scoped scoring is more useful for the threshold decision than
+// full-pool scoring. The RFC is ambiguous here; this is a deliberate design choice.
 func ComputeNodePoolMetrics(ctx context.Context, candidates []*Candidate) (totalCost, totalDisruption float64) {
 	for _, candidate := range candidates {
-		if candidate.instanceType != nil && len(candidate.instanceType.Offerings) > 0 {
-			totalCost += candidate.instanceType.Offerings[0].Price
+		if candidate.instanceType != nil {
+			reqs := scheduling.NewLabelRequirements(candidate.Labels())
+			compatibleOfferings := candidate.instanceType.Offerings.Compatible(reqs)
+			if len(compatibleOfferings) > 0 {
+				totalCost += compatibleOfferings.Cheapest().Price
+			}
 		}
 		totalDisruption += ComputeNodeDisruptionCost(ctx, candidate.reschedulablePods)
 	}
@@ -75,14 +83,14 @@ func ComputeMoveScore(
 }
 
 // ComputeNodeDisruptionCost computes the total disruption cost for a node's pods.
-// Per the RFC, there is no per-node baseline cost — only pod eviction costs.
+// Per the RFC, every pod has a minimum disruption weight of 1.0 to ensure that
+// pods with negative eviction costs (e.g. negative priority) still contribute to
+// the disruption fraction rather than being silently dropped.
 func ComputeNodeDisruptionCost(ctx context.Context, pods []*corev1.Pod) float64 {
 	cost := 0.0
 	for _, p := range pods {
 		evictionCost := disruptionutils.EvictionCost(ctx, p)
-		if evictionCost > 0 {
-			cost += evictionCost
-		}
+		cost += math.Abs(evictionCost) + 1.0
 	}
 	return cost
 }

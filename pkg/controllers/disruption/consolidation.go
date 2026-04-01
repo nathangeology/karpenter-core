@@ -98,10 +98,15 @@ func isBalancedPolicy(candidates []*Candidate) bool {
 
 // checkBalancedScore evaluates whether a consolidation command meets the Balanced policy score threshold.
 // Returns the (possibly modified) command and true if the move should proceed, false if it should be rejected.
-// For Balanced policies that pass the threshold, the command's ReasonOverride is set to Balanced.
-// For non-Balanced policies, always returns true with the command unchanged.
+// Only candidates whose NodePool uses the Balanced policy are scored; WhenEmptyOrUnderutilized candidates
+// pass unconditionally.
 func (c *consolidation) checkBalancedScore(ctx context.Context, cmd Command, allCandidates []*Candidate, consolidationType string) (Command, bool) {
-	if !isBalancedPolicy(cmd.Candidates) {
+	// Filter to only Balanced candidates in this command
+	balancedCandidates := lo.Filter(cmd.Candidates, func(cn *Candidate, _ int) bool {
+		return cn.NodePool.Spec.Disruption.ConsolidationPolicy == v1.ConsolidationPolicyBalanced
+	})
+	// If no candidates use Balanced policy, pass unconditionally
+	if len(balancedCandidates) == 0 {
 		return cmd, true
 	}
 
@@ -111,8 +116,8 @@ func (c *consolidation) checkBalancedScore(ctx context.Context, cmd Command, all
 		return cmd, false
 	}
 
-	// Compute deleted node cost
-	deletedCost := getCandidatePrices(cmd.Candidates)
+	// Compute deleted node cost (only Balanced candidates)
+	deletedCost := getCandidatePrices(balancedCandidates)
 
 	// Compute replacement cost
 	replacementCost := 0.0
@@ -125,15 +130,13 @@ func (c *consolidation) checkBalancedScore(ctx context.Context, cmd Command, all
 		}
 	}
 
-	score := ComputeMoveScore(ctx, deletedCost, replacementCost, totalCost, cmd.Candidates, totalDisruption)
+	score := ComputeMoveScore(ctx, deletedCost, replacementCost, totalCost, balancedCandidates, totalDisruption)
 
 	// Get threshold from the first Balanced candidate's NodePool
 	threshold := 0.5 // default k=2
-	for _, cn := range cmd.Candidates {
-		if cn.NodePool.Spec.Disruption.ConsolidationPolicy == v1.ConsolidationPolicyBalanced {
-			threshold = cn.NodePool.Spec.Disruption.GetDisruptionToleranceThreshold()
-			break
-		}
+	for _, cn := range balancedCandidates {
+		threshold = cn.NodePool.Spec.Disruption.GetDisruptionToleranceThreshold()
+		break
 	}
 
 	decision := string(cmd.Decision())
@@ -143,17 +146,15 @@ func (c *consolidation) checkBalancedScore(ctx context.Context, cmd Command, all
 	})
 
 	log.FromContext(ctx).V(1).Info("balanced consolidation score",
-		"score", score,
+		"consolidation_score", score,
 		"threshold", threshold,
 		"decision", decision,
-		"consolidation_score", score,
-		"candidates", len(cmd.Candidates),
+		"candidates", len(balancedCandidates),
 		"deletedCost", deletedCost,
 		"replacementCost", replacementCost,
 	)
 
 	if score >= threshold {
-		cmd.ReasonOverride = v1.DisruptionReasonBalanced
 		return cmd, true
 	}
 	return cmd, false

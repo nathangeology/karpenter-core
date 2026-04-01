@@ -80,6 +80,7 @@ type NodePoolSpec struct {
 	Replicas *int64 `json:"replicas,omitempty"`
 }
 
+// +kubebuilder:validation:XValidation:rule="self.consolidationPolicy == 'Balanced' || !has(self.disruptionTolerance)",message="disruptionTolerance is only valid with consolidationPolicy Balanced"
 type Disruption struct {
 	//nolint:kubeapilinter
 	// ConsolidateAfter is the duration the controller will wait
@@ -198,9 +199,6 @@ const (
 	DisruptionReasonUnderutilized DisruptionReason = "Underutilized"
 	DisruptionReasonEmpty         DisruptionReason = "Empty"
 	DisruptionReasonDrifted       DisruptionReason = "Drifted"
-	// DisruptionReasonBalanced is used internally when the Balanced consolidation
-	// policy approves a move via score threshold. It is not a budget reason.
-	DisruptionReasonBalanced DisruptionReason = "Balanced"
 )
 
 type Limits v1.ResourceList
