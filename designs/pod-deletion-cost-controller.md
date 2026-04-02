@@ -49,6 +49,10 @@ Benchmark experiments and simulations show meaningful decreases in disruption ra
 - Maintain or improve total compute cost and utilization efficiency across all benchmarks
 - Minimal impact on API server load from annotation updates
 
+### Value by consolidation policy
+
+The benefit of this feature varies by consolidation policy. For `ConsolidateWhenEmpty` NodePools, the value is direct: concentrating pod deletions on a single node is the only way to create the fully-empty condition that triggers consolidation. Without this controller, scale-down events rarely produce empty nodes. For `ConsolidateWhenUnderutilized` NodePools, the value is indirect but meaningful: concentrating deletions reduces the number of pods Karpenter must evict when it consolidates, lowering the total disruption cost of each consolidation move even though the consolidation would eventually happen regardless.
+
 ### Related Proposals that can reduce the pod disruption rate
 
 - Most important: Consolidation cost thresholding -- see draft RFC
@@ -64,14 +68,14 @@ The controller ranks nodes the same way Karpenter ranks consolidation candidates
 
 ### How it works
 
-All new code lives in `pkg/controllers/pod/deletioncost/`. A singleton reconciler runs every 60 seconds. On each tick it:
+All new code lives in `pkg/controllers/pod/deletioncost/`. A singleton reconciler runs every 60 seconds. The 60-second interval balances annotation freshness against API server write load — fast enough to react to scale events within one HPA evaluation period, slow enough to avoid amplifying watch events during steady state. On each tick it:
 
 1. Checks the `PodDeletionCostManagement` feature gate
 2. Collects all Karpenter-managed nodes from `state.Cluster`
 3. Runs change detection (SHA-256 hash of node/pod state). If nothing changed, skips with zero API writes
 4. Partitions nodes into Group A (no do-not-disrupt pods) and Group B (has do-not-disrupt pods)
 5. Ranks each group independently by pod count
-6. Assigns sequential integer ranks starting at -1000 for Group A, continuing for Group B (this will need to be adjusted for clusters with >1000 nodes)
+6. Assigns sequential integer ranks starting at -n (where n is the total number of Karpenter-managed nodes) for Group A, continuing for Group B
 7. Sets `controller.kubernetes.io/pod-deletion-cost` and `karpenter.sh/managed-deletion-cost: "true"` on each pod, skipping pods with customer-set deletion costs (two-annotation protocol)
 
 ```
@@ -94,7 +98,7 @@ All new code lives in `pkg/controllers/pod/deletioncost/`. A singleton reconcile
 │  │  2. Rank Group A (normal)            │                       │
 │  │  3. Rank Group B (protected)         │                       │
 │  │  4. Assign sequential ranks          │                       │
-│  │     A: -1000, -999, ...              │                       │
+│  │     A: -n, -(n-1), ...               │                       │
 │  │     B: continues after A             │                       │
 │  └──────────────────┬───────────────────┘                       │
 │                     ↓                                           │
@@ -132,11 +136,25 @@ Node B (m5.2xlarge): 3 pods
 Node C (m5.large):   3 pods
 ```
 
-All nodes have the same pod count, so the ranking engine breaks ties by node name. Suppose it assigns: Node A → rank -1000 (consolidation target), Node B → -999, Node C → -998.
+All nodes have the same pod count, so the ranking engine breaks ties by node name. With 3 nodes, it assigns: Node A → rank -3 (consolidation target), Node B → -2, Node C → -1.
 
 **Without the controller:** Scale from 9 to 6 replicas. The ReplicaSet controller spreads deletions: 1 pod from each node. All 3 nodes still have 2 pods. Karpenter can still consolidate, but must evict pods to do so — increasing total disruption. No node moved closer to empty, so the scale-in didn't help consolidation at all.
 
-**With the controller:** The ReplicaSet controller sees all 3 pods on Node A have the lowest deletion cost (-1000). It removes all 3 from Node A. Node A is now empty. Karpenter immediately consolidates it with zero disruption. The cluster goes from 3 nodes to 2.
+**With the controller:** The ReplicaSet controller sees all 3 pods on Node A have the lowest deletion cost (-3). It removes all 3 from Node A. Node A is now empty. Karpenter immediately consolidates it with zero disruption. The cluster goes from 3 nodes to 2.
+
+### Example: Partial drain converges over multiple scale-down events (9→7)
+
+Same starting state: 3 nodes, 9 replicas (3 per node), Node A ranked lowest (-3).
+
+**Scale from 9 to 7 replicas.** The ReplicaSet controller removes 2 pods, both from Node A (lowest deletion cost). State after scale-down:
+
+```
+Node A: 1 pod   (rank -3)
+Node B: 3 pods  (rank -2)
+Node C: 3 pods  (rank -1)
+```
+
+Node A isn't empty yet, so Karpenter can't consolidate it under a WhenEmpty policy. But Node A still has the fewest pods, so it retains the lowest rank on the next reconcile. On the next scale-down event (e.g., 7→5), the ReplicaSet controller again targets Node A first, removing the remaining pod. Node A becomes empty and Karpenter consolidates it. The key insight: even partial drains converge toward empty nodes over successive scale-down events because the ranking is stable.
 
 ## Alternatives Considered
 
@@ -201,6 +219,10 @@ The ReplicaSet controller's scale-down decisions and Karpenter's consolidation d
 - **Pod update RBAC escalation (Medium):** Karpenter's ClusterRole gains `update` and `patch` on pods, broader than the actual access pattern. *Mitigation:* The controller only processes pods on Karpenter-managed nodes via `node.Pods()` / `cluster.Nodes()`. The feature gate ensures the code path is dormant unless explicitly enabled. A future refinement could use server-side apply with a dedicated field manager.
 
 - **Consolidation-optimized deletions may conflict with topology spread constraints (Low):** When the controller concentrates deletions on specific nodes, the resulting pod distribution may temporarily violate `topologySpreadConstraints` until the scheduler places replacement pods. *Mitigation:* This is the same behavior as the current spreading heuristic — neither approach guarantees constraint satisfaction during scale-down. The Kubernetes scheduler enforces topology spread when placing new pods, so any temporary imbalance is corrected on the next scheduling cycle. Operators with strict spreading requirements can leave the feature disabled.
+
+- **Active-scaling fan-out (Medium):** During active scaling events (e.g., HPA-driven burst), many nodes may change pod count simultaneously, causing the controller to re-rank and update annotations on a large fraction of pods in a single reconcile cycle. For a 500-node cluster averaging 30 pods/node, a full re-rank writes ~15,000 pod annotations in one 60-second window (~250 writes/sec). *Mitigation:* Change detection prevents re-ranking when state is stable. During active scaling, the writes are bounded by the reconcile interval (at most once per 60s). The API server write load is comparable to a large Deployment rollout. Clusters with >1,000 nodes should monitor `karpenter_pod_deletion_cost_annotation_duration_seconds` and consider disabling the feature if annotation latency exceeds acceptable thresholds.
+
+- **Multi-writer limitation (Medium):** If multiple Karpenter instances run in the same cluster (e.g., during rolling upgrades or in multi-tenant configurations), each instance will independently compute rankings and write annotations, potentially causing conflicting updates. *Mitigation:* The two-annotation protocol (`karpenter.sh/managed-deletion-cost`) ensures only Karpenter-managed annotations are overwritten. During rolling upgrades, the overlap window is brief and the 60-second reconcile interval limits conflict frequency. For true multi-tenant deployments with separate Karpenter instances managing disjoint NodePools, annotations are scoped to each instance's managed nodes and won't conflict. This is a known limitation documented here for awareness.
 
 ### Placement and Spreading Constraints
 
@@ -296,7 +318,7 @@ Group B (do-not-disrupt), sorted by pod count ascending:
 
 **Without the controller:** The ReplicaSet controller might delete pods from Node D, but Karpenter can never consolidate it. Those deletions are wasted.
 
-**With the controller:** Pods on Node E have rank -1000 (lowest). The ReplicaSet controller removes pods from Node E first. Karpenter consolidates Node E while the ML training job on Node D is never touched.
+**With the controller:** Pods on Node E have rank -4 (lowest). The ReplicaSet controller removes pods from Node E first. Karpenter consolidates Node E while the ML training job on Node D is never touched.
 
 ## Appendix C: Security and Performance Implications
 
