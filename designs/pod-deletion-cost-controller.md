@@ -56,13 +56,11 @@ Benchmark experiments and simulations show meaningful decreases in disruption ra
 
 ## Proposal
 
-We introduce a new feature-gated controller (`pod.deletioncost`) that automatically manages the `controller.kubernetes.io/pod-deletion-cost` annotation on pods running on Karpenter-managed nodes. The controller ranks nodes using a configurable strategy, assigns sequential deletion cost values to pods so that Kubernetes' ReplicaSet scale-down logic preferentially removes pods from the "least valuable" nodes first, and partitions nodes hosting do-not-disrupt pods separately to protect them from early eviction.
+We introduce a new feature-gated controller (`pod.deletioncost`) that automatically manages the `controller.kubernetes.io/pod-deletion-cost` annotation on pods running on Karpenter-managed nodes. The controller ranks nodes by pod count (mirroring Karpenter's own consolidation candidate sorting), assigns sequential deletion cost values to pods so that Kubernetes' ReplicaSet scale-down logic preferentially removes pods from the "least valuable" nodes first, and partitions nodes hosting do-not-disrupt pods separately to protect them from early eviction.
 
-### Recommended ranking strategy
+### Ranking strategy
 
-We recommend ranking nodes the same way Karpenter ranks consolidation candidates: by pod count (disruption cost). This maximizes the mutual information between the hint we send and the action Karpenter will take next, because the ranking signal and the consolidation signal are literally the same function. As Karpenter's consolidation candidate sorting evolves, we plan to follow it here to stay aligned.
-
-The controller also supports alternative strategies (random, node-size-based, unallocated-vCPU-per-pod) for experimentation and for clusters where the default doesn't fit. But for the general case, following Karpenter's own candidate sorting is the right default.
+The controller ranks nodes the same way Karpenter ranks consolidation candidates: by pod count (disruption cost). This maximizes the mutual information between the hint we send and the action Karpenter will take next, because the ranking signal and the consolidation signal are literally the same function. As Karpenter's consolidation candidate sorting evolves, we plan to follow it here to stay aligned.
 
 ### How it works
 
@@ -72,7 +70,7 @@ All new code lives in `pkg/controllers/pod/deletioncost/`. A singleton reconcile
 2. Collects all Karpenter-managed nodes from `state.Cluster`
 3. Runs change detection (SHA-256 hash of node/pod state). If nothing changed, skips with zero API writes
 4. Partitions nodes into Group A (no do-not-disrupt pods) and Group B (has do-not-disrupt pods)
-5. Ranks each group independently using the configured strategy
+5. Ranks each group independently by pod count
 6. Assigns sequential integer ranks starting at -1000 for Group A, continuing for Group B (this will need to be adjusted for clusters with >1000 nodes)
 7. Sets `controller.kubernetes.io/pod-deletion-cost` and `karpenter.sh/managed-deletion-cost: "true"` on each pod, skipping pods with customer-set deletion costs (two-annotation protocol)
 
@@ -113,15 +111,6 @@ All new code lives in `pkg/controllers/pod/deletioncost/`. A singleton reconcile
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### Ranking strategies
-
-- **Pod count / disruption cost (default)**: Mirrors Karpenter's own consolidation candidate sorting. Nodes with fewer pods get lower deletion costs, making them the first targets for ReplicaSet scale-down. As Karpenter's candidate sorting evolves, we plan to follow it here to stay aligned.
-- **UnallocatedVCPUPerPodCost**: Sort by (unallocated CPU / pod count) descending. Nodes with more wasted CPU per pod are deleted first.
-- **LargestToSmallest / SmallestToLargest**: Sort by normalized capacity (CPU cores + memory GB, where 1 core ≈ 1 GB).
-- **Random**: Fisher-Yates shuffle, low compute cost, gives a good baseline strategy to compare against for experiments.
-
-All sorting-based strategies use `sort.SliceStable` with deterministic tie-breaking by node name.
-
 ### API changes
 
 No CRD changes. The feature is purely controller-side, gated behind `PodDeletionCostManagement` and configured via CLI flags / environment variables. RBAC is extended to add `update` and `patch` verbs on pods.
@@ -131,12 +120,11 @@ No CRD changes. The feature is purely controller-side, gated behind `PodDeletion
 | Option | CLI Flag | Env Var | Default | Description |
 |--------|----------|---------|---------|-------------|
 | Feature gate | `--feature-gates=PodDeletionCostManagement=true` | `FEATURE_GATES` | `false` | Enables the controller |
-| Ranking strategy | `--pod-deletion-cost-ranking-strategy` | `POD_DELETION_COST_RANKING_STRATEGY` | `PodCount` | One of: `PodCount`, `Random`, `LargestToSmallest`, `SmallestToLargest`, `UnallocatedVCPUPerPodCost` |
 | Change detection | `--pod-deletion-cost-change-detection` | `POD_DELETION_COST_CHANGE_DETECTION` | `true` | Skip ranking when cluster state hasn't changed |
 
 ### Example: Scale-down concentrates deletions on the consolidation target
 
-A cluster with 3 nodes runs a Deployment with 9 replicas (3 pods per node). The operator enables the controller with `PodCount` (the default):
+A cluster with 3 nodes runs a Deployment with 9 replicas (3 pods per node). The operator enables the controller:
 
 ```
 Node A (m5.xlarge):  3 pods
@@ -277,7 +265,7 @@ The feature gate defaults to `false`. When disabled, the controller is not regis
 
 **Controller (controller.go):** A singleton reconciler that runs every 60 seconds. On each tick it checks the `PodDeletionCostManagement` feature gate, gathers all Karpenter-managed nodes from the cluster state, optionally runs change detection, ranks nodes, and updates pod annotations.
 
-**RankingEngine (ranking.go):** Ranks nodes using one of four pluggable strategies. Before ranking, it partitions nodes into two groups: Group A (no do-not-disrupt pods) and Group B (has at least one do-not-disrupt pod). Each group is ranked independently. Group A gets lower ranks (starting at -1000) and Group B gets higher ranks (continuing sequentially after Group A).
+**RankingEngine (ranking.go):** Ranks nodes by pod count (mirroring Karpenter's consolidation candidate sorting). Before ranking, it partitions nodes into two groups: Group A (no do-not-disrupt pods) and Group B (has at least one do-not-disrupt pod). Each group is ranked independently. Group A gets lower ranks and Group B gets higher ranks (continuing sequentially after Group A). Uses `sort.SliceStable` with deterministic tie-breaking by node name.
 
 **AnnotationManager (annotation.go):** Iterates over pods on each ranked node and sets `controller.kubernetes.io/pod-deletion-cost` to the node's rank value. Also sets `karpenter.sh/managed-deletion-cost: "true"`. Pods with customer-set deletion costs (no management annotation) are skipped. Handles NotFound and Conflict errors gracefully.
 
@@ -285,25 +273,25 @@ The feature gate defaults to `false`. When disabled, the controller is not regis
 
 ## Appendix B: Additional Example -- Do-Not-Disrupt Partitioning
 
-A cluster with 4 nodes. Node D runs a pod with `karpenter.sh/do-not-disrupt: "true"` (a long-running ML training job). The operator uses `LargestToSmallest`:
+A cluster with 4 nodes. Node D runs a pod with `karpenter.sh/do-not-disrupt: "true"` (a long-running ML training job):
 
 ```
-Node E (m5.4xlarge): 16 vCPU, no do-not-disrupt pods
-Node F (m5.xlarge):   4 vCPU, no do-not-disrupt pods
-Node G (m5.2xlarge):  8 vCPU, no do-not-disrupt pods
-Node D (m5.4xlarge): 16 vCPU, has do-not-disrupt pod (ML training)
+Node E (m5.4xlarge): 2 pods, no do-not-disrupt pods
+Node F (m5.xlarge):  5 pods, no do-not-disrupt pods
+Node G (m5.2xlarge): 3 pods, no do-not-disrupt pods
+Node D (m5.4xlarge): 4 pods, has do-not-disrupt pod (ML training)
 ```
 
-Partitioning and ranking:
+Partitioning and ranking (by pod count, fewest first):
 
 ```
-Group A (normal), sorted largest-first:
-  Node E (16 vCPU) → rank -1000
-  Node G (8 vCPU)  → rank -999
-  Node F (4 vCPU)  → rank -998
+Group A (normal), sorted by pod count ascending:
+  Node E (2 pods) → rank -4 (consolidation target)
+  Node G (3 pods) → rank -3
+  Node F (5 pods) → rank -2
 
-Group B (do-not-disrupt), sorted largest-first:
-  Node D (16 vCPU) → rank -997  (always above all Group A nodes)
+Group B (do-not-disrupt), sorted by pod count ascending:
+  Node D (4 pods) → rank -1  (always above all Group A nodes)
 ```
 
 **Without the controller:** The ReplicaSet controller might delete pods from Node D, but Karpenter can never consolidate it. Those deletions are wasted.
@@ -323,7 +311,7 @@ Group B (do-not-disrupt), sorted largest-first:
 
 - **API server write load:** Each reconcile can update up to N pods. With change detection, writes only occur when state changes. Worst case (1,000 nodes, 50 pods/node, constant changes): ~833 pod updates/sec. Mitigated by change detection and potential future annotation value diffing.
 - **Memory:** Negligible. References existing `state.StateNode` objects. Ranking data structures are O(n) and transient. Change detector stores 64 bytes.
-- **CPU:** O(n log n) for sorting strategies, O(n) for random. Hash computation is O(n × pods_per_node).
+- **CPU:** O(n log n) for sorting by pod count. Hash computation is O(n × pods_per_node).
 - **Watch event amplification:** Annotation updates trigger watch events for other controllers. Bounded by the 60-second reconcile interval. Annotation changes don't affect fields Karpenter's consolidation controller uses for decisions.
 
 ## Appendix D: Metrics and Observability
@@ -332,9 +320,9 @@ Group B (do-not-disrupt), sorted largest-first:
 
 | Metric | Type | Labels | Description |
 |--------|------|--------|-------------|
-| `karpenter_pod_deletion_cost_nodes_ranked_total` | Counter | `strategy` | Cumulative nodes ranked across all reconciles |
+| `karpenter_pod_deletion_cost_nodes_ranked_total` | Counter | (none) | Cumulative nodes ranked across all reconciles |
 | `karpenter_pod_deletion_cost_pods_updated_total` | Counter | `result` (`success`, `skipped_customer_managed`, `error`) | Pod annotation update outcomes |
-| `karpenter_pod_deletion_cost_ranking_duration_seconds` | Histogram | `strategy` | Time spent computing rankings per reconcile |
+| `karpenter_pod_deletion_cost_ranking_duration_seconds` | Histogram | (none) | Time spent computing rankings per reconcile |
 | `karpenter_pod_deletion_cost_annotation_duration_seconds` | Histogram | (none) | Time spent updating annotations per reconcile |
 | `karpenter_pod_deletion_cost_skipped_no_changes_total` | Counter | (none) | Reconcile cycles skipped (no changes detected) |
 
@@ -355,7 +343,7 @@ Group B (do-not-disrupt), sorted largest-first:
 
 ### Unit tests
 
-**Ranking Engine:** Strategy ordering correctness, deterministic tie-breaking by node name, do-not-disrupt partitioning (Group B always above Group A), edge cases (empty input, single node, mixed groups), normalized capacity calculation, zero-pod sentinel values, unknown strategy fallback to random.
+**Ranking Engine:** Pod-count ordering correctness, deterministic tie-breaking by node name, do-not-disrupt partitioning (Group B always above Group A), edge cases (empty input, single node, mixed groups), zero-pod sentinel values.
 
 **Annotation Manager:** `shouldUpdatePod` logic (no annotations → update; customer-managed → skip; Karpenter-managed → update), correct annotation values, NotFound/Conflict error handling, nil annotations map initialization, metrics counters.
 
@@ -365,7 +353,7 @@ Group B (do-not-disrupt), sorted largest-first:
 
 ### Integration tests
 
-- **End-to-end annotation flow:** Provision 3 nodes, deploy workload, verify annotations match ranking strategy
+- **End-to-end annotation flow:** Provision 3 nodes, deploy workload, verify annotations match pod-count ranking
 - **Scale-down alignment:** Scale down, verify pods removed from lowest-cost node, verify Karpenter consolidates it
 - **Customer annotation protection:** Pre-set deletion cost without management annotation, verify it's untouched after reconcile
 - **Do-not-disrupt partitioning:** Verify protected nodes get higher costs, scale-down avoids them
@@ -374,17 +362,17 @@ Group B (do-not-disrupt), sorted largest-first:
 
 ### Edge cases
 
-Zero nodes, zero pods on a node, system-only pods, pod deleted between ranking and annotation, concurrent pod updates, identical-capacity nodes, single-node cluster, node transitioning to do-not-disrupt, very large clusters (1000+ nodes), zero allocatable CPU, unrecognized strategy string.
+Zero nodes, zero pods on a node, system-only pods, pod deleted between ranking and annotation, concurrent pod updates, identical-capacity nodes, single-node cluster, node transitioning to do-not-disrupt, very large clusters (1000+ nodes).
 
 ## Appendix F: Migration and Rollout Plan
 
 ### Rollout phases
 
-**Alpha (current PR):** Feature gate defaults to `false`. Default strategy is `PodCount`, which follows Karpenter's consolidation candidate sorting. Change detection enabled. No stability guarantees.
+**Alpha (current PR):** Feature gate defaults to `false`. Ranking strategy is PodCount, which follows Karpenter's consolidation candidate sorting. Change detection enabled. No stability guarantees.
 
-**Beta:** Feature gate still defaults to `false` but API is stable. Default strategy remains `PodCount`. Add annotation cleanup on disable. Add annotation value diffing to skip no-op writes. Consider dry-run mode.
+**Beta:** Feature gate still defaults to `false` but API is stable. Add annotation cleanup on disable. Add annotation value diffing to skip no-op writes. Consider dry-run mode.
 
-**GA:** Feature gate defaults to `true`. `PodCount` remains the default. Other strategies available for experimentation but not recommended for production.
+**GA:** Feature gate defaults to `true`.
 
 ### Migration steps
 
@@ -393,8 +381,7 @@ Existing users need no action on upgrade (feature gate defaults off). To enable:
 1. Review RBAC (new `update`/`patch` on pods)
 2. Audit existing `controller.kubernetes.io/pod-deletion-cost` annotations
 3. Enable: `--feature-gates=PodDeletionCostManagement=true`
-4. Optionally set ranking strategy
-5. Monitor `karpenter_pod_deletion_cost_*` metrics
+4. Monitor `karpenter_pod_deletion_cost_*` metrics
 
 ### Rollback
 
