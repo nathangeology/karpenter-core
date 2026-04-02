@@ -336,99 +336,15 @@ Group B (do-not-disrupt), sorted by pod count ascending:
 - **CPU:** O(n log n) for sorting by pod count. Hash computation is O(n × pods_per_node).
 - **Watch event amplification:** Annotation updates trigger watch events for other controllers. Bounded by the 60-second reconcile interval. Annotation changes don't affect fields Karpenter's consolidation controller uses for decisions.
 
-## Appendix D: Metrics and Observability
+## Appendix D: Metrics, Testing, and Rollout
 
-### Prometheus metrics
+Detailed metrics tables (Prometheus metrics, Kubernetes events, structured logging levels), test plans (unit test cases, integration test scenarios, edge case lists), and rollback scripts will be included in the implementation PR. The key observability and rollout decisions are:
 
-| Metric | Type | Labels | Description |
-|--------|------|--------|-------------|
-| `karpenter_pod_deletion_cost_nodes_ranked_total` | Counter | (none) | Cumulative nodes ranked across all reconciles |
-| `karpenter_pod_deletion_cost_pods_updated_total` | Counter | `result` (`success`, `skipped_customer_managed`, `error`) | Pod annotation update outcomes |
-| `karpenter_pod_deletion_cost_ranking_duration_seconds` | Histogram | (none) | Time spent computing rankings per reconcile |
-| `karpenter_pod_deletion_cost_annotation_duration_seconds` | Histogram | (none) | Time spent updating annotations per reconcile |
-| `karpenter_pod_deletion_cost_skipped_no_changes_total` | Counter | (none) | Reconcile cycles skipped (no changes detected) |
-
-### Kubernetes events
-
-| Event | Type | Reason | When |
-|-------|------|--------|------|
-| Ranking completed | Normal | `PodDeletionCostRankingCompleted` | After successful ranking |
-| Update failed | Warning | `PodDeletionCostUpdateFailed` | Pod annotation update failure |
-| Feature disabled | Warning | `PodDeletionCostDisabled` | Fatal error causes reconcile skip |
-
-### Structured logging
-
-- `V(1)`: "completed node ranking", "pod deletion cost annotation update completed", "no changes detected, skipping"
-- `Error`: "failed to rank nodes", "failed to update pod deletion costs", "failed to list pods on node"
-
-## Appendix E: Testing and Validation
-
-### Unit tests
-
-**Ranking Engine:** Pod-count ordering correctness, deterministic tie-breaking by node name, do-not-disrupt partitioning (Group B always above Group A), edge cases (empty input, single node, mixed groups), zero-pod sentinel values.
-
-**Annotation Manager:** `shouldUpdatePod` logic (no annotations → update; customer-managed → skip; Karpenter-managed → update), correct annotation values, NotFound/Conflict error handling, nil annotations map initialization, metrics counters.
-
-**Change Detector:** First call returns changed, identical state returns unchanged, node/pod additions detected, deterministic hash regardless of iteration order.
-
-**Controller:** Feature gate disabled → no-op, no nodes → no errors, change detection skip → metric incremented, errors → event published and requeue.
-
-### Integration tests
-
-- **End-to-end annotation flow:** Provision 3 nodes, deploy workload, verify annotations match pod-count ranking
-- **Scale-down alignment:** Scale down, verify pods removed from lowest-cost node, verify Karpenter consolidates it
-- **Customer annotation protection:** Pre-set deletion cost without management annotation, verify it's untouched after reconcile
-- **Do-not-disrupt partitioning:** Verify protected nodes get higher costs, scale-down avoids them
-- **Feature gate toggle:** Enable/disable, verify controller starts/stops, existing annotations persist
-- **Multi-NodePool:** Verify global ranking across all Karpenter-managed nodes
-
-### Edge cases
-
-Zero nodes, zero pods on a node, system-only pods, pod deleted between ranking and annotation, concurrent pod updates, identical-capacity nodes, single-node cluster, node transitioning to do-not-disrupt, very large clusters (1000+ nodes).
-
-## Appendix F: Migration and Rollout Plan
-
-### Rollout phases
-
-**Alpha (current PR):** Feature gate defaults to `false`. Ranking strategy is PodCount, which follows Karpenter's consolidation candidate sorting. Change detection enabled. No stability guarantees.
-
-**Beta:** Feature gate still defaults to `false` but API is stable. Add annotation cleanup on disable. Add annotation value diffing to skip no-op writes. Consider dry-run mode.
-
-**GA:** Feature gate defaults to `true`.
-
-### Migration steps
-
-Existing users need no action on upgrade (feature gate defaults off). To enable:
-
-1. Review RBAC (new `update`/`patch` on pods)
-2. Audit existing `controller.kubernetes.io/pod-deletion-cost` annotations
-3. Enable: `--feature-gates=PodDeletionCostManagement=true`
-4. Monitor `karpenter_pod_deletion_cost_*` metrics
-
-### Rollback
-
-**Disable feature gate:** Set `PodDeletionCostManagement=false`, restart Karpenter. Existing annotations become stale but disappear as pods are recycled.
-
-**Remove annotations manually:**
-
-```bash
-kubectl get pods -A -o json | jq -r '.items[] |
-  select(.metadata.annotations["karpenter.sh/managed-deletion-cost"]
-  == "true") | "\(.metadata.namespace) \(.metadata.name)"' | while
-  read ns name; do
-    kubectl annotate pod -n "$ns" "$name" \
-      controller.kubernetes.io/pod-deletion-cost- \
-      karpenter.sh/managed-deletion-cost-
-done
-```
-
-**Rollback signals:** High `pods_updated_total{result="error"}`, API server latency correlated with reconcile interval, unexpected scale-down behavior, growing `ranking_duration_seconds`.
-
-### Documentation
-
-New: feature guide, configuration reference, metrics reference, troubleshooting guide.
-
-Updates: feature gates table, consolidation docs, RBAC docs, Helm chart values, disruption/do-not-disrupt docs, changelog.
+- Prometheus metrics cover nodes ranked, pods updated (by result), ranking duration, annotation duration, and skipped-no-changes count
+- Kubernetes events emitted for ranking completion, update failures, and feature-disabled states
+- Rollout follows alpha (gate off, no stability guarantees) → beta (gate off, API stable, add cleanup-on-disable) → GA (gate on by default)
+- Rollback is safe: disable the feature gate and existing annotations become stale, bounded by pod lifetime
+- Migration requires no action on upgrade; enabling requires RBAC review and annotation audit
 
 ## Appendix: Non-Goals
 
