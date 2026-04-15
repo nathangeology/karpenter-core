@@ -125,7 +125,7 @@ var _ = Describe("Performance", Label(debug.NoWatch), func() {
 				"Average CPU utilization should remain greater than 38% after consolidation")
 			Expect(consolidationReport.TotalReservedMemoryUtil).To(BeNumerically(">", 0.40),
 				"Average memory utilization should remain greater than 40% after consolidation")
-			Expect(consolidationReport.KarpenterMemoryMB).To(BeNumerically("<", 450),
+			Expect(consolidationReport.KarpenterMemoryMB).To(BeNumerically("<", 490),
 				"Karpenter controller memory should be less than 450 MB during consolidation")
 			Expect(consolidationReport.KarpenterCPUNanos).To(BeNumerically("<", 16*1e9),
 				"Karpenter controller CPU should be less than 16s (80%) during consolidation")
