@@ -65,7 +65,6 @@ var _ = Describe("Options", func() {
 		"PREFERENCE_POLICY",
 		"MIN_VALUES_POLICY",
 		"FEATURE_GATES",
-		"IPVS_PATIENCE_DURATION",
 	}
 
 	BeforeEach(func() {
@@ -122,15 +121,13 @@ var _ = Describe("Options", func() {
 				PreferencePolicy:                 lo.ToPtr(options.PreferencePolicyRespect),
 				MinValuesPolicy:                  lo.ToPtr(options.MinValuesPolicyStrict),
 				FeatureGates: test.FeatureGates{
-					ReservedCapacity:          lo.ToPtr(true),
-					NodeRepair:                lo.ToPtr(false),
-					SpotToSpotConsolidation:   lo.ToPtr(false),
-					NodeOverlay:               lo.ToPtr(false),
-					StaticCapacity:            lo.ToPtr(false),
-					InPlacePodVerticalScaling: lo.ToPtr(false),
+					ReservedCapacity:        lo.ToPtr(true),
+					NodeRepair:              lo.ToPtr(false),
+					SpotToSpotConsolidation: lo.ToPtr(false),
+					NodeOverlay:             lo.ToPtr(false),
+					StaticCapacity:          lo.ToPtr(false),
 				},
-				IgnoreDRARequests:    lo.ToPtr(true),
-				IPVSPatienceDuration: lo.ToPtr(60 * time.Second),
+				IgnoreDRARequests: lo.ToPtr(true),
 			}))
 		})
 
@@ -158,8 +155,7 @@ var _ = Describe("Options", func() {
 				"--batch-idle-duration", "5s",
 				"--preference-policy", "Ignore",
 				"--min-values-policy", "BestEffort",
-				"--feature-gates", "ReservedCapacity=false,SpotToSpotConsolidation=true,NodeRepair=true,NodeOverlay=true,StaticCapacity=true,InPlacePodVerticalScaling=true",
-				"--ipvs-patience-duration", "30s",
+				"--feature-gates", "ReservedCapacity=false,SpotToSpotConsolidation=true,NodeRepair=true,NodeOverlay=true,StaticCapacity=true",
 			)
 			Expect(err).To(BeNil())
 			expectOptionsMatch(opts, test.Options(test.OptionsFields{
@@ -183,15 +179,13 @@ var _ = Describe("Options", func() {
 				PreferencePolicy:                 lo.ToPtr(options.PreferencePolicyIgnore),
 				MinValuesPolicy:                  lo.ToPtr(options.MinValuesPolicyBestEffort),
 				FeatureGates: test.FeatureGates{
-					ReservedCapacity:          lo.ToPtr(false),
-					NodeRepair:                lo.ToPtr(true),
-					SpotToSpotConsolidation:   lo.ToPtr(true),
-					NodeOverlay:               lo.ToPtr(true),
-					StaticCapacity:            lo.ToPtr(true),
-					InPlacePodVerticalScaling: lo.ToPtr(true),
+					ReservedCapacity:        lo.ToPtr(false),
+					NodeRepair:              lo.ToPtr(true),
+					SpotToSpotConsolidation: lo.ToPtr(true),
+					NodeOverlay:             lo.ToPtr(true),
+					StaticCapacity:          lo.ToPtr(true),
 				},
-				IgnoreDRARequests:    lo.ToPtr(true),
-				IPVSPatienceDuration: lo.ToPtr(30 * time.Second),
+				IgnoreDRARequests: lo.ToPtr(true),
 			}))
 		})
 
@@ -215,8 +209,7 @@ var _ = Describe("Options", func() {
 			os.Setenv("BATCH_IDLE_DURATION", "5s")
 			os.Setenv("PREFERENCE_POLICY", "Ignore")
 			os.Setenv("MIN_VALUES_POLICY", "BestEffort")
-			os.Setenv("FEATURE_GATES", "ReservedCapacity=false,SpotToSpotConsolidation=true,NodeRepair=true,NodeOverlay=true,StaticCapacity=true,InPlacePodVerticalScaling=true")
-			os.Setenv("IPVS_PATIENCE_DURATION", "45s")
+			os.Setenv("FEATURE_GATES", "ReservedCapacity=false,SpotToSpotConsolidation=true,NodeRepair=true,NodeOverlay=true,StaticCapacity=true")
 			fs = &options.FlagSet{
 				FlagSet: flag.NewFlagSet("karpenter", flag.ContinueOnError),
 			}
@@ -244,15 +237,13 @@ var _ = Describe("Options", func() {
 				PreferencePolicy:                 lo.ToPtr(options.PreferencePolicyIgnore),
 				MinValuesPolicy:                  lo.ToPtr(options.MinValuesPolicyBestEffort),
 				FeatureGates: test.FeatureGates{
-					ReservedCapacity:          lo.ToPtr(false),
-					NodeRepair:                lo.ToPtr(true),
-					SpotToSpotConsolidation:   lo.ToPtr(true),
-					NodeOverlay:               lo.ToPtr(true),
-					StaticCapacity:            lo.ToPtr(true),
-					InPlacePodVerticalScaling: lo.ToPtr(true),
+					ReservedCapacity:        lo.ToPtr(false),
+					NodeRepair:              lo.ToPtr(true),
+					SpotToSpotConsolidation: lo.ToPtr(true),
+					NodeOverlay:             lo.ToPtr(true),
+					StaticCapacity:          lo.ToPtr(true),
 				},
-				IgnoreDRARequests:    lo.ToPtr(true),
-				IPVSPatienceDuration: lo.ToPtr(45 * time.Second),
+				IgnoreDRARequests: lo.ToPtr(true),
 			}))
 		})
 
@@ -271,7 +262,7 @@ var _ = Describe("Options", func() {
 			os.Setenv("BATCH_IDLE_DURATION", "5s")
 			os.Setenv("PREFERENCE_POLICY", "Ignore")
 			os.Setenv("MIN_VALUES_POLICY", "BestEffort")
-			os.Setenv("FEATURE_GATES", "ReservedCapacity=false,SpotToSpotConsolidation=true,NodeRepair=true,NodeOverlay=true,StaticCapacity=true,InPlacePodVerticalScaling=true")
+			os.Setenv("FEATURE_GATES", "ReservedCapacity=false,SpotToSpotConsolidation=true,NodeRepair=true,NodeOverlay=true,StaticCapacity=true")
 			fs = &options.FlagSet{
 				FlagSet: flag.NewFlagSet("karpenter", flag.ContinueOnError),
 			}
@@ -306,12 +297,11 @@ var _ = Describe("Options", func() {
 				PreferencePolicy:                 lo.ToPtr(options.PreferencePolicyRespect),
 				MinValuesPolicy:                  lo.ToPtr(options.MinValuesPolicyStrict),
 				FeatureGates: test.FeatureGates{
-					ReservedCapacity:          lo.ToPtr(false),
-					NodeRepair:                lo.ToPtr(true),
-					SpotToSpotConsolidation:   lo.ToPtr(true),
-					NodeOverlay:               lo.ToPtr(true),
-					StaticCapacity:            lo.ToPtr(true),
-					InPlacePodVerticalScaling: lo.ToPtr(true),
+					ReservedCapacity:        lo.ToPtr(false),
+					NodeRepair:              lo.ToPtr(true),
+					SpotToSpotConsolidation: lo.ToPtr(true),
+					NodeOverlay:             lo.ToPtr(true),
+					StaticCapacity:          lo.ToPtr(true),
 				},
 				IgnoreDRARequests: lo.ToPtr(true),
 			}))
@@ -345,7 +335,6 @@ var _ = Describe("Options", func() {
 			Entry("when SpotToSpotConsolidation is overridden", "SpotToSpotConsolidation"),
 			Entry("when NodeOverlay is overridden", "NodeOverlay"),
 			Entry("when StaticCapacity is overridden", "StaticCapacity"),
-			Entry("when InPlacePodVerticalScaling is overridden", "InPlacePodVerticalScaling"),
 		)
 	})
 
@@ -357,31 +346,6 @@ var _ = Describe("Options", func() {
 		},
 		Entry("implicit false", "", false),
 	)
-
-	Context("InPlacePodVerticalScaling FeatureGate", func() {
-		It("should reflect the toggled gate value via FromContext after ToContext", func() {
-			// Parse with gate enabled
-			err := opts.Parse(fs, "--feature-gates", "InPlacePodVerticalScaling=true")
-			Expect(err).To(BeNil())
-			Expect(opts.FeatureGates.InPlacePodVerticalScaling).To(BeTrue())
-
-			// Store in context and retrieve
-			ctxWithOpts := opts.ToContext(ctx)
-			retrieved := options.FromContext(ctxWithOpts)
-			Expect(retrieved.FeatureGates.InPlacePodVerticalScaling).To(BeTrue())
-		})
-		It("should default InPlacePodVerticalScaling to false in FromContext", func() {
-			// Parse with defaults (no feature-gates flag)
-			err := opts.Parse(fs)
-			Expect(err).To(BeNil())
-			Expect(opts.FeatureGates.InPlacePodVerticalScaling).To(BeFalse())
-
-			// Store in context and retrieve
-			ctxWithOpts := opts.ToContext(ctx)
-			retrieved := options.FromContext(ctxWithOpts)
-			Expect(retrieved.FeatureGates.InPlacePodVerticalScaling).To(BeFalse())
-		})
-	})
 
 	Context("Validation", func() {
 		DescribeTable(
@@ -441,7 +405,5 @@ func expectOptionsMatch(optsA, optsB *options.Options) {
 	Expect(optsA.FeatureGates.NodeOverlay).To(Equal(optsB.FeatureGates.NodeOverlay))
 	Expect(optsA.FeatureGates.StaticCapacity).To(Equal(optsB.FeatureGates.StaticCapacity))
 	Expect(optsA.FeatureGates.SpotToSpotConsolidation).To(Equal(optsB.FeatureGates.SpotToSpotConsolidation))
-	Expect(optsA.FeatureGates.InPlacePodVerticalScaling).To(Equal(optsB.FeatureGates.InPlacePodVerticalScaling))
 	Expect(optsA.IgnoreDRARequests).To(Equal(optsB.IgnoreDRARequests))
-	Expect(optsA.IPVSPatienceDuration).To(Equal(optsB.IPVSPatienceDuration))
 }

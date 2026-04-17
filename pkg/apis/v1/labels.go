@@ -53,14 +53,6 @@ const (
 	NodePoolHashVersionAnnotationKey           = apis.Group + "/nodepool-hash-version"
 	NodeClaimTerminationTimestampAnnotationKey = apis.Group + "/nodeclaim-termination-timestamp"
 	NodeClaimMinValuesRelaxedAnnotationKey     = apis.Group + "/nodeclaim-min-values-relaxed"
-
-	// Peak resource envelope annotations for IPVS awareness
-	PeakCPUAnnotationKey    = apis.Group + "/peak-cpu"
-	PeakMemoryAnnotationKey = apis.Group + "/peak-memory"
-
-	// Steady-state annotations for provisioning patience
-	SteadyStateCPUAnnotationKey    = apis.Group + "/steady-state-cpu"
-	SteadyStateMemoryAnnotationKey = apis.Group + "/steady-state-memory"
 )
 
 // Karpenter specific finalizers

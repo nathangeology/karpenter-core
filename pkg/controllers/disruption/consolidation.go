@@ -27,7 +27,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/utils/clock"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"sigs.k8s.io/karpenter/pkg/utils/pretty"
 
@@ -38,7 +37,6 @@ import (
 	pscheduling "sigs.k8s.io/karpenter/pkg/controllers/provisioning/scheduling"
 	"sigs.k8s.io/karpenter/pkg/controllers/state"
 	"sigs.k8s.io/karpenter/pkg/events"
-	"sigs.k8s.io/karpenter/pkg/metrics"
 	"sigs.k8s.io/karpenter/pkg/operator/options"
 	"sigs.k8s.io/karpenter/pkg/scheduling"
 )
@@ -86,104 +84,11 @@ func (c *consolidation) markConsolidated() {
 	c.lastConsolidationState = c.cluster.ConsolidationState()
 }
 
-// isBalancedPolicy returns true if any candidate in the command uses the Balanced consolidation policy.
-func isBalancedPolicy(candidates []*Candidate) bool {
-	for _, cn := range candidates {
-		if cn.NodePool.Spec.Disruption.ConsolidationPolicy == v1.ConsolidationPolicyBalanced {
-			return true
-		}
-	}
-	return false
-}
-
-// checkBalancedScore evaluates whether a consolidation command meets the Balanced policy score threshold.
-// Returns the (possibly modified) command and true if the move should proceed, false if it should be rejected.
-// Only candidates whose NodePool uses the Balanced policy are scored; WhenEmptyOrUnderutilized candidates
-// pass unconditionally.
-func (c *consolidation) checkBalancedScore(ctx context.Context, cmd Command, allCandidates []*Candidate, consolidationType string) (Command, bool) {
-	// Filter to only Balanced candidates in this command
-	balancedCandidates := lo.Filter(cmd.Candidates, func(cn *Candidate, _ int) bool {
-		return cn.NodePool.Spec.Disruption.ConsolidationPolicy == v1.ConsolidationPolicyBalanced
-	})
-	// If no candidates use Balanced policy, pass unconditionally
-	if len(balancedCandidates) == 0 {
-		return cmd, true
-	}
-
-	// Compute nodepool-level totals from all eligible candidates
-	totalCost, totalDisruption := ComputeNodePoolMetrics(ctx, allCandidates)
-	if totalCost == 0 {
-		return cmd, false
-	}
-
-	// Compute deleted node cost (only Balanced candidates)
-	deletedCost := getCandidatePrices(balancedCandidates)
-
-	// Compute replacement cost
-	replacementCost := 0.0
-	for _, nc := range cmd.Results.NewNodeClaims {
-		if len(nc.InstanceTypeOptions) > 0 {
-			offerings := nc.InstanceTypeOptions[0].Offerings
-			if len(offerings) > 0 {
-				replacementCost += offerings.Cheapest().Price
-			}
-		}
-	}
-
-	score := ComputeMoveScore(ctx, deletedCost, replacementCost, totalCost, balancedCandidates, totalDisruption)
-
-	// Get threshold from the first Balanced candidate's NodePool
-	threshold := 0.5 // default k=2
-	for _, cn := range balancedCandidates {
-		threshold = cn.NodePool.Spec.Disruption.GetDisruptionToleranceThreshold()
-		break
-	}
-
-	decision := string(cmd.Decision())
-	ConsolidationScoreHistogram.Observe(score, map[string]string{
-		decisionLabel:          decision,
-		ConsolidationTypeLabel: consolidationType,
-	})
-
-	log.FromContext(ctx).V(1).Info("balanced consolidation score",
-		"consolidation_score", score,
-		"threshold", threshold,
-		"decision", decision,
-		"candidates", len(balancedCandidates),
-		"deletedCost", deletedCost,
-		"replacementCost", replacementCost,
-	)
-
-	if score >= threshold {
-		return cmd, true
-	}
-	return cmd, false
-}
-
 // ShouldDisrupt is a predicate used to filter candidates
-func (c *consolidation) ShouldDisrupt(ctx context.Context, cn *Candidate) bool {
+func (c *consolidation) ShouldDisrupt(_ context.Context, cn *Candidate) bool {
 	// Disable consolidation for static NodePool
 	if cn.OwnedByStaticNodePool() {
 		return false
-	}
-	// When the IPVS feature gate is enabled, check for actively resizing pods
-	// and the consolidation grace period before proceeding with other checks.
-	if options.FromContext(ctx).FeatureGates.InPlacePodVerticalScaling {
-		pods, err := cn.Pods(ctx, c.kubeClient)
-		if err == nil {
-			for _, pod := range pods {
-				if hasActiveResize(pod) {
-					metrics.IPVSConsolidationDeferredTotal.Inc(map[string]string{metrics.ReasonLabel: "active_resize"})
-					c.recorder.Publish(disruptionevents.Unconsolidatable(cn.Node, cn.NodeClaim, "node has pods with active in-place resize")...)
-					return false
-				}
-			}
-		}
-		if c.isInResizeGracePeriod(cn) {
-			metrics.IPVSConsolidationDeferredTotal.Inc(map[string]string{metrics.ReasonLabel: "grace_period"})
-			c.recorder.Publish(disruptionevents.Unconsolidatable(cn.Node, cn.NodeClaim, "node is within IPVS consolidation grace period")...)
-			return false
-		}
 	}
 	// We need the following to know what the price of the instance for price comparison. If one of these doesn't exist, we can't
 	// compute consolidation decisions for this candidate.
@@ -206,10 +111,10 @@ func (c *consolidation) ShouldDisrupt(ctx context.Context, cn *Candidate) bool {
 		c.recorder.Publish(disruptionevents.Unconsolidatable(cn.Node, cn.NodeClaim, fmt.Sprintf("NodePool %q has consolidation disabled", cn.NodePool.Name))...)
 		return false
 	}
-	// Allow consolidation for WhenEmptyOrUnderutilized and Balanced policies.
-	// WhenEmpty is handled by the Emptiness controller, not here.
-	policy := cn.NodePool.Spec.Disruption.ConsolidationPolicy
-	if policy != v1.ConsolidationPolicyWhenEmptyOrUnderutilized && policy != v1.ConsolidationPolicyBalanced {
+	// If we don't have the "WhenEmptyOrUnderutilized" policy set, we should not do any of the consolidation methods, but
+	// we should also not fire an event here to users since this can be confusing when the field on the NodePool
+	// is named "consolidationPolicy"
+	if cn.NodePool.Spec.Disruption.ConsolidationPolicy != v1.ConsolidationPolicyWhenEmptyOrUnderutilized {
 		c.recorder.Publish(disruptionevents.Unconsolidatable(cn.Node, cn.NodeClaim, fmt.Sprintf("NodePool %q has non-empty consolidation disabled", cn.NodePool.Name))...)
 		return false
 	}
@@ -217,22 +122,9 @@ func (c *consolidation) ShouldDisrupt(ctx context.Context, cn *Candidate) bool {
 	return cn.NodeClaim.StatusConditions().Get(v1.ConditionTypeConsolidatable).IsTrue()
 }
 
-// sortCandidates sorts candidates by drift priority (drifted before non-drifted,
-// oldest-drifted first) then by disruption cost ascending.
+// sortCandidates sorts candidates by disruption cost (where the lowest disruption cost is first) and returns the result
 func (c *consolidation) sortCandidates(candidates []*Candidate) []*Candidate {
-	sort.SliceStable(candidates, func(i, j int) bool {
-		iDrifted := candidates[i].StateNode.NodeClaim.StatusConditions().Get(v1.ConditionTypeDrifted).IsTrue()
-		jDrifted := candidates[j].StateNode.NodeClaim.StatusConditions().Get(v1.ConditionTypeDrifted).IsTrue()
-		if iDrifted != jDrifted {
-			return iDrifted // drifted nodes first
-		}
-		if iDrifted && jDrifted {
-			iTime := candidates[i].StateNode.NodeClaim.StatusConditions().Get(v1.ConditionTypeDrifted).LastTransitionTime
-			jTime := candidates[j].StateNode.NodeClaim.StatusConditions().Get(v1.ConditionTypeDrifted).LastTransitionTime
-			if !iTime.Equal(&jTime) {
-				return iTime.Before(&jTime)
-			}
-		}
+	sort.Slice(candidates, func(i int, j int) bool {
 		return candidates[i].DisruptionCost < candidates[j].DisruptionCost
 	})
 	return candidates
@@ -442,29 +334,4 @@ func getCandidatePrices(candidates []*Candidate) float64 {
 		price += compatibleOfferings.Cheapest().Price
 	}
 	return price
-}
-
-// defaultIPVSConsolidationGracePeriod is the default grace period to wait after
-// a pod resize completes before reconsidering the node for consolidation.
-const defaultIPVSConsolidationGracePeriod = 5 * time.Minute
-
-// hasActiveResize returns true if the pod has an active in-place resize,
-// indicated by a Resize status of "Proposed" or "InProgress".
-func hasActiveResize(pod *corev1.Pod) bool {
-	return pod.Status.Resize == corev1.PodResizeStatusInProgress ||
-		pod.Status.Resize == corev1.PodResizeStatus("Proposed")
-}
-
-// isInResizeGracePeriod returns true if the candidate node recently had a pod
-// resize complete and is still within the IPVS consolidation grace period.
-func (c *consolidation) isInResizeGracePeriod(cn *Candidate) bool {
-	lastResize := cn.LastResizeCompletionTime()
-	if lastResize.IsZero() {
-		return false
-	}
-	gracePeriod := defaultIPVSConsolidationGracePeriod
-	if cn.NodePool.Spec.Disruption.IPVSConsolidationGracePeriod != nil {
-		gracePeriod = cn.NodePool.Spec.Disruption.IPVSConsolidationGracePeriod.Duration
-	}
-	return c.clock.Since(lastResize) < gracePeriod
 }

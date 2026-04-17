@@ -80,7 +80,6 @@ type NodePoolSpec struct {
 	Replicas *int64 `json:"replicas,omitempty"`
 }
 
-// +kubebuilder:validation:XValidation:rule="self.consolidationPolicy == 'Balanced' || !has(self.disruptionTolerance)",message="disruptionTolerance is only valid with consolidationPolicy Balanced"
 type Disruption struct {
 	//nolint:kubeapilinter
 	// ConsolidateAfter is the duration the controller will wait
@@ -97,20 +96,9 @@ type Disruption struct {
 	// algorithm. This policy defaults to "WhenEmptyOrUnderutilized" if not specified
 	// When replicas is set, ConsolidationPolicy is simply ignored
 	// +kubebuilder:default:="WhenEmptyOrUnderutilized"
-	// +kubebuilder:validation:Enum:={WhenEmpty,WhenEmptyOrUnderutilized,Balanced}
+	// +kubebuilder:validation:Enum:={WhenEmpty,WhenEmptyOrUnderutilized}
 	// +optional
 	ConsolidationPolicy ConsolidationPolicy `json:"consolidationPolicy,omitempty"`
-	//nolint:kubeapilinter
-	// DisruptionTolerance controls how aggressive the Balanced consolidation policy is.
-	// Higher values make consolidation more aggressive (allow more disruption for less savings).
-	// The consolidation score threshold is computed as 1/DisruptionTolerance.
-	// For example, DisruptionTolerance=2 means threshold=0.5, so consolidation occurs when
-	// cost savings are at least half the disruption cost.
-	// This field only applies when ConsolidationPolicy is Balanced.
-	// +kubebuilder:validation:Minimum=1
-	// +kubebuilder:default:=2
-	// +optional
-	DisruptionTolerance *int32 `json:"disruptionTolerance,omitempty"`
 	//nolint:kubeapilinter
 	// Budgets is a list of Budgets.
 	// If there are multiple active budgets, Karpenter uses
@@ -121,14 +109,6 @@ type Disruption struct {
 	// +kubebuilder:validation:MaxItems=50
 	// +optional
 	Budgets []Budget `json:"budgets,omitempty" hash:"ignore"`
-	//nolint:kubeapilinter
-	// IPVSConsolidationGracePeriod is the duration to wait after a pod resize
-	// completes before reconsidering the node for consolidation.
-	// +kubebuilder:default:="5m"
-	// +kubebuilder:validation:Pattern=`^([0-9]+(s|m|h))+$`
-	// +kubebuilder:validation:Type="string"
-	// +optional
-	IPVSConsolidationGracePeriod *metav1.Duration `json:"ipvsConsolidationGracePeriod,omitempty"`
 }
 
 // Budget defines when Karpenter will restrict the
@@ -178,18 +158,7 @@ type ConsolidationPolicy string
 const (
 	ConsolidationPolicyWhenEmpty                ConsolidationPolicy = "WhenEmpty"
 	ConsolidationPolicyWhenEmptyOrUnderutilized ConsolidationPolicy = "WhenEmptyOrUnderutilized"
-	ConsolidationPolicyBalanced                 ConsolidationPolicy = "Balanced"
 )
-
-// GetDisruptionToleranceThreshold returns the score threshold derived from DisruptionTolerance.
-// threshold = 1.0 / k where k is the DisruptionTolerance value (default 2, threshold 0.5).
-func (d *Disruption) GetDisruptionToleranceThreshold() float64 {
-	k := int32(2)
-	if d.DisruptionTolerance != nil && *d.DisruptionTolerance > 0 {
-		k = *d.DisruptionTolerance
-	}
-	return 1.0 / float64(k)
-}
 
 // DisruptionReason defines valid reasons for disruption budgets.
 // +kubebuilder:validation:Enum={Underutilized,Empty,Drifted}

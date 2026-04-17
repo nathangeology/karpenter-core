@@ -157,19 +157,7 @@ spec:
                       enum:
                         - WhenEmpty
                         - WhenEmptyOrUnderutilized
-                        - Balanced
                       type: string
-                    disruptionTolerance:
-                      description: |-
-                        DisruptionTolerance controls how aggressive the Balanced consolidation policy is.
-                        The consolidation score threshold is computed as 1/DisruptionTolerance.
-                        For example, DisruptionTolerance=2 means threshold=0.5, so consolidation occurs when
-                        savings are at least 50% of disruption cost. Higher values allow more aggressive consolidation.
-                        This field only applies when ConsolidationPolicy is Balanced.
-                        Defaults to 2 if not specified.
-                      format: int32
-                      minimum: 1
-                      type: integer
                   required:
                     - consolidateAfter
                   type: object

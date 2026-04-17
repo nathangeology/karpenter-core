@@ -27,7 +27,6 @@ import (
 	"go.uber.org/multierr"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
@@ -137,13 +136,6 @@ type StateNode struct {
 	// of the karpenter.sh/disruption taint to know when a node is marked for deletion.
 	markedForDeletion bool
 	nominatedUntil    metav1.Time
-
-	// lastResizeCompletionTime tracks when the most recent pod resize
-	// completed on this node, used for grace period calculation.
-	lastResizeCompletionTime time.Time
-	// podResizeStatuses tracks the previous resize status for each pod,
-	// enabling detection of resize completion transitions (InProgress → empty).
-	podResizeStatuses map[types.NamespacedName]corev1.PodResizeStatus
 }
 
 func NewNode() *StateNode {
@@ -154,24 +146,21 @@ func NewNode() *StateNode {
 		podLimits:         map[types.NamespacedName]corev1.ResourceList{},
 		hostPortUsage:     scheduling.NewHostPortUsage(),
 		volumeUsage:       scheduling.NewVolumeUsage(),
-		podResizeStatuses: map[types.NamespacedName]corev1.PodResizeStatus{},
 	}
 }
 
 func (in *StateNode) ShallowCopy() *StateNode {
 	return &StateNode{
-		Node:                     in.Node,
-		NodeClaim:                in.NodeClaim,
-		daemonSetRequests:        in.daemonSetRequests,
-		daemonSetLimits:          in.daemonSetLimits,
-		podRequests:              in.podRequests,
-		podLimits:                in.podLimits,
-		hostPortUsage:            in.hostPortUsage,
-		volumeUsage:              in.volumeUsage,
-		markedForDeletion:        in.markedForDeletion,
-		nominatedUntil:           in.nominatedUntil,
-		lastResizeCompletionTime: in.lastResizeCompletionTime,
-		podResizeStatuses:        in.podResizeStatuses,
+		Node:              in.Node,
+		NodeClaim:         in.NodeClaim,
+		daemonSetRequests: in.daemonSetRequests,
+		daemonSetLimits:   in.daemonSetLimits,
+		podRequests:       in.podRequests,
+		podLimits:         in.podLimits,
+		hostPortUsage:     in.hostPortUsage,
+		volumeUsage:       in.volumeUsage,
+		markedForDeletion: in.markedForDeletion,
+		nominatedUntil:    in.nominatedUntil,
 	}
 }
 
@@ -452,18 +441,6 @@ func (in *StateNode) Managed() bool {
 	return in.NodeClaim != nil
 }
 
-// LastResizeCompletionTime returns the most recent time a pod resize completed
-// on this node. Used by the consolidation engine for grace period calculation.
-func (in *StateNode) LastResizeCompletionTime() time.Time {
-	return in.lastResizeCompletionTime
-}
-
-// SetLastResizeCompletionTime sets the last resize completion time on this node.
-// Exported for use in property-based tests in other packages.
-func (in *StateNode) SetLastResizeCompletionTime(t time.Time) {
-	in.lastResizeCompletionTime = t
-}
-
 func (in *StateNode) updateForPod(ctx context.Context, kubeClient client.Client, pod *corev1.Pod) error {
 	podKey := client.ObjectKeyFromObject(pod)
 	hostPorts := scheduling.GetHostPorts(pod)
@@ -471,30 +448,7 @@ func (in *StateNode) updateForPod(ctx context.Context, kubeClient client.Client,
 	if err != nil {
 		return fmt.Errorf("tracking volume usage, %w", err)
 	}
-	// When the IPVS feature gate is enabled, use IPVS-aware resource computation
-	// that considers max(spec.requests, allocatedResources, peak annotations).
-	// When disabled, preserve current behavior using spec-based requests only.
-	if options.FromContext(ctx).FeatureGates.InPlacePodVerticalScaling {
-		podReqs := resources.IPVSAwareRequestsForPod(pod)
-		podReqs[corev1.ResourcePods] = *resource.NewQuantity(1, resource.DecimalExponent)
-		in.podRequests[podKey] = podReqs
-
-		// Track resize status transitions to detect when a resize completes.
-		// When a pod's Resize status transitions from InProgress to empty,
-		// record the current time as the last resize completion time.
-		currentResizeStatus := pod.Status.Resize
-		if previousStatus, tracked := in.podResizeStatuses[podKey]; tracked {
-			if previousStatus == corev1.PodResizeStatusInProgress && currentResizeStatus == "" {
-				now := time.Now()
-				if now.After(in.lastResizeCompletionTime) {
-					in.lastResizeCompletionTime = now
-				}
-			}
-		}
-		in.podResizeStatuses[podKey] = currentResizeStatus
-	} else {
-		in.podRequests[podKey] = resources.RequestsForPods(pod)
-	}
+	in.podRequests[podKey] = resources.RequestsForPods(pod)
 	in.podLimits[podKey] = resources.LimitsForPods(pod)
 	// if it's a daemonset, we track what it has requested separately
 	if podutils.IsOwnedByDaemonSet(pod) {
@@ -513,7 +467,6 @@ func (in *StateNode) cleanupForPod(podKey types.NamespacedName) {
 	delete(in.podLimits, podKey)
 	delete(in.daemonSetRequests, podKey)
 	delete(in.daemonSetLimits, podKey)
-	delete(in.podResizeStatuses, podKey)
 }
 
 func nominationWindow(ctx context.Context) time.Duration {

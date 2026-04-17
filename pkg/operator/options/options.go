@@ -61,7 +61,7 @@ type FeatureGates struct {
 	SpotToSpotConsolidation   bool
 	NodeOverlay               bool
 	StaticCapacity            bool
-	InPlacePodVerticalScaling bool
+	PodDeletionCostManagement bool
 }
 
 // Options contains all CLI flags / env vars for karpenter-core. It adheres to the options.Injectable interface.
@@ -89,8 +89,9 @@ type Options struct {
 	minValuesPolicyRaw               string
 	MinValuesPolicy                  MinValuesPolicy
 	IgnoreDRARequests                bool // NOTE: This flag will be removed once formal DRA support is GA in Karpenter.
-	IPVSPatienceDuration             time.Duration
 	FeatureGates                     FeatureGates
+	// Pod deletion cost management options
+	PodDeletionCostChangeDetection bool
 }
 
 type FlagSet struct {
@@ -132,8 +133,9 @@ func (o *Options) AddFlags(fs *FlagSet) {
 	fs.StringVar(&o.preferencePolicyRaw, "preference-policy", env.WithDefaultString("PREFERENCE_POLICY", string(PreferencePolicyRespect)), "How the Karpenter scheduler should treat preferences. Preferences include preferredDuringSchedulingIgnoreDuringExecution node and pod affinities/anti-affinities and ScheduleAnyways topologySpreadConstraints. Can be one of 'Ignore' and 'Respect'")
 	fs.StringVar(&o.minValuesPolicyRaw, "min-values-policy", env.WithDefaultString("MIN_VALUES_POLICY", string(MinValuesPolicyStrict)), "Min values policy for scheduling. Options include 'Strict' for existing behavior where min values are strictly enforced or 'BestEffort' where Karpenter relaxes min values when it isn't satisfied.")
 	fs.BoolVarWithEnv(&o.IgnoreDRARequests, "ignore-dra-requests", "IGNORE_DRA_REQUESTS", true, "When set, Karpenter will ignore pods' DRA requests during scheduling simulations. NOTE: This flag will be removed once formal DRA support is GA in Karpenter.")
-	fs.DurationVar(&o.IPVSPatienceDuration, "ipvs-patience-duration", env.WithDefaultDuration("IPVS_PATIENCE_DURATION", 60*time.Second), "The duration to wait for pods with steady-state annotations to scale down in place before provisioning new nodes. Only effective when the InPlacePodVerticalScaling feature gate is enabled.")
-	fs.StringVar(&o.FeatureGates.inputStr, "feature-gates", env.WithDefaultString("FEATURE_GATES", "NodeRepair=false,ReservedCapacity=true,SpotToSpotConsolidation=false,NodeOverlay=false,StaticCapacity=false,InPlacePodVerticalScaling=false"), "Optional features can be enabled / disabled using feature gates. Current options are: NodeRepair, ReservedCapacity, SpotToSpotConsolidation, NodeOverlay, StaticCapacity, and InPlacePodVerticalScaling.")
+	fs.StringVar(&o.FeatureGates.inputStr, "feature-gates", env.WithDefaultString("FEATURE_GATES", "NodeRepair=false,ReservedCapacity=true,SpotToSpotConsolidation=false,NodeOverlay=false,StaticCapacity=false,PodDeletionCostManagement=false"), "Optional features can be enabled / disabled using feature gates. Current options are: NodeRepair, ReservedCapacity, SpotToSpotConsolidation, NodeOverlay, StaticCapacity, and PodDeletionCostManagement.")
+	// Pod deletion cost management options
+	fs.BoolVarWithEnv(&o.PodDeletionCostChangeDetection, "pod-deletion-cost-change-detection", "POD_DELETION_COST_CHANGE_DETECTION", true, "Enable change detection optimization for pod deletion cost management")
 }
 
 func (o *Options) Parse(fs *FlagSet, args ...string) error {
@@ -176,7 +178,7 @@ func DefaultFeatureGates() FeatureGates {
 		SpotToSpotConsolidation:   false,
 		NodeOverlay:               false,
 		StaticCapacity:            false,
-		InPlacePodVerticalScaling: false,
+		PodDeletionCostManagement: false,
 	}
 }
 
@@ -204,8 +206,8 @@ func ParseFeatureGates(gateStr string) (FeatureGates, error) {
 	if val, ok := gateMap["StaticCapacity"]; ok {
 		gates.StaticCapacity = val
 	}
-	if val, ok := gateMap["InPlacePodVerticalScaling"]; ok {
-		gates.InPlacePodVerticalScaling = val
+	if val, ok := gateMap["PodDeletionCostManagement"]; ok {
+		gates.PodDeletionCostManagement = val
 	}
 
 	return gates, nil
