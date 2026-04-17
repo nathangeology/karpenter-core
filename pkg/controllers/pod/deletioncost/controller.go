@@ -36,7 +36,10 @@ import (
 	"sigs.k8s.io/karpenter/pkg/operator/options"
 )
 
-const reconcileInterval = time.Minute
+const (
+	reconcileInterval = time.Minute
+	maxNodesPerCycle  = 50
+)
 
 // Controller manages pod deletion cost annotations for Karpenter-managed nodes
 type Controller struct {
@@ -49,6 +52,8 @@ type Controller struct {
 	rankingEngine  *RankingEngine
 	annotationMgr  *AnnotationManager
 	changeDetector *ChangeDetector
+
+	previouslyLabeledNodes map[string]bool
 }
 
 // NewController creates a new pod deletion cost controller
@@ -59,16 +64,15 @@ func NewController(
 	cluster *state.Cluster,
 	recorder events.Recorder,
 ) *Controller {
-	// Get options from context to determine ranking strategy
-	// This will be set during reconcile when we have the context
 	return &Controller{
-		clock:          clk,
-		kubeClient:     kubeClient,
-		cloudProvider:  cloudProvider,
-		cluster:        cluster,
-		recorder:       recorder,
-		annotationMgr:  NewAnnotationManager(kubeClient, recorder),
-		changeDetector: NewChangeDetector(),
+		clock:                  clk,
+		kubeClient:             kubeClient,
+		cloudProvider:          cloudProvider,
+		cluster:                cluster,
+		recorder:               recorder,
+		annotationMgr:          NewAnnotationManager(kubeClient, recorder),
+		changeDetector:         NewChangeDetector(),
+		previouslyLabeledNodes: make(map[string]bool),
 	}
 }
 
@@ -89,15 +93,13 @@ func (c *Controller) Name() string {
 func (c *Controller) Reconcile(ctx context.Context) (reconciler.Result, error) {
 	ctx = injection.WithControllerName(ctx, c.Name())
 
-	// Get options from context
 	opts := options.FromContext(ctx)
 
-	// Check if feature is enabled via feature gate
 	if !opts.FeatureGates.PodDeletionCostManagement {
 		return reconciler.Result{RequeueAfter: reconcileInterval}, nil
 	}
 
-	// Initialize ranking engine with configured strategy if not already done
+	// Initialize ranking engine if not already done
 	if c.rankingEngine == nil {
 		c.rankingEngine = NewRankingEngine(RankingStrategy(opts.PodDeletionCostRankingStrategy))
 	}
@@ -108,7 +110,6 @@ func (c *Controller) Reconcile(ctx context.Context) (reconciler.Result, error) {
 		nodes = append(nodes, node)
 	}
 
-	// If no nodes, nothing to do
 	if len(nodes) == 0 {
 		return reconciler.Result{RequeueAfter: reconcileInterval}, nil
 	}
@@ -118,36 +119,60 @@ func (c *Controller) Reconcile(ctx context.Context) (reconciler.Result, error) {
 		changed, err := c.changeDetector.HasChanged(ctx, c.kubeClient, nodes)
 		if err != nil {
 			log.FromContext(ctx).Error(err, "failed to check for changes")
-			// Continue with ranking even if change detection fails
 		} else if !changed {
-			// No changes detected, skip ranking
 			log.FromContext(ctx).V(1).Info("no changes detected, skipping pod deletion cost update")
 			SkippedNoChangesTotal.Add(1, map[string]string{})
 			return reconciler.Result{RequeueAfter: reconcileInterval}, nil
 		}
 	}
 
-	// Call ranking engine to rank nodes
+	// Rank all nodes
 	nodeRanks, err := c.rankingEngine.RankNodes(ctx, c.kubeClient, nodes)
 	if err != nil {
 		log.FromContext(ctx).Error(err, "failed to rank nodes")
-		// Publish disabled event for fatal ranking errors
 		c.recorder.Publish(DisabledEvent(fmt.Sprintf("failed to rank nodes: %v", err)))
 		return reconciler.Result{RequeueAfter: reconcileInterval}, err
 	}
 
-	// Publish ranking completed event
 	c.recorder.Publish(RankingCompletedEvent(len(nodeRanks), string(c.rankingEngine.strategy)))
 
-	// Call annotation manager to update pods
-	if err := c.annotationMgr.UpdatePodDeletionCosts(ctx, nodeRanks); err != nil {
+	// Bound to top-N nodes
+	topN := nodeRanks
+	if len(topN) > maxNodesPerCycle {
+		topN = topN[:maxNodesPerCycle]
+	}
+
+	// Build the new top-N set
+	newLabeledNodes := make(map[string]bool, len(topN))
+	for _, nr := range topN {
+		newLabeledNodes[nr.Node.Name()] = true
+	}
+
+	// Clean up nodes that were in the previous set but not in the new one
+	for nodeName := range c.previouslyLabeledNodes {
+		if !newLabeledNodes[nodeName] {
+			// Find the NodeRank for this node in the full set to clean up
+			for i := range nodeRanks {
+				if nodeRanks[i].Node.Name() == nodeName {
+					if err := c.annotationMgr.CleanupNodeAnnotations(ctx, &nodeRanks[i]); err != nil {
+						log.FromContext(ctx).WithValues("node", nodeName).Error(err, "failed to clean up annotations on removed node")
+					}
+					break
+				}
+			}
+		}
+	}
+
+	c.previouslyLabeledNodes = newLabeledNodes
+
+	// Update annotations on the top-N nodes
+	if err := c.annotationMgr.UpdatePodDeletionCosts(ctx, topN); err != nil {
 		log.FromContext(ctx).Error(err, "failed to update pod deletion costs")
-		// Publish disabled event for fatal annotation errors
 		c.recorder.Publish(DisabledEvent(fmt.Sprintf("failed to update pod deletion costs: %v", err)))
 		return reconciler.Result{RequeueAfter: reconcileInterval}, err
 	}
 
-	log.FromContext(ctx).V(1).WithValues("nodeCount", len(nodeRanks)).Info("updated pod deletion costs")
+	log.FromContext(ctx).V(1).WithValues("nodeCount", len(topN), "totalRanked", len(nodeRanks)).Info("updated pod deletion costs")
 
 	return reconciler.Result{RequeueAfter: reconcileInterval}, nil
 }

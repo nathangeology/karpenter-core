@@ -19,9 +19,11 @@ package deletioncost
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -49,13 +51,17 @@ type PodUpdate struct {
 type AnnotationManager struct {
 	kubeClient client.Client
 	recorder   events.Recorder
+
+	mu                 sync.Mutex
+	lastAssignedValues map[types.UID]string
 }
 
 // NewAnnotationManager creates a new AnnotationManager
 func NewAnnotationManager(kubeClient client.Client, recorder events.Recorder) *AnnotationManager {
 	return &AnnotationManager{
-		kubeClient: kubeClient,
-		recorder:   recorder,
+		kubeClient:         kubeClient,
+		recorder:           recorder,
+		lastAssignedValues: make(map[types.UID]string),
 	}
 }
 
@@ -66,9 +72,11 @@ func (a *AnnotationManager) UpdatePodDeletionCosts(ctx context.Context, nodeRank
 
 	var successCount, skippedCount, errorCount int
 
+	// Track which pod UIDs we see this cycle for cleanup
+	seenUIDs := make(map[types.UID]bool)
+
 	// Process each ranked node
 	for _, nodeRank := range nodeRanks {
-		// Get all pods on this node
 		pods, err := nodeRank.Node.Pods(ctx, a.kubeClient)
 		if err != nil {
 			log.FromContext(ctx).WithValues("node", nodeRank.Node.Name()).Error(err, "failed to list pods on node")
@@ -76,40 +84,37 @@ func (a *AnnotationManager) UpdatePodDeletionCosts(ctx context.Context, nodeRank
 			continue
 		}
 
-		// Build list of pods to update
-		podsToUpdate := []PodUpdate{}
 		for _, pod := range pods {
-			// Check if pod needs updating
-			if shouldUpdatePod(pod) {
-				podsToUpdate = append(podsToUpdate, PodUpdate{
-					Pod:       pod,
-					NewRank:   nodeRank.Rank,
-					ShouldAdd: !hasDeletionCostAnnotation(pod),
-				})
-			} else {
-				skippedCount++
-			}
-		}
+			seenUIDs[pod.UID] = true
 
-		// Batch update pods with new deletion cost
-		for _, podUpdate := range podsToUpdate {
+			// Check for third-party modification
+			if a.detectExternalModification(ctx, pod) {
+				skippedCount++
+				continue
+			}
+
+			if !shouldUpdatePod(pod) {
+				skippedCount++
+				continue
+			}
+
+			podUpdate := PodUpdate{
+				Pod:       pod,
+				NewRank:   nodeRank.Rank,
+				ShouldAdd: !hasDeletionCostAnnotation(pod),
+			}
+
 			if err := a.updatePodAnnotation(ctx, podUpdate); err != nil {
-				// Handle pod not found errors gracefully (pod was deleted)
 				if apierrors.IsNotFound(err) {
 					log.FromContext(ctx).V(1).WithValues("pod", klog.KObj(podUpdate.Pod)).Info("pod not found, skipping annotation update")
 					continue
 				}
-
-				// Handle conflict errors (will retry on next reconcile)
 				if apierrors.IsConflict(err) {
 					log.FromContext(ctx).V(1).WithValues("pod", klog.KObj(podUpdate.Pod)).Info("conflict updating pod annotation, will retry on next reconcile")
 					errorCount++
 					continue
 				}
-
-				// Log warnings for other failures and continue processing other pods
 				log.FromContext(ctx).WithValues("pod", klog.KObj(podUpdate.Pod)).Error(err, "failed to update pod deletion cost annotation")
-				// Publish event for failed update
 				a.recorder.Publish(UpdateFailedEvent(podUpdate.Pod, err))
 				errorCount++
 				continue
@@ -118,18 +123,20 @@ func (a *AnnotationManager) UpdatePodDeletionCosts(ctx context.Context, nodeRank
 		}
 	}
 
-	// Record metrics
-	PodsUpdatedTotal.Add(float64(successCount), map[string]string{
-		resultLabel: "success",
-	})
-	PodsUpdatedTotal.Add(float64(skippedCount), map[string]string{
-		resultLabel: "skipped_customer_managed",
-	})
-	PodsUpdatedTotal.Add(float64(errorCount), map[string]string{
-		resultLabel: "error",
-	})
+	// Clean up lastAssignedValues for pods no longer seen (deleted pods)
+	a.mu.Lock()
+	for uid := range a.lastAssignedValues {
+		if !seenUIDs[uid] {
+			delete(a.lastAssignedValues, uid)
+		}
+	}
+	a.mu.Unlock()
 
-	// Log summary
+	// Record metrics
+	PodsUpdatedTotal.Add(float64(successCount), map[string]string{resultLabel: "success"})
+	PodsUpdatedTotal.Add(float64(skippedCount), map[string]string{resultLabel: "skipped_customer_managed"})
+	PodsUpdatedTotal.Add(float64(errorCount), map[string]string{resultLabel: "error"})
+
 	if successCount > 0 || errorCount > 0 {
 		log.FromContext(ctx).WithValues(
 			"success", successCount,
@@ -138,6 +145,94 @@ func (a *AnnotationManager) UpdatePodDeletionCosts(ctx context.Context, nodeRank
 		).V(1).Info("pod deletion cost annotation update completed")
 	}
 
+	return nil
+}
+
+// detectExternalModification checks if a third party modified the deletion cost annotation.
+// If the sentinel annotation is present and the current value differs from what Karpenter
+// last set, it removes the sentinel (releasing management) and emits a warning event.
+func (a *AnnotationManager) detectExternalModification(ctx context.Context, pod *corev1.Pod) bool {
+	if pod.Annotations == nil {
+		return false
+	}
+
+	// Only check pods that have the sentinel annotation (Karpenter-managed)
+	if _, hasSentinel := pod.Annotations[KarpenterManagedDeletionCostAnnotation]; !hasSentinel {
+		return false
+	}
+
+	currentValue, hasCost := pod.Annotations[PodDeletionCostAnnotation]
+	if !hasCost {
+		return false
+	}
+
+	a.mu.Lock()
+	lastValue, tracked := a.lastAssignedValues[pod.UID]
+	a.mu.Unlock()
+
+	if !tracked {
+		// First time seeing this pod — not a conflict
+		return false
+	}
+
+	if currentValue == lastValue {
+		// Value unchanged — no external modification
+		return false
+	}
+
+	// External modification detected: remove sentinel annotation
+	log.FromContext(ctx).WithValues("pod", klog.KObj(pod), "expected", lastValue, "actual", currentValue).
+		Info("external modification detected on pod-deletion-cost annotation, releasing management")
+
+	patchPod := pod.DeepCopy()
+	delete(patchPod.Annotations, KarpenterManagedDeletionCostAnnotation)
+	if err := a.kubeClient.Patch(ctx, patchPod, client.MergeFrom(pod)); err != nil {
+		if !apierrors.IsNotFound(err) {
+			log.FromContext(ctx).WithValues("pod", klog.KObj(pod)).Error(err, "failed to remove sentinel annotation")
+		}
+	}
+
+	a.recorder.Publish(ExternalAnnotationModificationEvent(pod))
+
+	// Remove from tracking
+	a.mu.Lock()
+	delete(a.lastAssignedValues, pod.UID)
+	a.mu.Unlock()
+
+	return true
+}
+
+// CleanupNodeAnnotations removes both deletion cost and sentinel annotations from all
+// Karpenter-managed pods on the given node.
+func (a *AnnotationManager) CleanupNodeAnnotations(ctx context.Context, node *NodeRank) error {
+	pods, err := node.Node.Pods(ctx, a.kubeClient)
+	if err != nil {
+		return err
+	}
+
+	for _, pod := range pods {
+		if pod.Annotations == nil {
+			continue
+		}
+		if _, hasSentinel := pod.Annotations[KarpenterManagedDeletionCostAnnotation]; !hasSentinel {
+			continue
+		}
+
+		patchPod := pod.DeepCopy()
+		delete(patchPod.Annotations, PodDeletionCostAnnotation)
+		delete(patchPod.Annotations, KarpenterManagedDeletionCostAnnotation)
+		if err := a.kubeClient.Patch(ctx, patchPod, client.MergeFrom(pod)); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			log.FromContext(ctx).WithValues("pod", klog.KObj(pod)).Error(err, "failed to clean up annotations")
+		}
+
+		// Remove from tracking
+		a.mu.Lock()
+		delete(a.lastAssignedValues, pod.UID)
+		a.mu.Unlock()
+	}
 	return nil
 }
 
@@ -151,57 +246,42 @@ func hasDeletionCostAnnotation(pod *corev1.Pod) bool {
 }
 
 // shouldUpdatePod determines if a pod should have its deletion cost updated
-// Returns true if:
-// - Pod has no deletion cost annotation (we should add it)
-// - Pod has deletion cost AND Karpenter management annotation (we manage it)
-// Returns false if:
-// - Pod has deletion cost but NO Karpenter management annotation (customer-managed)
 func shouldUpdatePod(pod *corev1.Pod) bool {
 	if pod.Annotations == nil {
-		// No annotations at all, we can add our annotation
 		return true
 	}
 
-	hasDeletionCost := false
-	hasManagedAnnotation := false
-
-	if _, exists := pod.Annotations[PodDeletionCostAnnotation]; exists {
-		hasDeletionCost = true
-	}
-
-	if _, exists := pod.Annotations[KarpenterManagedDeletionCostAnnotation]; exists {
-		hasManagedAnnotation = true
-	}
+	_, hasDeletionCost := pod.Annotations[PodDeletionCostAnnotation]
+	_, hasManagedAnnotation := pod.Annotations[KarpenterManagedDeletionCostAnnotation]
 
 	// If pod has deletion cost but no management annotation, it's customer-managed
 	if hasDeletionCost && !hasManagedAnnotation {
 		return false
 	}
 
-	// Otherwise, we should update it
 	return true
 }
 
 // updatePodAnnotation updates a single pod's deletion cost annotation
-// It also adds the Karpenter management tracking annotation
 func (a *AnnotationManager) updatePodAnnotation(ctx context.Context, podUpdate PodUpdate) error {
 	pod := podUpdate.Pod.DeepCopy()
 
-	// Initialize annotations map if it doesn't exist
 	if pod.Annotations == nil {
 		pod.Annotations = make(map[string]string)
 	}
 
-	// Set the deletion cost annotation
-	pod.Annotations[PodDeletionCostAnnotation] = fmt.Sprintf("%d", podUpdate.NewRank)
-
-	// Add the Karpenter management tracking annotation
+	newValue := fmt.Sprintf("%d", podUpdate.NewRank)
+	pod.Annotations[PodDeletionCostAnnotation] = newValue
 	pod.Annotations[KarpenterManagedDeletionCostAnnotation] = "true"
 
-	// Update the pod
 	if err := a.kubeClient.Update(ctx, pod); err != nil {
 		return err
 	}
+
+	// Record what we set so we can detect external modifications
+	a.mu.Lock()
+	a.lastAssignedValues[podUpdate.Pod.UID] = newValue
+	a.mu.Unlock()
 
 	return nil
 }

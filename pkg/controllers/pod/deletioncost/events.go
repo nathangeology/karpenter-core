@@ -46,6 +46,17 @@ func UpdateFailedEvent(pod *corev1.Pod, err error) events.Event {
 	}
 }
 
+// ExternalAnnotationModificationEvent creates a warning event when a third party modifies a Karpenter-managed annotation
+func ExternalAnnotationModificationEvent(pod *corev1.Pod) events.Event {
+	return events.Event{
+		InvolvedObject: pod,
+		Type:           corev1.EventTypeWarning,
+		Reason:         events.ExternalAnnotationModification,
+		Message:        fmt.Sprintf("External modification detected on pod-deletion-cost annotation; Karpenter is releasing management of pod %s/%s", pod.Namespace, pod.Name),
+		DedupeValues:   []string{string(pod.UID)},
+	}
+}
+
 // DisabledEvent creates an event indicating that the pod deletion cost feature has been disabled due to an error
 func DisabledEvent(reason string) events.Event {
 	return events.Event{
