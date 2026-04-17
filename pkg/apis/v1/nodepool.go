@@ -109,6 +109,14 @@ type Disruption struct {
 	// +kubebuilder:validation:MaxItems=50
 	// +optional
 	Budgets []Budget `json:"budgets,omitempty" hash:"ignore"`
+	//nolint:kubeapilinter
+	// IPVSConsolidationGracePeriod is the duration to wait after a pod resize
+	// completes before reconsidering the node for consolidation.
+	// +kubebuilder:default:="5m"
+	// +kubebuilder:validation:Pattern=`^([0-9]+(s|m|h))+$`
+	// +kubebuilder:validation:Type="string"
+	// +optional
+	IPVSConsolidationGracePeriod *metav1.Duration `json:"ipvsConsolidationGracePeriod,omitempty"`
 }
 
 // Budget defines when Karpenter will restrict the

@@ -17,10 +17,15 @@ limitations under the License.
 package resources
 
 import (
+	"fmt"
+
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	resourcehelper "k8s.io/component-helpers/resource"
+	"k8s.io/klog/v2"
 
+	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
+	"sigs.k8s.io/karpenter/pkg/metrics"
 	"sigs.k8s.io/karpenter/pkg/utils/pretty"
 )
 
@@ -46,6 +51,82 @@ func LimitsForPods(pods ...*v1.Pod) v1.ResourceList {
 	merged := Merge(resources...)
 	merged[v1.ResourcePods] = *resource.NewQuantity(int64(len(pods)), resource.DecimalExponent)
 	return merged
+}
+
+// IPVSAwareRequestsForPod computes the effective resource requests for a pod
+// under IPVS awareness. For each resource type, it returns the maximum of:
+//  1. pod.Spec.Containers[i].Resources.Requests (via Ceiling)
+//  2. pod.Status.ContainerStatuses[i].AllocatedResources (if present)
+//  3. Peak annotation values (karpenter.sh/peak-cpu, karpenter.sh/peak-memory)
+//
+// This ensures Karpenter never underestimates the resources a pod may consume.
+func IPVSAwareRequestsForPod(pod *v1.Pod) v1.ResourceList {
+	// 1. Spec-based requests using existing Ceiling helper
+	specRequests := Ceiling(pod).Requests
+
+	// 2. Sum AllocatedResources across all container statuses
+	allocatedResources := v1.ResourceList{}
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.AllocatedResources != nil {
+			allocatedResources = MergeInto(allocatedResources, cs.AllocatedResources)
+		}
+	}
+
+	// 3. Parse peak annotations
+	peakResources := v1.ResourceList{}
+	annotationParseFailed := false
+	if pod.Annotations != nil {
+		if cpuStr, ok := pod.Annotations[karpv1.PeakCPUAnnotationKey]; ok {
+			cpuQty, err := resource.ParseQuantity(cpuStr)
+			if err != nil {
+				klog.Warning(fmt.Sprintf("failed to parse %s annotation %q on pod %s/%s: %v, falling back to max(spec.requests, allocatedResources) for cpu",
+					karpv1.PeakCPUAnnotationKey, cpuStr, pod.Namespace, pod.Name, err))
+				annotationParseFailed = true
+			} else {
+				peakResources[v1.ResourceCPU] = cpuQty
+			}
+		}
+		if memStr, ok := pod.Annotations[karpv1.PeakMemoryAnnotationKey]; ok {
+			memQty, err := resource.ParseQuantity(memStr)
+			if err != nil {
+				klog.Warning(fmt.Sprintf("failed to parse %s annotation %q on pod %s/%s: %v, falling back to max(spec.requests, allocatedResources) for memory",
+					karpv1.PeakMemoryAnnotationKey, memStr, pod.Namespace, pod.Name, err))
+				annotationParseFailed = true
+			} else {
+				peakResources[v1.ResourceMemory] = memQty
+			}
+		}
+	}
+
+	// Compute the effective resources
+	var effective v1.ResourceList
+	if len(peakResources) == 0 && annotationParseFailed {
+		effective = MaxResources(specRequests, allocatedResources)
+	} else {
+		effective = MaxResources(specRequests, allocatedResources, peakResources)
+	}
+
+	// Emit resource adjustment metric and debug log when IPVS-aware result differs from spec-based
+	cpuAdjusted := false
+	memAdjusted := false
+	if cpuEffective, ok := effective[v1.ResourceCPU]; ok {
+		if cpuSpec, specOk := specRequests[v1.ResourceCPU]; !specOk || cpuEffective.Cmp(cpuSpec) != 0 {
+			metrics.IPVSResourceAdjustmentTotal.Inc(map[string]string{metrics.ResourceTypeLabel: "cpu"})
+			cpuAdjusted = true
+		}
+	}
+	if memEffective, ok := effective[v1.ResourceMemory]; ok {
+		if memSpec, specOk := specRequests[v1.ResourceMemory]; !specOk || memEffective.Cmp(memSpec) != 0 {
+			metrics.IPVSResourceAdjustmentTotal.Inc(map[string]string{metrics.ResourceTypeLabel: "memory"})
+			memAdjusted = true
+		}
+	}
+	if cpuAdjusted || memAdjusted {
+		klog.V(4).Infof("IPVS resource adjustment for pod %s/%s: spec requests=%s, effective requests=%s",
+			pod.Namespace, pod.Name, pretty.Concise(specRequests), pretty.Concise(effective))
+	}
+
+	return effective
 }
 
 // Merge the resources from the variadic into a single v1.ResourceList

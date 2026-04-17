@@ -37,6 +37,7 @@ import (
 	metricsnode "sigs.k8s.io/karpenter/pkg/controllers/metrics/node"
 	metricsnodepool "sigs.k8s.io/karpenter/pkg/controllers/metrics/nodepool"
 	metricspod "sigs.k8s.io/karpenter/pkg/controllers/metrics/pod"
+	metricspodlifecycle "sigs.k8s.io/karpenter/pkg/controllers/metrics/pod/lifecycle"
 	"sigs.k8s.io/karpenter/pkg/controllers/node/health"
 	nodehydration "sigs.k8s.io/karpenter/pkg/controllers/node/hydration"
 	"sigs.k8s.io/karpenter/pkg/controllers/node/termination"
@@ -163,6 +164,10 @@ func NewControllers(
 
 	if options.FromContext(ctx).FeatureGates.NodeOverlay {
 		controllers = append(controllers, nodeoverlay.NewController(kubeClient, overlayUndecoratedCloudProvider, instanceTypeStore, cluster))
+	}
+
+	if options.FromContext(ctx).FeatureGates.PodLifecycleTiming {
+		controllers = append(controllers, metricspodlifecycle.NewController(kubeClient, cluster))
 	}
 
 	return controllers

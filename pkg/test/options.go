@@ -49,15 +49,18 @@ type OptionsFields struct {
 	BatchMaxDuration                 *time.Duration
 	BatchIdleDuration                *time.Duration
 	IgnoreDRARequests                *bool
+	IPVSPatienceDuration             *time.Duration
 	FeatureGates                     FeatureGates
 }
 
 type FeatureGates struct {
-	NodeRepair              *bool
-	ReservedCapacity        *bool
-	SpotToSpotConsolidation *bool
-	NodeOverlay             *bool
-	StaticCapacity          *bool
+	NodeRepair                *bool
+	ReservedCapacity          *bool
+	SpotToSpotConsolidation   *bool
+	NodeOverlay               *bool
+	StaticCapacity            *bool
+	InPlacePodVerticalScaling *bool
+	PodLifecycleTiming        *bool
 }
 
 func Options(overrides ...OptionsFields) *options.Options {
@@ -88,12 +91,15 @@ func Options(overrides ...OptionsFields) *options.Options {
 		PreferencePolicy:                 lo.FromPtrOr(opts.PreferencePolicy, options.PreferencePolicyRespect),
 		MinValuesPolicy:                  lo.FromPtrOr(opts.MinValuesPolicy, options.MinValuesPolicyStrict),
 		IgnoreDRARequests:                lo.FromPtrOr(opts.IgnoreDRARequests, true),
+		IPVSPatienceDuration:             lo.FromPtrOr(opts.IPVSPatienceDuration, 60*time.Second),
 		FeatureGates: options.FeatureGates{
-			NodeRepair:              lo.FromPtrOr(opts.FeatureGates.NodeRepair, false),
-			ReservedCapacity:        lo.FromPtrOr(opts.FeatureGates.ReservedCapacity, true),
-			SpotToSpotConsolidation: lo.FromPtrOr(opts.FeatureGates.SpotToSpotConsolidation, false),
-			NodeOverlay:             lo.FromPtrOr(opts.FeatureGates.NodeOverlay, false),
-			StaticCapacity:          lo.FromPtrOr(opts.FeatureGates.StaticCapacity, false),
+			NodeRepair:                lo.FromPtrOr(opts.FeatureGates.NodeRepair, false),
+			ReservedCapacity:          lo.FromPtrOr(opts.FeatureGates.ReservedCapacity, true),
+			SpotToSpotConsolidation:   lo.FromPtrOr(opts.FeatureGates.SpotToSpotConsolidation, false),
+			NodeOverlay:               lo.FromPtrOr(opts.FeatureGates.NodeOverlay, false),
+			StaticCapacity:            lo.FromPtrOr(opts.FeatureGates.StaticCapacity, false),
+			InPlacePodVerticalScaling: lo.FromPtrOr(opts.FeatureGates.InPlacePodVerticalScaling, false),
+			PodLifecycleTiming:        lo.FromPtrOr(opts.FeatureGates.PodLifecycleTiming, false),
 		},
 	}
 }

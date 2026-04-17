@@ -390,7 +390,7 @@ func (s *Scheduler) Solve(ctx context.Context, pods []*corev1.Pod) (Results, err
 	UnschedulablePodsCount.DeletePartialMatch(map[string]string{ControllerLabel: injection.GetControllerName(ctx)})
 	QueueDepth.DeletePartialMatch(map[string]string{ControllerLabel: injection.GetControllerName(ctx)})
 	for _, p := range pods {
-		s.updateCachedPodData(p)
+		s.updateCachedPodData(ctx, p)
 	}
 	q := NewQueue(pods, s.cachedPodData)
 
@@ -417,7 +417,7 @@ func (s *Scheduler) Solve(ctx context.Context, pods []*corev1.Pod) (Results, err
 				log.FromContext(ctx).Error(e, "failed updating topology")
 			}
 			// Update the cached podData since the pod was relaxed, and it could have changed its requirement set
-			s.updateCachedPodData(pod)
+			s.updateCachedPodData(ctx, pod)
 			q.Push(pod)
 		} else {
 			delete(podErrors, pod)
@@ -464,11 +464,11 @@ func (s *Scheduler) trySchedule(ctx context.Context, p *corev1.Pod) error {
 			log.FromContext(ctx).Error(e, "failed updating topology")
 		}
 		// Update the cached podData since the pod was relaxed, and it could have changed its requirement set
-		s.updateCachedPodData(p)
+		s.updateCachedPodData(ctx, p)
 	}
 }
 
-func (s *Scheduler) updateCachedPodData(p *corev1.Pod) {
+func (s *Scheduler) updateCachedPodData(ctx context.Context, p *corev1.Pod) {
 	var requirements scheduling.Requirements
 	if s.preferencePolicy == PreferencePolicyIgnore {
 		requirements = scheduling.NewStrictPodRequirements(p)
@@ -481,8 +481,16 @@ func (s *Scheduler) updateCachedPodData(p *corev1.Pod) {
 		// preferred node affinity.  Only required node affinities can actually reduce pod domains.
 		strictRequirements = scheduling.NewStrictPodRequirements(p)
 	}
+	// When IPVS gate is enabled, use peak resource envelope for pod fit evaluation
+	// to ensure consolidation simulation accounts for pods that may scale up in place.
+	var requests corev1.ResourceList
+	if karpopts.FromContext(ctx).FeatureGates.InPlacePodVerticalScaling {
+		requests = resources.IPVSAwareRequestsForPod(p)
+	} else {
+		requests = resources.RequestsForPods(p)
+	}
 	s.cachedPodData[p.UID] = &PodData{
-		Requests:                 resources.RequestsForPods(p),
+		Requests:                 requests,
 		Requirements:             requirements,
 		StrictRequirements:       strictRequirements,
 		HasResourceClaimRequests: pod.HasDRARequirements(p),
