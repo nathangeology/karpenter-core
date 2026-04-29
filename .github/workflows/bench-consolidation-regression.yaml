@@ -1,0 +1,100 @@
+name: bench-consolidation-regression
+on:
+  workflow_dispatch:
+    inputs:
+      runs_per_branch:
+        type: number
+        default: 20
+        description: "Number of benchmark runs per branch"
+jobs:
+  matrix-gen:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.gen.outputs.matrix }}
+    steps:
+      - id: gen
+        run: |
+          python3 << 'EOF'
+          import json, os
+          branches = ['bench/baseline', 'bench/revert-2944', 'bench/revert-2946', 'bench/revert-both']
+          tests = [
+            {'name': 'HostNameSpreading', 'focus': 'Host Name Spreading Deployment Reg'},
+            {'name': 'WideDeployments', 'focus': 'Wide Deployments'},
+          ]
+          runs = ${{ inputs.runs_per_branch }}
+          matrix = []
+          for b in branches:
+            for t in tests:
+              for i in range(1, runs + 1):
+                tag = b.replace('/', '-')
+                matrix.append({
+                  'branch': b,
+                  'test_name': t['name'],
+                  'focus': t['focus'],
+                  'run_num': i,
+                  'job_name': f"{tag}_{t['name']}_run{i}"
+                })
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+            f.write(f"matrix={json.dumps({'include': matrix})}\n")
+          EOF
+
+  bench:
+    needs: matrix-gen
+    runs-on: ubuntu-latest
+    name: ${{ matrix.job_name }}
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJson(needs.matrix-gen.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ matrix.branch }}
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v6.0.2
+        with:
+          go-version-file: go.mod
+      - uses: ./.github/actions/install-deps
+        with:
+          k8sVersion: "1.35"
+      - name: Kind Cluster
+        uses: helm/kind-action@92086f6be054225fa813e0a4b13787fc9088faab # v1.13.0
+      - name: Setup cluster
+        run: |
+          kubectl taint nodes chart-testing-control-plane CriticalAddonsOnly:NoSchedule
+      - uses: ./.github/actions/install-prometheus
+      - name: Install KWOK and controller
+        run: |
+          make install-kwok
+          export KWOK_REPO=kind.local
+          export KIND_CLUSTER_NAME=chart-testing
+          make apply-with-kind
+      - name: Wait for controller
+        run: |
+          sleep 15
+          kubectl get pods -n kube-system | grep karpenter
+      - name: Run benchmark
+        env:
+          SUITE: Performance
+          FOCUS: ${{ matrix.focus }}
+        run: |
+          OUTPUT_DIR=$(mktemp -d)
+          export OUTPUT_DIR
+          echo OUTPUT_DIR="$OUTPUT_DIR" >> "$GITHUB_ENV"
+          TEST_SUITE="$SUITE" make e2etests
+      - name: Upload results
+        if: always() && env.OUTPUT_DIR != ''
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: "${{ matrix.job_name }}"
+          path: |
+            ${{ env.OUTPUT_DIR }}/*_performance_report.json
+            ${{ env.OUTPUT_DIR }}/karpenter_memory_profile_*.pb.gz
+            ${{ env.OUTPUT_DIR }}/karpenter_cpu_profile_*.pb.gz
+          retention-days: 90
+          if-no-files-found: ignore
+      - name: Cleanup
+        if: always()
+        run: |
+          kubectl delete nodepools --all || true
+          make delete || true
+          make uninstall-kwok || true
