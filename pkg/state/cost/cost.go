@@ -199,9 +199,11 @@ func (cc *ClusterCost) createNewNodePoolCost(npName string, instanceTypes []*clo
 // UpdateNodeClaim adds a NodeClaim to cost tracking. The NodeClaim must have
 // all required labels or it will be ignored and logged as an error.
 func (cc *ClusterCost) UpdateNodeClaim(ctx context.Context, nodeClaim *v1.NodeClaim) error {
-	cc.Lock()
-	defer cc.Unlock()
-	if _, exists := cc.nodeClaimMap[client.ObjectKeyFromObject(nodeClaim)]; exists {
+	cc.RLock()
+	_, exists := cc.nodeClaimMap[client.ObjectKeyFromObject(nodeClaim)]
+	cc.RUnlock()
+
+	if exists {
 		return nil
 	}
 
@@ -224,6 +226,8 @@ func (cc *ClusterCost) UpdateNodeClaim(ctx context.Context, nodeClaim *v1.NodeCl
 	nodePoolName := nodeClaim.Labels[v1.NodePoolLabelKey]
 	offeringKey := OfferingKey{CapacityType: nodeClaim.Labels[v1.CapacityTypeLabelKey], Zone: nodeClaim.Labels[corev1.LabelTopologyZone], InstanceName: nodeClaim.Labels[corev1.LabelInstanceTypeStable]}
 
+	cc.Lock()
+	defer cc.Unlock()
 	err := cc.internalAddOffering(ctx, nodePoolName, offeringKey)
 	if err != nil {
 		failed = true
@@ -239,9 +243,9 @@ func (cc *ClusterCost) UpdateNodeClaim(ctx context.Context, nodeClaim *v1.NodeCl
 // DeleteNodeClaim removes a NodeClaim from cost tracking. If the NodeClaim
 // was not being tracked, this operation is a no-op.
 func (cc *ClusterCost) DeleteNodeClaim(ctx context.Context, nn types.NamespacedName) error {
-	cc.Lock()
-	defer cc.Unlock()
+	cc.RLock()
 	metadata, exists := cc.nodeClaimMap[nn]
+	cc.RUnlock()
 
 	if !exists {
 		return nil
@@ -255,6 +259,9 @@ func (cc *ClusterCost) DeleteNodeClaim(ctx context.Context, nn types.NamespacedN
 			})
 		}
 	}()
+
+	cc.Lock()
+	defer cc.Unlock()
 
 	err := cc.internalRemoveOffering(metadata.NodePoolName, metadata.NodeClaimKey)
 	if err != nil {
