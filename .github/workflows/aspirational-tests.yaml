@@ -1,70 +1,170 @@
 name: "Aspirational Tests"
+
+# These tests document desired behavior not yet implemented.
+# They are EXPECTED TO FAIL. A passing test means a fix landed.
+# This workflow NEVER blocks merge — it's informational only.
+
 on:
+  # Manual trigger with category selection
+  workflow_dispatch:
+    inputs:
+      category:
+        description: "Which category to run (all, consolidation, disruption-budget, vpa)"
+        required: false
+        default: "all"
+        type: choice
+        options:
+          - all
+          - consolidation
+          - disruption-budget
+          - vpa
+  # Auto-run on PRs that touch Go files (optional, never blocks)
   pull_request:
     paths:
-      - "**.go"
+      - "pkg/**.go"
+      - "pkg/test/aspirational/**.go"
     branches:
       - main
-  push:
-    branches:
-      - main
+
 jobs:
-  aspirational:
-    name: Aspirational Tests
+  consolidation:
+    name: "Aspirational: Consolidation"
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.category == 'all' || inputs.category == 'consolidation') || github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
-    # Never block merge - these tests document goals, not requirements
     continue-on-error: true
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: ./.github/actions/install-deps
         with:
           k8sVersion: "1.35.x"
-      - name: Run aspirational tests
+      - name: Run consolidation aspirational tests
         id: run
         run: |
-          # Run with -v to see individual test pass/fail, don't fail the step
-          go test -tags=test_aspirational -count=1 -timeout=10m -v ./... 2>&1 | tee /tmp/aspirational-output.txt || true
+          go test -tags=test_aspirational -count=1 -timeout=5m -v \
+            -run "TestMultiNodeConsolidation" \
+            ./pkg/test/aspirational/ 2>&1 | tee /tmp/output.txt || true
 
-          # Parse results
-          PASSED=$(grep -c '^--- PASS:' /tmp/aspirational-output.txt || echo 0)
-          FAILED=$(grep -c '^--- FAIL:' /tmp/aspirational-output.txt || echo 0)
-          SKIPPED=$(grep -c '^--- SKIP:' /tmp/aspirational-output.txt || echo 0)
-          TOTAL=$((PASSED + FAILED + SKIPPED))
-
+          PASSED=$(grep -c '^--- PASS:' /tmp/output.txt || echo 0)
+          FAILED=$(grep -c '^--- FAIL:' /tmp/output.txt || echo 0)
           echo "passed=$PASSED" >> "$GITHUB_OUTPUT"
           echo "failed=$FAILED" >> "$GITHUB_OUTPUT"
-          echo "total=$TOTAL" >> "$GITHUB_OUTPUT"
 
-      - name: Job summary
+      - name: Summary
         if: always()
         run: |
-          PASSED=${{ steps.run.outputs.passed }}
-          FAILED=${{ steps.run.outputs.failed }}
-          TOTAL=${{ steps.run.outputs.total }}
-
           {
-            echo "## Aspirational Tests"
+            echo "### Consolidation (#1962)"
             echo ""
-            echo "These tests represent goals for the project. Passing is good news, not a requirement."
-            echo ""
-            echo "| Passed | Failed | Total |"
-            echo "|--------|--------|-------|"
-            echo "| $PASSED | $FAILED | $TOTAL |"
-            echo ""
-            if [ "$PASSED" -gt 0 ]; then
-              echo "### Newly passing tests"
-              echo "If any of these were previously failing, the underlying issue may be fixed!"
-              echo '```'
-              grep '^--- PASS:' /tmp/aspirational-output.txt || true
-              echo '```'
+            if [ "${{ steps.run.outputs.passed }}" -gt 0 ]; then
+              echo "🎉 **PASSING** — the underlying issue may be fixed!"
+            else
+              echo "⏳ Still failing (expected) — multi-node cross-family replacement not yet implemented"
             fi
-            if [ "$FAILED" -gt 0 ]; then
-              echo ""
-              echo "<details><summary>Still failing ($FAILED)</summary>"
-              echo ""
-              echo '```'
-              grep '^--- FAIL:' /tmp/aspirational-output.txt || true
-              echo '```'
-              echo "</details>"
+            echo ""
+            echo "| Passed | Failed |"
+            echo "|--------|--------|"
+            echo "| ${{ steps.run.outputs.passed }} | ${{ steps.run.outputs.failed }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  disruption-budget:
+    name: "Aspirational: Disruption Budget"
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.category == 'all' || inputs.category == 'disruption-budget') || github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: ./.github/actions/install-deps
+        with:
+          k8sVersion: "1.35.x"
+      - name: Run disruption budget aspirational tests
+        id: run
+        run: |
+          go test -tags=test_aspirational -count=1 -timeout=5m -v \
+            -run "TestDriftDoesNotStarve" \
+            ./pkg/test/aspirational/ 2>&1 | tee /tmp/output.txt || true
+
+          PASSED=$(grep -c '^--- PASS:' /tmp/output.txt || echo 0)
+          FAILED=$(grep -c '^--- FAIL:' /tmp/output.txt || echo 0)
+          echo "passed=$PASSED" >> "$GITHUB_OUTPUT"
+          echo "failed=$FAILED" >> "$GITHUB_OUTPUT"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Disruption Budget Fairness (#2930)"
+            echo ""
+            if [ "${{ steps.run.outputs.passed }}" -gt 0 ]; then
+              echo "🎉 **PASSING** — the underlying issue may be fixed!"
+            else
+              echo "⏳ Still failing (expected) — drift still starves consolidation budget"
             fi
+            echo ""
+            echo "| Passed | Failed |"
+            echo "|--------|--------|"
+            echo "| ${{ steps.run.outputs.passed }} | ${{ steps.run.outputs.failed }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  vpa:
+    name: "Aspirational: In-Place Pod Resize"
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.category == 'all' || inputs.category == 'vpa') || github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: ./.github/actions/install-deps
+        with:
+          k8sVersion: "1.35.x"
+      - name: Run VPA/resize aspirational tests
+        id: run
+        run: |
+          go test -tags=test_aspirational -count=1 -timeout=5m -v \
+            -run "TestInPlacePodResize" \
+            ./pkg/test/aspirational/ 2>&1 | tee /tmp/output.txt || true
+
+          PASSED=$(grep -c '^--- PASS:' /tmp/output.txt || echo 0)
+          FAILED=$(grep -c '^--- FAIL:' /tmp/output.txt || echo 0)
+          echo "passed=$PASSED" >> "$GITHUB_OUTPUT"
+          echo "failed=$FAILED" >> "$GITHUB_OUTPUT"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### In-Place Pod Resize (#829)"
+            echo ""
+            if [ "${{ steps.run.outputs.passed }}" -gt 0 ]; then
+              echo "🎉 **PASSING** — the underlying issue may be fixed!"
+            else
+              echo "⏳ Still failing (expected) — Ceiling() ignores status.allocatedResources"
+            fi
+            echo ""
+            echo "| Passed | Failed |"
+            echo "|--------|--------|"
+            echo "| ${{ steps.run.outputs.passed }} | ${{ steps.run.outputs.failed }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Roll-up job that always succeeds — ensures the check is never red
+  results:
+    name: "Aspirational Tests (informational)"
+    if: always()
+    needs: [consolidation, disruption-budget, vpa]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Aggregate results
+        run: |
+          {
+            echo "## Aspirational Tests Summary"
+            echo ""
+            echo "> These tests document **desired future behavior**. Failures are expected."
+            echo "> A newly passing test means the underlying issue was fixed! 🎉"
+            echo ""
+            echo "| Category | Status |"
+            echo "|----------|--------|"
+            echo "| Consolidation (#1962) | ${{ needs.consolidation.result }} |"
+            echo "| Disruption Budget (#2930) | ${{ needs.disruption-budget.result }} |"
+            echo "| In-Place Resize (#829) | ${{ needs.vpa.result }} |"
+            echo ""
+            echo "---"
+            echo "*This check is informational only and does not block merge.*"
           } >> "$GITHUB_STEP_SUMMARY"
