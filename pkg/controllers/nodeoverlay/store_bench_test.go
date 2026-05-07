@@ -1,3 +1,5 @@
+//go:build test_performance
+
 /*
 Copyright The Kubernetes Authors.
 
