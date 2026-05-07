@@ -954,6 +954,139 @@ var _ = Describe("Registration", func() {
 			Expect(nodeClaim.StatusConditions().Get(v1.ConditionTypeRegistered).IsTrue()).To(BeTrue())
 			Expect(nodeClaim.Status.NodeName).To(Equal(node.Name))
 		})
+		Context("PartialFailure", func() {
+			It("should not leave node with stale hook labels after repeated partial failures", func() {
+				// Aspirational test (kp-mp5d.2): When hook-1 mutates the NodeClaim (adds a label)
+				// and hook-2 returns error, the controller persists the mutated NodeClaim labels.
+				// On the NEXT reconcile, syncNode copies those labels to the node BEFORE hooks
+				// are re-checked. This creates an inconsistent state: the node has hook-1's label
+				// but ConditionTypeRegistered is Unknown and the unregistered taint remains.
+				//
+				// The correct behavior: the node must NOT have any hook-mutated labels while
+				// registration is incomplete. Labels should only appear on the node after ALL
+				// hooks pass and registration completes.
+				hookController := nodeclaimlifecycle.NewController(fakeClock, env.Client, cloudProvider,
+					events.NewRecorder(&record.FakeRecorder{}), nodepoolhealth.NewState(),
+					[]cloudprovider.NodeLifecycleHook{
+						testHook{
+							name: "mutating-hook",
+							fn: func(_ context.Context, nc *v1.NodeClaim) (cloudprovider.NodeLifecycleHookResult, error) {
+								nc.Labels["test.karpenter.sh/hook-mutation"] = "applied"
+								return cloudprovider.NodeLifecycleHookResult{}, nil
+							},
+						},
+						testHook{
+							name: "failing-hook",
+							fn: func(_ context.Context, _ *v1.NodeClaim) (cloudprovider.NodeLifecycleHookResult, error) {
+								return cloudprovider.NodeLifecycleHookResult{}, fmt.Errorf("transient API error")
+							},
+						},
+					},
+				)
+				nodeClaim := test.NodeClaim(v1.NodeClaim{
+					ObjectMeta: metav1.ObjectMeta{
+						Labels: map[string]string{v1.NodePoolLabelKey: nodePool.Name},
+					},
+				})
+				ExpectApplied(ctx, env.Client, nodePool, nodeClaim)
+				ExpectObjectReconciled(ctx, env.Client, hookController, nodeClaim)
+				nodeClaim = ExpectExists(ctx, env.Client, nodeClaim)
+
+				node := test.Node(test.NodeOptions{ProviderID: nodeClaim.Status.ProviderID, Taints: []corev1.Taint{v1.UnregisteredNoExecuteTaint}})
+				ExpectApplied(ctx, env.Client, node)
+
+				// First reconcile: hook-1 mutates NodeClaim labels, hook-2 fails.
+				// The controller's outer loop persists the mutated NodeClaim to the API server.
+				_ = ExpectObjectReconcileFailed(ctx, env.Client, hookController, nodeClaim)
+
+				// Verify the NodeClaim now has the hook-1 mutation persisted in the API
+				nodeClaim = ExpectExists(ctx, env.Client, nodeClaim)
+				Expect(nodeClaim.Labels).To(HaveKeyWithValue("test.karpenter.sh/hook-mutation", "applied"),
+					"NodeClaim should have hook-1's mutation persisted by the controller")
+				Expect(nodeClaim.StatusConditions().Get(v1.ConditionTypeRegistered).IsUnknown()).To(BeTrue())
+
+				// Second reconcile: controller re-fetches the NodeClaim (now with hook-1's label),
+				// syncNode copies ALL NodeClaim labels to the node BEFORE hooks are checked.
+				// This is the actual bug: the node gets a partially-applied hook label while
+				// registration is still incomplete.
+				_ = ExpectObjectReconcileFailed(ctx, env.Client, hookController, nodeClaim)
+
+				// CRITICAL ASSERTION: After repeated partial failures, the node must NOT have
+				// labels from a hook that succeeded while registration itself failed.
+				node = ExpectExists(ctx, env.Client, node)
+				Expect(node.Labels).ToNot(HaveKey("test.karpenter.sh/hook-mutation"),
+					"Node must not have partially-applied hook labels while registration is incomplete. "+
+						"The current code syncs NodeClaim labels (including hook mutations) to the node "+
+						"unconditionally before re-checking hooks, creating an inconsistent state.")
+
+				// The unregistered taint must still be present
+				Expect(node.Spec.Taints).To(ContainElement(v1.UnregisteredNoExecuteTaint),
+					"Unregistered taint must remain when registration is incomplete")
+			})
+			It("should converge to correct labels on next reconcile after partial hook failure recovers", func() {
+				// Aspirational test (kp-mp5d.2 variant): After a transient failure, once all hooks
+				// pass on retry, the node should have the correct final labels from all hooks.
+				var failSecondHook atomic.Bool
+				failSecondHook.Store(true)
+
+				hookController := nodeclaimlifecycle.NewController(fakeClock, env.Client, cloudProvider,
+					events.NewRecorder(&record.FakeRecorder{}), nodepoolhealth.NewState(),
+					[]cloudprovider.NodeLifecycleHook{
+						testHook{
+							name: "mutating-hook-a",
+							fn: func(_ context.Context, nc *v1.NodeClaim) (cloudprovider.NodeLifecycleHookResult, error) {
+								nc.Labels["test.karpenter.sh/hook-a"] = "value-a"
+								return cloudprovider.NodeLifecycleHookResult{}, nil
+							},
+						},
+						testHook{
+							name: "conditionally-failing-hook-b",
+							fn: func(_ context.Context, nc *v1.NodeClaim) (cloudprovider.NodeLifecycleHookResult, error) {
+								if failSecondHook.Load() {
+									return cloudprovider.NodeLifecycleHookResult{}, fmt.Errorf("transient failure")
+								}
+								nc.Labels["test.karpenter.sh/hook-b"] = "value-b"
+								return cloudprovider.NodeLifecycleHookResult{}, nil
+							},
+						},
+					},
+				)
+				nodeClaim := test.NodeClaim(v1.NodeClaim{
+					ObjectMeta: metav1.ObjectMeta{
+						Labels: map[string]string{v1.NodePoolLabelKey: nodePool.Name},
+					},
+				})
+				ExpectApplied(ctx, env.Client, nodePool, nodeClaim)
+				ExpectObjectReconciled(ctx, env.Client, hookController, nodeClaim)
+				nodeClaim = ExpectExists(ctx, env.Client, nodeClaim)
+
+				node := test.Node(test.NodeOptions{ProviderID: nodeClaim.Status.ProviderID, Taints: []corev1.Taint{v1.UnregisteredNoExecuteTaint}})
+				ExpectApplied(ctx, env.Client, node)
+
+				// First attempt: hook-b fails
+				_ = ExpectObjectReconcileFailed(ctx, env.Client, hookController, nodeClaim)
+				nodeClaim = ExpectExists(ctx, env.Client, nodeClaim)
+				Expect(nodeClaim.StatusConditions().Get(v1.ConditionTypeRegistered).IsUnknown()).To(BeTrue())
+
+				// Recovery: hook-b now succeeds
+				failSecondHook.Store(false)
+				ExpectObjectReconciled(ctx, env.Client, hookController, nodeClaim)
+
+				// After recovery, both hook labels should be present and registration complete
+				nodeClaim = ExpectExists(ctx, env.Client, nodeClaim)
+				Expect(nodeClaim.StatusConditions().Get(v1.ConditionTypeRegistered).IsTrue()).To(BeTrue())
+				Expect(nodeClaim.Status.NodeName).To(Equal(node.Name))
+
+				node = ExpectExists(ctx, env.Client, node)
+				Expect(node.Labels).To(HaveKeyWithValue("test.karpenter.sh/hook-a", "value-a"),
+					"Node should have hook-a label after successful registration")
+				Expect(node.Labels).To(HaveKeyWithValue("test.karpenter.sh/hook-b", "value-b"),
+					"Node should have hook-b label after successful registration")
+				Expect(node.Spec.Taints).ToNot(ContainElement(v1.UnregisteredNoExecuteTaint),
+					"Unregistered taint should be removed after successful registration")
+				Expect(node.Labels).To(HaveKeyWithValue(v1.NodeRegisteredLabelKey, "true"))
+			})
+		})
 		It("should propagate labels added by a registration hook to both the node and the nodeclaim", func() {
 			hookController := nodeclaimlifecycle.NewController(fakeClock, env.Client, cloudProvider,
 				events.NewRecorder(&record.FakeRecorder{}), nodepoolhealth.NewState(),
