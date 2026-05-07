@@ -1,0 +1,36 @@
+name: Aspirational Tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  aspirational:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Run aspirational tests
+        continue-on-error: true
+        id: tests
+        run: |
+          go test -tags=test_aspirational -v -count=1 ./pkg/test/aspirational/... 2>&1 | tee aspirational-results.txt
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+      - name: Generate summary
+        if: always()
+        run: |
+          echo "## Aspirational Test Results" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "These tests document desired behavior not yet implemented." >> "$GITHUB_STEP_SUMMARY"
+          echo "Failures are expected. A test that starts passing means the underlying issue is fixed." >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          grep -E "^(=== RUN|--- PASS|--- FAIL|FAIL|ok)" aspirational-results.txt >> "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
