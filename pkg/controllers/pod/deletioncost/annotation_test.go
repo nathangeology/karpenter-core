@@ -171,6 +171,7 @@ var _ = Describe("Annotation", func() {
 			Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(pod), updatedPod)).To(Succeed())
 			Expect(updatedPod.Annotations[deletioncost.PodDeletionCostAnnotation]).To(Equal("-3"))
 			Expect(updatedPod.Annotations[deletioncost.KarpenterManagedDeletionCostAnnotation]).To(Equal("true"))
+			Expect(updatedPod.Annotations[deletioncost.KarpenterLastAssignedDeletionCostAnnotation]).To(Equal("-3"))
 		})
 
 		It("should update multiple pods on the same node with the same rank", func() {
@@ -274,6 +275,89 @@ var _ = Describe("Annotation", func() {
 	})
 
 	Context("Third-party conflict detection", func() {
+		It("should detect conflict after restart using persisted last-assigned annotation", func() {
+			nodeClaims, nodes := test.NodeClaimsAndNodes(1, v1.NodeClaim{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{v1.NodePoolLabelKey: nodePool.Name}},
+				Status:     v1.NodeClaimStatus{Allocatable: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("4"), corev1.ResourceMemory: resource.MustParse("8Gi")}},
+			})
+			ExpectApplied(ctx, env.Client, nodePool)
+			for i := range nodeClaims {
+				ExpectApplied(ctx, env.Client, nodeClaims[i], nodes[i])
+			}
+			// Simulate state after a previous Karpenter instance wrote annotations
+			pod := test.Pod(test.PodOptions{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{
+						deletioncost.PodDeletionCostAnnotation:              "999",
+						deletioncost.KarpenterManagedDeletionCostAnnotation: "true",
+						deletioncost.KarpenterLastAssignedDeletionCostAnnotation: "-5",
+					},
+				},
+				NodeName: nodes[0].Name,
+			})
+			ExpectApplied(ctx, env.Client, pod)
+			ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, nodeStateController, nodeClaimStateController, nodes, nodeClaims)
+
+			var stateNodes []*state.StateNode
+			for n := range cluster.Nodes() {
+				stateNodes = append(stateNodes, n)
+			}
+
+			// Fresh manager (simulates restart — no in-memory state)
+			mgr := deletioncost.NewAnnotationManager(env.Client, recorder)
+			nodeRanks := []deletioncost.NodeRank{{Node: stateNodes[0], Rank: -5, HasDoNotDisrupt: false}}
+			Expect(mgr.UpdatePodDeletionCosts(ctx, nodeRanks)).To(Succeed())
+
+			// Should detect that current value "999" differs from last-assigned "-5"
+			// and yield control (remove sentinel)
+			finalPod := &corev1.Pod{}
+			Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(pod), finalPod)).To(Succeed())
+			Expect(finalPod.Annotations).ToNot(HaveKey(deletioncost.KarpenterManagedDeletionCostAnnotation))
+			Expect(finalPod.Annotations).ToNot(HaveKey(deletioncost.KarpenterLastAssignedDeletionCostAnnotation))
+			Expect(finalPod.Annotations[deletioncost.PodDeletionCostAnnotation]).To(Equal("999"))
+		})
+
+		It("should not detect conflict after restart when values match", func() {
+			nodeClaims, nodes := test.NodeClaimsAndNodes(1, v1.NodeClaim{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{v1.NodePoolLabelKey: nodePool.Name}},
+				Status:     v1.NodeClaimStatus{Allocatable: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("4"), corev1.ResourceMemory: resource.MustParse("8Gi")}},
+			})
+			ExpectApplied(ctx, env.Client, nodePool)
+			for i := range nodeClaims {
+				ExpectApplied(ctx, env.Client, nodeClaims[i], nodes[i])
+			}
+			// Pod where last-assigned matches current (no third-party modification)
+			pod := test.Pod(test.PodOptions{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{
+						deletioncost.PodDeletionCostAnnotation:              "-5",
+						deletioncost.KarpenterManagedDeletionCostAnnotation: "true",
+						deletioncost.KarpenterLastAssignedDeletionCostAnnotation: "-5",
+					},
+				},
+				NodeName: nodes[0].Name,
+			})
+			ExpectApplied(ctx, env.Client, pod)
+			ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, nodeStateController, nodeClaimStateController, nodes, nodeClaims)
+
+			var stateNodes []*state.StateNode
+			for n := range cluster.Nodes() {
+				stateNodes = append(stateNodes, n)
+			}
+
+			// Fresh manager (simulates restart)
+			mgr := deletioncost.NewAnnotationManager(env.Client, recorder)
+			nodeRanks := []deletioncost.NodeRank{{Node: stateNodes[0], Rank: -10, HasDoNotDisrupt: false}}
+			Expect(mgr.UpdatePodDeletionCosts(ctx, nodeRanks)).To(Succeed())
+
+			// No conflict: should update to new rank
+			finalPod := &corev1.Pod{}
+			Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(pod), finalPod)).To(Succeed())
+			Expect(finalPod.Annotations[deletioncost.PodDeletionCostAnnotation]).To(Equal("-10"))
+			Expect(finalPod.Annotations[deletioncost.KarpenterManagedDeletionCostAnnotation]).To(Equal("true"))
+			Expect(finalPod.Annotations[deletioncost.KarpenterLastAssignedDeletionCostAnnotation]).To(Equal("-10"))
+		})
+
 		It("should detect externally modified annotation and remove sentinel", func() {
 			nodeClaims, nodes := test.NodeClaimsAndNodes(1, v1.NodeClaim{
 				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{v1.NodePoolLabelKey: nodePool.Name}},

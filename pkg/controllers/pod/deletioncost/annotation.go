@@ -38,6 +38,9 @@ const (
 	PodDeletionCostAnnotation = "controller.kubernetes.io/pod-deletion-cost"
 	// KarpenterManagedDeletionCostAnnotation tracks whether Karpenter is managing the deletion cost
 	KarpenterManagedDeletionCostAnnotation = "karpenter.sh/managed-deletion-cost"
+	// KarpenterLastAssignedDeletionCostAnnotation persists the last value Karpenter wrote, enabling
+	// third-party conflict detection to survive controller restarts.
+	KarpenterLastAssignedDeletionCostAnnotation = "karpenter.sh/last-assigned-deletion-cost"
 )
 
 // PodUpdate represents a pod that needs its deletion cost annotation updated
@@ -180,12 +183,13 @@ func (a *AnnotationManager) processSinglePod(ctx context.Context, pod *corev1.Po
 }
 
 // isExternallyModified checks if the pod's deletion cost annotation was changed
-// by a third party since Karpenter last set it.
+// by a third party since Karpenter last set it. Uses the in-memory cache for
+// hot-path efficiency, falling back to the persisted last-assigned annotation
+// to survive controller restarts.
 func (a *AnnotationManager) isExternallyModified(pod *corev1.Pod) bool {
 	if pod.Annotations == nil {
 		return false
 	}
-	// Only check pods we previously managed
 	_, hasManaged := pod.Annotations[KarpenterManagedDeletionCostAnnotation]
 	if !hasManaged {
 		return false
@@ -198,15 +202,24 @@ func (a *AnnotationManager) isExternallyModified(pod *corev1.Pod) bool {
 	lastVal, tracked := a.lastAssignedValues[pod.UID]
 	a.mu.Unlock()
 	if !tracked {
-		return false
+		// After restart, recover from the persisted annotation
+		lastVal, tracked = pod.Annotations[KarpenterLastAssignedDeletionCostAnnotation]
+		if !tracked {
+			return false
+		}
+		// Repopulate in-memory cache for subsequent checks
+		a.mu.Lock()
+		a.lastAssignedValues[pod.UID] = lastVal
+		a.mu.Unlock()
 	}
 	return currentVal != lastVal
 }
 
-// removeSentinelAnnotation removes the Karpenter management sentinel from a pod
+// removeSentinelAnnotation removes the Karpenter management annotations from a pod
 func (a *AnnotationManager) removeSentinelAnnotation(ctx context.Context, pod *corev1.Pod) error {
 	updated := pod.DeepCopy()
 	delete(updated.Annotations, KarpenterManagedDeletionCostAnnotation)
+	delete(updated.Annotations, KarpenterLastAssignedDeletionCostAnnotation)
 	return a.kubeClient.Update(ctx, updated)
 }
 
@@ -226,6 +239,7 @@ func (a *AnnotationManager) CleanupNodeAnnotations(ctx context.Context, nodeName
 		}
 		updated := pod.DeepCopy()
 		delete(updated.Annotations, KarpenterManagedDeletionCostAnnotation)
+		delete(updated.Annotations, KarpenterLastAssignedDeletionCostAnnotation)
 		delete(updated.Annotations, PodDeletionCostAnnotation)
 		if err := a.kubeClient.Update(ctx, updated); err != nil {
 			if apierrors.IsNotFound(err) {
@@ -275,7 +289,9 @@ func (a *AnnotationManager) updatePodAnnotation(ctx context.Context, podUpdate P
 	if pod.Annotations == nil {
 		pod.Annotations = make(map[string]string)
 	}
-	pod.Annotations[PodDeletionCostAnnotation] = fmt.Sprintf("%d", podUpdate.NewRank)
+	costStr := fmt.Sprintf("%d", podUpdate.NewRank)
+	pod.Annotations[PodDeletionCostAnnotation] = costStr
 	pod.Annotations[KarpenterManagedDeletionCostAnnotation] = "true"
+	pod.Annotations[KarpenterLastAssignedDeletionCostAnnotation] = costStr
 	return a.kubeClient.Update(ctx, pod)
 }

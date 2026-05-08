@@ -45,6 +45,17 @@ Ranks start at `-len(nodes)` and increment sequentially across tiers.
 |-----------|---------|
 | `controller.kubernetes.io/pod-deletion-cost` | Kubernetes deletion priority (lower = deleted first) |
 | `karpenter.sh/managed-deletion-cost` | Sentinel: Karpenter manages this pod's cost |
+| `karpenter.sh/last-assigned-deletion-cost` | Persists the last value Karpenter wrote for restart-safe conflict detection |
+
+## Three-Annotation Protocol
+
+The controller uses three annotations to safely manage pod deletion costs:
+
+1. **`controller.kubernetes.io/pod-deletion-cost`** — The Kubernetes-standard annotation that the ReplicaSet controller reads for scale-down ordering.
+2. **`karpenter.sh/managed-deletion-cost`** — A sentinel indicating Karpenter is actively managing this pod's deletion cost. Its presence distinguishes Karpenter-managed pods from customer-managed ones.
+3. **`karpenter.sh/last-assigned-deletion-cost`** — Persists the exact value Karpenter last wrote to `pod-deletion-cost`. This enables third-party conflict detection to survive controller restarts without relying on in-memory state.
+
+On each reconcile, conflict detection compares `pod-deletion-cost` against the last-assigned value. If they differ and the sentinel is set, a third party modified the value and Karpenter yields control.
 
 ## Customer Annotation Protection
 
@@ -54,10 +65,14 @@ are considered customer-managed and will not be modified.
 ## Third-Party Conflict Detection
 
 If a third party modifies a Karpenter-managed pod's deletion cost annotation:
-- Karpenter detects the value differs from what it last set
-- Removes the sentinel annotation (releases management)
+- Karpenter detects the value differs from what it last set (using in-memory cache or the persisted `last-assigned-deletion-cost` annotation after restart)
+- Removes the sentinel and last-assigned annotations (releases management)
 - Skips the pod on future reconciles
 - Emits a `PodDeletionCostThirdPartyConflict` warning event
+
+### Restart Race Condition
+
+Without the `last-assigned-deletion-cost` annotation, Karpenter loses its expected-value state on restart. A third-party controller could modify `pod-deletion-cost` during the restart window and Karpenter would be unable to detect the change (the in-memory map starts empty). The persisted annotation makes conflict detection stateless — any Karpenter instance can detect third-party modifications by comparing the two annotation values on the pod itself.
 
 ## Bounded Node Labeling
 
