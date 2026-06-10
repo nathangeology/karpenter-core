@@ -18,6 +18,10 @@ package scheduling_test
 
 import (
 	"fmt"
+	"math/rand"
+	"sync"
+	"sync/atomic"
+	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -369,3 +373,159 @@ var _ = Describe("ReservationManager", func() {
 		})
 	})
 })
+
+// newParallelReserveFixture builds a ReservationManager with `numOfferings` distinct reserved
+// offerings (each seeded with `capacityPerOffering`) and `numHostnames` candidate hostnames.
+// Returned offerings/hostnames are stable so callers can index them with goroutine-local PRNGs.
+func newParallelReserveFixture(numOfferings, numHostnames, capacityPerOffering int) (*scheduling.ReservationManager, []*cloudprovider.Offering, []string) {
+	offerings := make([]*cloudprovider.Offering, 0, numOfferings)
+	instanceTypes := make([]*cloudprovider.InstanceType, 0, numOfferings)
+	for i := 0; i < numOfferings; i++ {
+		o := &cloudprovider.Offering{
+			Available:           true,
+			ReservationCapacity: capacityPerOffering,
+			Requirements: pscheduling.NewLabelRequirements(map[string]string{
+				v1.CapacityTypeLabelKey:          v1.CapacityTypeReserved,
+				corev1.LabelTopologyZone:         fmt.Sprintf("test-zone-%d", i%3),
+				cloudprovider.ReservationIDLabel: fmt.Sprintf("reservation-%d", i),
+			}),
+		}
+		offerings = append(offerings, o)
+		instanceTypes = append(instanceTypes, fake.NewInstanceType(fake.InstanceTypeOptions{
+			Name: fmt.Sprintf("reserved-%d", i),
+			Resources: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("2"),
+				corev1.ResourceMemory: resource.MustParse("4Gi"),
+				corev1.ResourcePods:   resource.MustParse("10"),
+			},
+			Offerings: []*cloudprovider.Offering{o},
+		}))
+	}
+	hostnames := make([]string, 0, numHostnames)
+	for i := 0; i < numHostnames; i++ {
+		hostnames = append(hostnames, fmt.Sprintf("hostname-%d", i))
+	}
+	rm := scheduling.NewReservationManager(map[string][]*cloudprovider.InstanceType{"": instanceTypes})
+	return rm, offerings, hostnames
+}
+
+// ReservationManager has no internal mutex (see reservationmanager.go) — production
+// callers serialize Reserve/Release through the single-threaded Solve loop. The bench
+// and test below preserve that invariant with an external sync.Mutex; without it the
+// runtime fatal-errors on concurrent map writes. The mutex therefore *is* the
+// production-equivalent harness, not a sin against the design.
+
+// BenchmarkReservationManagerParallelReserve measures externally-serialized
+// Reserve/Release throughput under contention. ns/op captures the wall-clock cost
+// of the Solve-loop serialization pattern with parallelism=10 callers. A regression
+// that adds an *internal* lock (or otherwise inflates Reserve cost) shows up here.
+//
+// Run: go test -bench=BenchmarkReservationManagerParallelReserve -benchmem -count=10 \
+//
+//	./pkg/controllers/provisioning/scheduling/
+func BenchmarkReservationManagerParallelReserve(b *testing.B) {
+	const (
+		numOfferings        = 1000
+		numHostnames        = 100
+		capacityPerOffering = 1 << 20 // large so the benchmark never exhausts capacity
+		parallelism         = 10
+	)
+	rm, offerings, hostnames := newParallelReserveFixture(numOfferings, numHostnames, capacityPerOffering)
+	var mu sync.Mutex
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	b.SetParallelism(parallelism)
+	b.RunParallel(func(pb *testing.PB) {
+		//nolint:gosec // benchmark fixture randomness; not security-sensitive
+		rng := rand.New(rand.NewSource(1))
+		for pb.Next() {
+			h := hostnames[rng.Intn(len(hostnames))]
+			o := offerings[rng.Intn(len(offerings))]
+			mu.Lock()
+			rm.Reserve(h, o)
+			rm.Release(h, o)
+			mu.Unlock()
+		}
+	})
+}
+
+// TestReservationManagerNoOverDecrementUnderConcurrency exercises Reserve/Release
+// from many goroutines through the external-serialization invariant and asserts:
+//
+//   - No goroutine panics. Reserve panics when capacity drops below 0
+//     (see reservationmanager.go's over-reserve check); the idempotency contract
+//     introduced by PR #2356 is what prevents that panic when the same
+//     (hostname, offering) pair is Reserved repeatedly.
+//   - RemainingCapacity returns to the seed value for every offering. Each
+//     goroutine Reserves and immediately Releases the same pair, so a net-zero
+//     end state is the invariant: a regression that double-decrements
+//     (the PR #2126 panic class) shows up either as a panic mid-test or as a
+//     drifted RemainingCapacity after the wait.
+//
+// Many goroutines repeatedly target overlapping (hostname, offering) pairs to
+// drive the idempotency path; each goroutine also issues redundant Reserve calls
+// before Release to hammer the "already-reserved, no-op" branch.
+//
+// Run with -race to catch any future internal-state mutation that escapes the
+// external mutex:
+//
+//	go test -race -count=1 -run TestReservationManagerNoOverDecrementUnderConcurrency \
+//	  ./pkg/controllers/provisioning/scheduling/
+func TestReservationManagerNoOverDecrementUnderConcurrency(t *testing.T) {
+	const (
+		numOfferings        = 32
+		numHostnames        = 16
+		capacityPerOffering = 1024
+		goroutines          = 16
+		opsPerGoroutine     = 4096
+	)
+	rm, offerings, hostnames := newParallelReserveFixture(numOfferings, numHostnames, capacityPerOffering)
+	var mu sync.Mutex
+
+	var panics atomic.Int64
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for g := 0; g < goroutines; g++ {
+		go func(seed int64) {
+			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					panics.Add(1)
+					t.Errorf("Reserve/Release panicked under concurrency: %v", r)
+				}
+			}()
+			//nolint:gosec // test fixture randomness; not security-sensitive
+			rng := rand.New(rand.NewSource(seed))
+			for i := 0; i < opsPerGoroutine; i++ {
+				h := hostnames[rng.Intn(len(hostnames))]
+				o := offerings[rng.Intn(len(offerings))]
+				mu.Lock()
+				// Reserve twice on purpose: exercises the PR #2356 idempotency branch.
+				// Without idempotency this would panic on the second decrement once
+				// capacity exhausts, surfacing the PR #2126 regression class.
+				rm.Reserve(h, o)
+				rm.Reserve(h, o)
+				rm.Release(h, o)
+				mu.Unlock()
+			}
+		}(int64(g + 1))
+	}
+	wg.Wait()
+	if panics.Load() != 0 {
+		t.Fatalf("observed %d panics during concurrent Reserve/Release; manager invariant violated", panics.Load())
+	}
+
+	// Net-zero end state: every Reserve was matched by a Release, so capacity
+	// must be at the seed value. RemainingCapacity < seed means a Release was
+	// dropped or a Reserve double-decremented.
+	for i, o := range offerings {
+		got := rm.RemainingCapacity(o)
+		if got != capacityPerOffering {
+			t.Errorf("offering %d: RemainingCapacity = %d, want %d (capacity drift under concurrency)", i, got, capacityPerOffering)
+		}
+		if got < 0 {
+			t.Errorf("offering %d: RemainingCapacity = %d (< 0); manager over-decremented", i, got)
+		}
+	}
+}
