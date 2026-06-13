@@ -93,9 +93,33 @@ var _ = Describe("PodEvents", func() {
 		})
 		pod = test.Pod(test.PodOptions{
 			NodeName: node.Name,
+			Phase:    corev1.PodSucceeded,
 		})
 	})
-	It("should set the nodeclaim lastPodEvent", func() {
+	It("should set the nodeclaim lastPodEvent for a terminal pod", func() {
+		ExpectApplied(ctx, env.Client, nodePool, nodeClaim, node, pod)
+		timeToCheck := env.Clock.Now().Truncate(time.Second)
+		ExpectObjectReconciled(ctx, env.Client, podEventsController, pod)
+
+		nodeClaim = ExpectExists(ctx, env.Client, nodeClaim)
+		Expect(nodeClaim.Status.LastPodEventTime.Time).To(BeEquivalentTo(timeToCheck))
+	})
+	It("should not set the nodeclaim lastPodEvent for an active pod (newly-bound +pod event)", func() {
+		pod = test.Pod(test.PodOptions{NodeName: node.Name})
+		ExpectApplied(ctx, env.Client, nodePool, nodeClaim, node, pod)
+		ExpectObjectReconciled(ctx, env.Client, podEventsController, pod)
+
+		nodeClaim = ExpectExists(ctx, env.Client, nodeClaim)
+		Expect(nodeClaim.Status.LastPodEventTime.Time).To(BeZero())
+	})
+	It("should set the nodeclaim lastPodEvent for a terminating pod", func() {
+		pod = test.Pod(test.PodOptions{
+			ObjectMeta: metav1.ObjectMeta{
+				DeletionTimestamp: &metav1.Time{Time: env.Clock.Now()},
+				Finalizers:        []string{"testing/finalizer"},
+			},
+			NodeName: node.Name,
+		})
 		ExpectApplied(ctx, env.Client, nodePool, nodeClaim, node, pod)
 		timeToCheck := env.Clock.Now().Truncate(time.Second)
 		ExpectObjectReconciled(ctx, env.Client, podEventsController, pod)

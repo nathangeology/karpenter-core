@@ -66,6 +66,11 @@ func (c *Controller) Reconcile(ctx context.Context, pod *corev1.Pod) (reconcile.
 	if pod.Spec.NodeName == "" || podutils.IsOwnedByDaemonSet(pod) {
 		return reconcile.Result{}, nil
 	}
+	// Only react to pods that have gone terminal or terminating. Newly-bound pods (+pod events)
+	// no longer reset the consolidateAfter validation window (see PR #3006 for the disruption-rate study).
+	if !podutils.IsTerminal(pod) && !podutils.IsTerminating(pod) {
+		return reconcile.Result{}, nil
+	}
 
 	node := &corev1.Node{}
 	if err := c.kubeClient.Get(ctx, types.NamespacedName{Name: pod.Spec.NodeName}, node); err != nil {
