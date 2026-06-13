@@ -114,7 +114,7 @@ var (
 			Namespace: metrics.Namespace,
 			Subsystem: metrics.NodePoolSubsystem,
 			Name:      "nodes_consuming_budgets",
-			Help:      "The number of nodes consuming the budget of a nodepool at a point in time. Labeled by NodePool.",
+			Help:      "The number of nodes in a nodepool that are NotReady or marked for deletion and are therefore consuming the nodepool's disruption budget. The value is identical across reason labels: the budget is consumed by the shared count of in-flight disrupting nodes (regardless of which reason initiated the disruption), not by per-reason in-flight counts.",
 		},
 		[]string{metrics.NodePoolLabel, metrics.ReasonLabel},
 	)
