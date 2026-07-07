@@ -1,0 +1,37 @@
+name: perf-benchmarks-dra-scoped
+# Scoped variant of kind-perf-e2e.yaml. Runs ONLY the Basic Deployment
+# (Scale Out Test) matrix entry, and takes an explicit IGNORE_DRA_REQUESTS
+# input to flip the DRA feature gate at helm deploy time.
+#
+# Trigger via:
+#   gh workflow run perf-benchmarks-dra-scoped.yaml \
+#     --repo nathangeology/karpenter-core --ref bench/dra-scoped-off \
+#     --field ignore_dra_requests=true --field run_label=off-run-1
+#
+# Do not merge into main — this is a scoped fork for kp-56jbpu.
+on:
+  workflow_dispatch:
+    inputs:
+      ignore_dra_requests:
+        type: choice
+        description: "IGNORE_DRA_REQUESTS: 'true' = DRA gate OFF (OSS default), 'false' = DRA gate ON"
+        required: true
+        default: "true"
+        options:
+          - "true"
+          - "false"
+      run_label:
+        type: string
+        description: "Label to distinguish parallel runs (e.g. off-run-1, on-run-3)"
+        required: true
+jobs:
+  scale-out-basic:
+    permissions:
+      issues: write
+    uses: ./.github/workflows/e2e-dra-scoped.yaml
+    with:
+      suite: Performance
+      focus: "Basic Deployment"
+      test_name: "Basic Scale Test"
+      ignore_dra_requests: ${{ inputs.ignore_dra_requests }}
+      run_label: ${{ inputs.run_label }}
