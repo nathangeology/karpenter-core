@@ -127,11 +127,23 @@ jobs:
         export OUTPUT_DIR
         echo OUTPUT_DIR="$OUTPUT_DIR" >> "$GITHUB_ENV"
         TEST_SUITE="$SUITE" make e2etests
+    - name: sanitize label for artifact name
+      id: sanitize
+      env:
+        RAW_LABEL: ${{ inputs.run_label }}
+      shell: bash
+      run: |
+        # Artifact names cannot contain forward slashes; replace with double-dash.
+        SAFE="${RAW_LABEL//\//--}"
+        # Also strip any other characters GitHub rejects: :<>|*?"\
+        SAFE="${SAFE//[<>:|*?\"\\]/-}"
+        echo "safe_label=$SAFE" >> "$GITHUB_OUTPUT"
+        echo "Sanitized run_label $RAW_LABEL -> $SAFE"
     - name: Upload performance results
       if: always() && env.OUTPUT_DIR != ''
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
-        name: performance-results-${{ inputs.test_name || format('suite-{0}', inputs.suite) }}-dra-${{ inputs.ignore_dra_requests }}-${{ inputs.run_label }}-${{ github.run_id }}
+        name: performance-results-${{ inputs.test_name || format('suite-{0}', inputs.suite) }}-dra-${{ inputs.ignore_dra_requests }}-${{ steps.sanitize.outputs.safe_label }}-${{ github.run_id }}
         path: |
           ${{ env.OUTPUT_DIR }}/*_performance_report.json
           ${{ env.OUTPUT_DIR }}/karpenter_memory_profile_*.pb.gz
