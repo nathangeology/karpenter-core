@@ -53,6 +53,8 @@ jobs:
           k8sVersion: ${{ inputs.k8s_version }}
     - name: Kind Cluster
       uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
+      with:
+        node_image: kindest/node:v1.34.0
     - name: check kind cluster and taint nodes
       shell: bash
       run: |
@@ -150,6 +152,28 @@ jobs:
           ${{ env.OUTPUT_DIR }}/karpenter_cpu_profile_*.pb.gz
         retention-days: 30
         if-no-files-found: ignore
+    - name: capture karpenter logs on failure
+      if: failure()
+      shell: bash
+      run: |
+        set +e
+        echo "=== karpenter pods (wide) ==="
+        kubectl get pods -n kube-system -l app.kubernetes.io/name=karpenter -o wide || true
+        echo "=== karpenter deployment describe ==="
+        kubectl describe deployment -n kube-system karpenter || true
+        echo "=== karpenter pod describe ==="
+        kubectl describe pods -n kube-system -l app.kubernetes.io/name=karpenter || true
+        echo "=== karpenter current container logs ==="
+        kubectl logs -n kube-system -l app.kubernetes.io/name=karpenter --all-containers=true --tail=1000 || true
+        echo "=== karpenter previous container logs (crashed) ==="
+        kubectl logs -n kube-system -l app.kubernetes.io/name=karpenter --all-containers=true --previous --tail=1000 || true
+        echo "=== resource.k8s.io API discovery ==="
+        kubectl api-resources --api-group=resource.k8s.io -o wide || true
+        kubectl get --raw='/apis/resource.k8s.io/v1' || true
+        echo "=== kube-system events (last 100 by lastTimestamp) ==="
+        kubectl get events -n kube-system --sort-by='.lastTimestamp' | tail -100 || true
+        echo "=== all namespaces recent events ==="
+        kubectl get events --all-namespaces --sort-by='.lastTimestamp' | tail -50 || true
     - name: cleanup
       shell: bash
       run: |
