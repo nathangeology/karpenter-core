@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/samber/lo"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -160,7 +161,15 @@ func setupConsolidationBench(b *testing.B, cfg benchConfig) (
 ) {
 	b.Helper()
 	ctx := TestContextWithLogger(b)
-	ctx = options.ToContext(ctx, test.Options())
+	// DRA feature-gate flip point (kp-cu51bw).
+	// IgnoreDRARequests=true (default): DRA-bearing pods return DRAError and are skipped by the scheduler
+	//   inner loop — this is the "DRA off" configuration (OSS default, pre-flip Auto).
+	// IgnoreDRARequests=false: DRA-bearing pods are attempted, hitting the full scheduler path — this is
+	//   the "DRA on" configuration (post-flip Auto).
+	// See sibling branches microbench/dra-off and microbench/dra-on for the A/B setups.
+	ctx = options.ToContext(ctx, test.Options(test.OptionsFields{
+		IgnoreDRARequests: lo.ToPtr(true), // DRA OFF
+	}))
 
 	cp := fake.NewCloudProvider()
 	clk := clock.NewFakeClock(time.Now())
