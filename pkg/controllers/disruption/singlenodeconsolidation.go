@@ -140,33 +140,8 @@ func (s *SingleNodeConsolidation) ConsolidationType() string {
 // SortCandidates applies the consolidation sort, then interweaves by NodePool.
 func (s *SingleNodeConsolidation) SortCandidates(ctx context.Context, candidates []*Candidate) []*Candidate {
 	candidates = s.sortCandidates(ctx, candidates)
-	return s.shuffleCandidates(ctx, lo.GroupBy(candidates, func(c *Candidate) string { return c.NodePool.Name }))
-}
-
-func (s *SingleNodeConsolidation) shuffleCandidates(ctx context.Context, nodePoolCandidates map[string][]*Candidate) []*Candidate {
-	var result []*Candidate
-	// Log any timed out nodepools that we're prioritizing
 	if s.PreviouslyUnseenNodePools.Len() != 0 {
 		log.FromContext(ctx).V(1).Info("prioritizing nodepools that have not yet been considered due to timeouts in previous runs", "nodepools", strings.Join(s.PreviouslyUnseenNodePools.UnsortedList(), ", "))
 	}
-	sortedNodePools := s.PreviouslyUnseenNodePools.UnsortedList()
-	sortedNodePools = append(sortedNodePools, lo.Filter(lo.Keys(nodePoolCandidates), func(nodePoolName string, _ int) bool {
-		return !s.PreviouslyUnseenNodePools.Has(nodePoolName)
-	})...)
-
-	// Find the maximum number of candidates in any nodepool
-	maxCandidatesPerNodePool := lo.MaxBy(lo.Values(nodePoolCandidates), func(a, b []*Candidate) bool {
-		return len(a) > len(b)
-	})
-
-	// Interweave candidates from different nodepools
-	for i := range maxCandidatesPerNodePool {
-		for _, nodePoolName := range sortedNodePools {
-			if i < len(nodePoolCandidates[nodePoolName]) {
-				result = append(result, nodePoolCandidates[nodePoolName][i])
-			}
-		}
-	}
-
-	return result
+	return InterleaveCandidatesByNodePool(candidates, s.PreviouslyUnseenNodePools)
 }

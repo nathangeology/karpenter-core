@@ -20,7 +20,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"time"
 
 	"github.com/samber/lo"
@@ -135,22 +134,8 @@ func (c *consolidation) ShouldDisrupt(ctx context.Context, cn *Candidate) bool {
 	return cn.NodeClaim.StatusConditions().Get(v1.ConditionTypeConsolidatable).IsTrue()
 }
 
-// sortCandidates sorts candidates by price/disruption ratio descending.
-// The binary search in multi-node consolidation tries the first N candidates
-// as a batch. Ratio sort means the batch contains the highest-value nodes,
-// so budget-limited cycles execute the most impactful moves first.
-//
-// This changes multi-node behavior for WhenEmptyOrUnderutilized, which
-// previously sorted by disruption cost ascending. The old sort found batches
-// that were easy to pack (low-disruption nodes fit together). The new sort
-// finds batches worth packing (high savings per unit disruption). The binary
-// search still converges because it shrinks the window until scheduling
-// succeeds.
 func (c *consolidation) sortCandidates(_ context.Context, candidates []*Candidate) []*Candidate {
-	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].SavingsRatio() > candidates[j].SavingsRatio()
-	})
-	return candidates
+	return SortCandidatesBySavingsRatio(candidates)
 }
 
 // computeConsolidation computes a consolidation action to take
