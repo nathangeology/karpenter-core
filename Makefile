@@ -41,7 +41,13 @@ apply-with-kind: verify build-with-kind ## Deploy the kwok controller from the c
 		--set controller.image.tag=$(IMG_TAG) \
 		--set serviceMonitor.enabled=true \
 		--set-string controller.env[0].name=ENABLE_PROFILING \
-		--set-string controller.env[0].value=true
+		--set-string controller.env[0].value=true \
+		--set-string controller.env[1].name=IGNORE_DRA_REQUESTS \
+		--set-string controller.env[1].value=true \
+		--set-string controller.env[2].name=AMI_REFRESH_INTERVAL \
+		--set-string controller.env[2].value=1m \
+		--set-string controller.env[3].name=SUBNET_REFRESH_INTERVAL \
+		--set-string controller.env[3].value=1m
 
 apply-with-kind-dra: verify build-with-kind ## Deploy the kwok controller for DRA testing
 	kubectl apply -f kwok/charts/crds
