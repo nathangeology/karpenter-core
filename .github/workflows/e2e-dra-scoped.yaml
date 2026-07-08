@@ -108,7 +108,8 @@ jobs:
           --set-string controller.env[0].name=ENABLE_PROFILING \
           --set-string controller.env[0].value=true \
           --set-string controller.env[1].name=IGNORE_DRA_REQUESTS \
-          --set-string "controller.env[1].value=$IGNORE_DRA_REQUESTS"
+          --set-string "controller.env[1].value=$IGNORE_DRA_REQUESTS" \
+          --set-json 'additionalClusterRoleRules=[{"apiGroups":["resource.k8s.io"],"resources":["resourceclaims","resourceclaims/status","resourceslices","deviceclasses"],"verbs":["get","list","watch"]}]'
     - name: ping cluster and verify DRA env var landed
       shell: bash
       run: |
