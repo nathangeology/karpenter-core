@@ -34,12 +34,12 @@ import (
 
 	v1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 	"sigs.k8s.io/karpenter/pkg/cloudprovider"
-	"sigs.k8s.io/karpenter/pkg/cloudprovider/fake"
 	"sigs.k8s.io/karpenter/pkg/controllers/provisioning/scheduling"
 	"sigs.k8s.io/karpenter/pkg/controllers/state"
 	"sigs.k8s.io/karpenter/pkg/operator/injection"
 	"sigs.k8s.io/karpenter/pkg/operator/options"
 	"sigs.k8s.io/karpenter/pkg/test"
+	"sigs.k8s.io/karpenter/pkg/test/bench"
 )
 
 // BenchmarkTopologyAffinitiesParallel measures lock contention on
@@ -67,20 +67,11 @@ func benchmarkTopologyParallel(b *testing.B, parallelism int) {
 		&corev1.Pod{}, "spec.nodeName",
 		func(o client.Object) []string { return []string{o.(*corev1.Pod).Spec.NodeName} },
 	).Build()
-	fakeCloudProvider := fake.NewCloudProvider()
-	instanceTypes := fake.InstanceTypes(20)
-	fakeCloudProvider.InstanceTypes = instanceTypes
+	fakeCloudProvider, instanceTypes := bench.NewCloudProvider(20)
 	clk := &clock.RealClock{}
 	clusterState := state.NewCluster(clk, fakeClient, fakeCloudProvider)
 
-	nodePool := test.NodePool(v1.NodePool{
-		Spec: v1.NodePoolSpec{
-			Limits: v1.Limits{
-				corev1.ResourceCPU:    resource.MustParse("1000000"),
-				corev1.ResourceMemory: resource.MustParse("1000000Gi"),
-			},
-		},
-	})
+	nodePool := bench.NodePoolWithLimits()
 
 	// Populate cluster state with nodes and pods (some with anti-affinity).
 	for i := 0; i < nodeCount; i++ {
@@ -202,20 +193,11 @@ func BenchmarkTopologyAffinitiesContended(b *testing.B) {
 		&corev1.Pod{}, "spec.nodeName",
 		func(o client.Object) []string { return []string{o.(*corev1.Pod).Spec.NodeName} },
 	).Build()
-	fakeCloudProvider := fake.NewCloudProvider()
-	instanceTypes := fake.InstanceTypes(20)
-	fakeCloudProvider.InstanceTypes = instanceTypes
+	fakeCloudProvider, instanceTypes := bench.NewCloudProvider(20)
 	clk := &clock.RealClock{}
 	clusterState := state.NewCluster(clk, fakeClient, fakeCloudProvider)
 
-	nodePool := test.NodePool(v1.NodePool{
-		Spec: v1.NodePoolSpec{
-			Limits: v1.Limits{
-				corev1.ResourceCPU:    resource.MustParse("1000000"),
-				corev1.ResourceMemory: resource.MustParse("1000000Gi"),
-			},
-		},
-	})
+	nodePool := bench.NodePoolWithLimits()
 
 	var allPods []*corev1.Pod
 	for i := 0; i < nodeCount; i++ {

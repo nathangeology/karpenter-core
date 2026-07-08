@@ -21,7 +21,6 @@ package disruption
 import (
 	"context"
 	"fmt"
-	"math/rand"
 	"testing"
 	"time"
 
@@ -43,6 +42,7 @@ import (
 	"sigs.k8s.io/karpenter/pkg/operator/logging"
 	"sigs.k8s.io/karpenter/pkg/operator/options"
 	"sigs.k8s.io/karpenter/pkg/test"
+	"sigs.k8s.io/karpenter/pkg/test/bench"
 	. "sigs.k8s.io/karpenter/pkg/utils/testing"
 )
 
@@ -50,8 +50,7 @@ func init() {
 	log.SetLogger(logging.NopLogger)
 }
 
-//nolint:gosec
-var benchRand = rand.New(rand.NewSource(42))
+var benchRand = bench.Rand
 
 // To run the consolidation benchmarks:
 //
@@ -135,16 +134,14 @@ func BenchmarkConsolidation_500Nodes_HostnameSpread_9NP(b *testing.B) {
 // --- Implementation ---
 
 func benchmarkConsolidationSim(b *testing.B, cfg benchConfig) {
-	ctx, kubeClient, _, clusterState, _, prov, candidates := setupConsolidationBench(b, cfg)
+	ctx, kubeClient, clk, clusterState, _, prov, candidates := setupConsolidationBench(b, cfg)
+	rec := events.NewRecorder(&record.FakeRecorder{})
 
-	// Benchmark SimulateScheduling for a single candidate node removal.
-	// This exercises the full rescheduling path: collect pods from the candidate,
-	// create a scheduler with topology constraints, and solve placement.
 	candidate := candidates[0]
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _ = SimulateScheduling(ctx, kubeClient, clusterState, prov, candidate)
+		_, _ = SimulateScheduling(ctx, kubeClient, clusterState, prov, clk, rec, candidate)
 	}
 	b.ReportMetric(float64(len(candidate.reschedulablePods)), "pods")
 	b.ReportMetric(float64(cfg.nodeCount), "nodes")
@@ -162,10 +159,8 @@ func setupConsolidationBench(b *testing.B, cfg benchConfig) (
 	ctx := TestContextWithLogger(b)
 	ctx = options.ToContext(ctx, test.Options())
 
-	cp := fake.NewCloudProvider()
+	cp, instanceTypes := bench.NewCloudProvider(100)
 	clk := clock.NewFakeClock(time.Now())
-	instanceTypes := fake.InstanceTypes(100)
-	cp.InstanceTypes = instanceTypes
 
 	kubeClient := fakecr.NewFakeClient()
 	clusterState := state.NewCluster(clk, kubeClient, cp)
