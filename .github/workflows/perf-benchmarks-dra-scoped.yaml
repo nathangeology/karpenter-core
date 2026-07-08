@@ -1,0 +1,77 @@
+name: perf-benchmarks-dra-scoped
+# Scoped variant of kind-perf-e2e.yaml. Runs ONLY the Basic Deployment
+# (Scale Out Test) and fires 8 parallel jobs on each push (via matrix
+# strategy) so a single push per branch yields the 5-10 parallel runs
+# needed for statistical resolution.
+#
+# DRA gate is inferred from branch name:
+# - bench/dra-scoped-off        -> IGNORE_DRA_REQUESTS=true  (OSS default, DRA OFF)
+# - bench/dra-scoped-on         -> IGNORE_DRA_REQUESTS=false (DRA ON)
+# - bench/may-baseline-911791c  -> IGNORE_DRA_REQUESTS=true  (May-2026 baseline)
+#
+# To fire a fresh batch of 8 runs, push an empty commit:
+#   git commit --allow-empty -m 'rerun'
+#   git push origin bench/dra-scoped-off
+#
+# Do not merge into main - this is a scoped fork for kp-56jbpu / kp-ckxrrv.
+on:
+  push:
+    branches:
+      - "bench/dra-scoped-off"
+      - "bench/dra-scoped-on"
+      - "bench/may-baseline-911791c"
+  workflow_dispatch:
+    inputs:
+      ignore_dra_requests:
+        type: choice
+        description: "IGNORE_DRA_REQUESTS: 'true' = DRA gate OFF (OSS default), 'false' = DRA gate ON"
+        required: true
+        default: "true"
+        options:
+          - "true"
+          - "false"
+      run_count:
+        type: string
+        description: "Number of parallel runs (matrix size)"
+        required: false
+        default: "8"
+jobs:
+  derive-config:
+    runs-on: ubuntu-latest
+    outputs:
+      ignore_dra_requests: ${{ steps.derive.outputs.ignore_dra_requests }}
+    steps:
+      - id: derive
+        env:
+          BRANCH: ${{ github.ref_name }}
+          EVENT: ${{ github.event_name }}
+          DISPATCH_IGNORE: ${{ inputs.ignore_dra_requests }}
+        run: |
+          set -eu
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            VAL="$DISPATCH_IGNORE"
+          else
+            case "$BRANCH" in
+              bench/dra-scoped-off) VAL=true ;;
+              bench/dra-scoped-on)  VAL=false ;;
+              bench/may-baseline-911791c) VAL=true ;;
+              *) echo "unexpected branch $BRANCH"; exit 1 ;;
+            esac
+          fi
+          echo "Deriving IGNORE_DRA_REQUESTS=$VAL for branch=$BRANCH event=$EVENT"
+          echo "ignore_dra_requests=$VAL" >> "$GITHUB_OUTPUT"
+  scale-out-basic:
+    needs: derive-config
+    permissions:
+      issues: write
+    strategy:
+      fail-fast: false
+      matrix:
+        run_index: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+    uses: ./.github/workflows/e2e-dra-scoped.yaml
+    with:
+      suite: Performance
+      focus: "Basic Deployment"
+      test_name: "Basic Scale Test"
+      ignore_dra_requests: ${{ needs.derive-config.outputs.ignore_dra_requests }}
+      run_label: ${{ github.ref_name }}-r${{ matrix.run_index }}-${{ github.run_id }}

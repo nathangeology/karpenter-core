@@ -1,0 +1,183 @@
+name: e2e-dra-scoped
+# Copy of e2e.yaml augmented with an IGNORE_DRA_REQUESTS boolean input that
+# gets propagated to the karpenter kwok controller via a helm --set override
+# for controller.env[1]. controller.env[0] remains ENABLE_PROFILING=true to
+# match the standard apply-with-kind target.
+#
+# Do not merge into e2e.yaml — this is a scoped fork for the kp-56jbpu DRA
+# A/B benchmark experiment. Delete after the experiment concludes.
+on:
+  workflow_call:
+    inputs:
+      k8s_version:
+        type: string
+        default: "1.35"
+      suite:
+        type: string
+        required: true
+      focus:
+        type: string
+        required: false
+        description: "Ginkgo focus pattern to run specific tests"
+      test_name:
+        type: string
+        required: false
+        description: "Human-readable test name for job identification"
+      ignore_dra_requests:
+        type: string
+        required: true
+        description: "'true' (DRA gate off, OSS default) or 'false' (DRA gate on)"
+      run_label:
+        type: string
+        required: false
+        description: "Free-form label to distinguish parallel runs of the same config"
+jobs:
+  e2e:
+    permissions:
+      issues: write
+    runs-on: ubuntu-latest
+    name: ${{ inputs.test_name || format('suite-{0}', inputs.suite) }}-${{ inputs.run_label }}
+    steps:
+    - name: Debug workflow_run trigger
+      run: |
+        echo "Event name: ${{ github.event_name }}"
+        echo "IGNORE_DRA_REQUESTS: ${{ inputs.ignore_dra_requests }}"
+        echo "run_label: ${{ inputs.run_label }}"
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+    - name: Set up Python 3.10
+      uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+      with:
+        python-version: "3.10"
+    - uses: ./.github/actions/install-deps
+      with:
+          k8sVersion: ${{ inputs.k8s_version }}
+    - name: Kind Cluster
+      uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
+      with:
+        node_image: kindest/node:v1.34.0
+    - name: check kind cluster and taint nodes
+      shell: bash
+      run: |
+        kubectl config current-context
+        kubectl get nodes
+        kubectl taint nodes chart-testing-control-plane CriticalAddonsOnly:NoSchedule
+    - name: install prometheus
+      uses: ./.github/actions/install-prometheus
+    - name: install pyroscope
+      uses: ./.github/actions/install-pyroscope
+    - name: install ko
+      shell: bash
+      run: |
+        go install github.com/google/ko@latest
+    - name: install kwok and build karpenter image
+      shell: bash
+      run: |
+        make install-kwok
+        export KWOK_REPO=kind.local
+        export KIND_CLUSTER_NAME=chart-testing
+        make build-with-kind
+    - name: deploy karpenter with explicit IGNORE_DRA_REQUESTS override
+      shell: bash
+      env:
+        IGNORE_DRA_REQUESTS: ${{ inputs.ignore_dra_requests }}
+      run: |
+        # Recreate what apply-with-kind does, but with an extra controller.env[1] entry.
+        # We reuse the CONTROLLER_IMG that make build-with-kind produced.
+        set -euo pipefail
+        export KWOK_REPO=kind.local
+        export KIND_CLUSTER_NAME=chart-testing
+        # Extract image tag from ko binary output (same as build-with-kind Makefile target)
+        CONTROLLER_IMG=$(KO_DOCKER_REPO="$KWOK_REPO" ko build sigs.k8s.io/karpenter/kwok)
+        IMG_REPOSITORY=$(echo "$CONTROLLER_IMG" | cut -d ":" -f 1)
+        IMG_TAG=latest
+        echo "Deploying with IGNORE_DRA_REQUESTS=$IGNORE_DRA_REQUESTS"
+        echo "IMG_REPOSITORY=$IMG_REPOSITORY IMG_TAG=$IMG_TAG"
+        kubectl apply -f kwok/charts/crds
+        helm upgrade --install karpenter kwok/charts \
+          --namespace kube-system --skip-crds \
+          --set logLevel=debug \
+          --set controller.resources.requests.cpu=1 \
+          --set controller.resources.requests.memory=1Gi \
+          --set controller.resources.limits.cpu=1 \
+          --set controller.resources.limits.memory=1Gi \
+          --set settings.featureGates.nodeRepair=true \
+          --set settings.featureGates.staticCapacity=true \
+          --set "controller.image.repository=$IMG_REPOSITORY" \
+          --set "controller.image.tag=$IMG_TAG" \
+          --set serviceMonitor.enabled=true \
+          --set-string controller.env[0].name=ENABLE_PROFILING \
+          --set-string controller.env[0].value=true \
+          --set-string controller.env[1].name=IGNORE_DRA_REQUESTS \
+          --set-string "controller.env[1].value=$IGNORE_DRA_REQUESTS" \
+          --set-json 'additionalClusterRoleRules=[{"apiGroups":["resource.k8s.io"],"resources":["resourceclaims","resourceclaims/status","resourceslices","deviceclasses"],"verbs":["get","list","watch"]}]'
+    - name: ping cluster and verify DRA env var landed
+      shell: bash
+      run: |
+        sleep 15
+        kubectl get pods -n kube-system | grep karpenter
+        kubectl get nodepools
+        kubectl get pods -A
+        kubectl describe nodes
+        echo "=== karpenter deployment env vars ==="
+        kubectl get deployment -n kube-system karpenter -o yaml | grep -A 2 IGNORE_DRA_REQUESTS || echo "IGNORE_DRA_REQUESTS not found in deployment"
+    - name: run the ${{ inputs.test_name || inputs.suite }} test
+      env:
+          SUITE: ${{ inputs.suite }}
+          FOCUS: ${{ inputs.focus }}
+      shell: bash
+      run: |
+        OUTPUT_DIR=$(mktemp -d)
+        export OUTPUT_DIR
+        echo OUTPUT_DIR="$OUTPUT_DIR" >> "$GITHUB_ENV"
+        TEST_SUITE="$SUITE" make e2etests
+    - name: sanitize label for artifact name
+      id: sanitize
+      env:
+        RAW_LABEL: ${{ inputs.run_label }}
+      shell: bash
+      run: |
+        # Artifact names cannot contain forward slashes; replace with double-dash.
+        SAFE="${RAW_LABEL//\//--}"
+        # Also strip any other characters GitHub rejects: :<>|*?"\
+        SAFE="${SAFE//[<>:|*?\"\\]/-}"
+        echo "safe_label=$SAFE" >> "$GITHUB_OUTPUT"
+        echo "Sanitized run_label $RAW_LABEL -> $SAFE"
+    - name: Upload performance results
+      if: always() && env.OUTPUT_DIR != ''
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: performance-results-${{ inputs.test_name || format('suite-{0}', inputs.suite) }}-dra-${{ inputs.ignore_dra_requests }}-${{ steps.sanitize.outputs.safe_label }}-${{ github.run_id }}
+        path: |
+          ${{ env.OUTPUT_DIR }}/*_performance_report.json
+          ${{ env.OUTPUT_DIR }}/karpenter_memory_profile_*.pb.gz
+          ${{ env.OUTPUT_DIR }}/karpenter_cpu_profile_*.pb.gz
+        retention-days: 30
+        if-no-files-found: ignore
+    - name: capture karpenter logs on failure
+      if: failure()
+      shell: bash
+      run: |
+        set +e
+        echo "=== karpenter pods (wide) ==="
+        kubectl get pods -n kube-system -l app.kubernetes.io/name=karpenter -o wide || true
+        echo "=== karpenter deployment describe ==="
+        kubectl describe deployment -n kube-system karpenter || true
+        echo "=== karpenter pod describe ==="
+        kubectl describe pods -n kube-system -l app.kubernetes.io/name=karpenter || true
+        echo "=== karpenter current container logs ==="
+        kubectl logs -n kube-system -l app.kubernetes.io/name=karpenter --all-containers=true --tail=1000 || true
+        echo "=== karpenter previous container logs (crashed) ==="
+        kubectl logs -n kube-system -l app.kubernetes.io/name=karpenter --all-containers=true --previous --tail=1000 || true
+        echo "=== resource.k8s.io API discovery ==="
+        kubectl api-resources --api-group=resource.k8s.io -o wide || true
+        kubectl get --raw='/apis/resource.k8s.io/v1' || true
+        echo "=== kube-system events (last 100 by lastTimestamp) ==="
+        kubectl get events -n kube-system --sort-by='.lastTimestamp' | tail -100 || true
+        echo "=== all namespaces recent events ==="
+        kubectl get events --all-namespaces --sort-by='.lastTimestamp' | tail -50 || true
+    - name: cleanup
+      shell: bash
+      run: |
+        kubectl delete nodepools --all
+        make delete
+        make uninstall-kwok
