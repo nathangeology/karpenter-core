@@ -122,9 +122,26 @@ func (c *consolidation) ShouldDisrupt(_ context.Context, cn *Candidate) bool {
 	return cn.NodeClaim.StatusConditions().Get(v1.ConditionTypeConsolidatable).IsTrue()
 }
 
-// sortCandidates sorts candidates by disruption cost (where the lowest disruption cost is first) and returns the result
-func (c *consolidation) sortCandidates(candidates []*Candidate) []*Candidate {
-	sort.Slice(candidates, func(i int, j int) bool {
+// sortCandidates sorts candidates by disruption cost ascending. When the
+// CooperativeDriftConsolidation feature gate is enabled, drifted nodes are
+// prioritized (oldest-drifted first) before falling back to cost ordering.
+func (c *consolidation) sortCandidates(ctx context.Context, candidates []*Candidate) []*Candidate {
+	cooperative := options.FromContext(ctx).FeatureGates.CooperativeDriftConsolidation
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if cooperative {
+			iDrifted := candidates[i].StateNode.NodeClaim.StatusConditions().Get(v1.ConditionTypeDrifted).IsTrue()
+			jDrifted := candidates[j].StateNode.NodeClaim.StatusConditions().Get(v1.ConditionTypeDrifted).IsTrue()
+			if iDrifted != jDrifted {
+				return iDrifted // drifted nodes first
+			}
+			if iDrifted && jDrifted {
+				iTime := candidates[i].StateNode.NodeClaim.StatusConditions().Get(v1.ConditionTypeDrifted).LastTransitionTime
+				jTime := candidates[j].StateNode.NodeClaim.StatusConditions().Get(v1.ConditionTypeDrifted).LastTransitionTime
+				if !iTime.Equal(&jTime) {
+					return iTime.Before(&jTime)
+				}
+			}
+		}
 		return candidates[i].DisruptionCost < candidates[j].DisruptionCost
 	})
 	return candidates
