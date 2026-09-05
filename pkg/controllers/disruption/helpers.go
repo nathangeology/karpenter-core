@@ -263,6 +263,30 @@ func NodePoolStats(cluster *state.Cluster) (numNodes, disrupting map[string]int)
 	return NodePoolStatsFromNodes(cluster.DeepCopyNodes())
 }
 
+// NodePoolBudgetMap returns per-NodePool remaining disruption budget for the
+// given reason. Result equals MustGetAllowedDisruptions minus already-disrupting,
+// clamped at 0. Pure: no metric emissions or events; callers emit at their own
+// site. Shared between BuildDisruptionBudgetMapping and the deletion-cost
+// controller so both compute budgets identically.
+func NodePoolBudgetMap(ctx context.Context, clk clock.Clock, nodePools map[string]*v1.NodePool, numNodes, disrupting map[string]int, reason v1.DisruptionReason) map[string]int {
+	out := map[string]int{}
+	for name, np := range nodePools {
+		allowed := np.MustGetAllowedDisruptions(clk, numNodes[name], reason)
+		remaining := allowed - disrupting[name]
+		if remaining < 0 {
+			log.FromContext(ctx).V(1).WithValues(
+				"nodePool", name,
+				"reason", string(reason),
+				"allowed", allowed,
+				"disrupting", disrupting[name],
+			).Info("disruption budget already exhausted; clamping to 0")
+			remaining = 0
+		}
+		out[name] = remaining
+	}
+	return out
+}
+
 // NodePoolStatsFromNodes computes the same per-NodePool counts as NodePoolStats
 // against a caller-supplied snapshot. Callers that already hold a DeepCopy
 // (e.g. the deletion-cost controller) reuse it here instead of paying for a

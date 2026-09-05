@@ -81,12 +81,13 @@ func RankNodes(ctx context.Context, kubeClient client.Client, clk clock.Clock, n
 	disruptedBlocked, drifted, normal, doNotDisrupt := partitionNodes(clk, nodes, nodePoolMap, nodePoolToInstanceTypesMap, nodePods, pdbs)
 
 	// Per-NodePool budget limits move overflow from B/C into D.
-	// NodePoolStatsFromNodes is the shared helper disruption also uses (via
-	// NodePoolStats), so the two controllers count the same nodes against
-	// the same budget.
+	// NodePoolStatsFromNodes and NodePoolBudgetMap are the shared helpers
+	// the disruption controller uses (via NodePoolStats and
+	// BuildDisruptionBudgetMapping), so the two controllers count and clamp
+	// budgets identically.
 	numNodes, disrupting := disruption.NodePoolStatsFromNodes(nodes)
-	driftBudget := buildBudgetForReason(ctx, nodePoolMap, numNodes, disrupting, clk, v1.DisruptionReasonDrifted)
-	consolidationBudget := buildBudgetForReason(ctx, nodePoolMap, numNodes, disrupting, clk, v1.DisruptionReasonUnderutilized)
+	driftBudget := disruption.NodePoolBudgetMap(ctx, clk, nodePoolMap, numNodes, disrupting, v1.DisruptionReasonDrifted)
+	consolidationBudget := disruption.NodePoolBudgetMap(ctx, clk, nodePoolMap, numNodes, disrupting, v1.DisruptionReasonUnderutilized)
 	var driftOverflow, normalOverflow []*state.StateNode
 	drifted, driftOverflow = applyPerNodePoolBudget(drifted, driftBudget)
 	normal, normalOverflow = applyPerNodePoolBudget(normal, consolidationBudget)
@@ -234,29 +235,6 @@ func isInstanceTypeUnresolvable(node *state.StateNode, nodePoolToInstanceTypesMa
 		return true
 	}
 	return false
-}
-
-// buildBudgetForReason returns allowed - already-disrupting per NodePool.
-// Negative results (more in-flight than allowed — should not occur in
-// steady-state) are logged and clamped to 0 so we don't move every candidate
-// to Group D.
-func buildBudgetForReason(ctx context.Context, nodePoolMap map[string]*v1.NodePool, numNodes, disrupting map[string]int, clk clock.Clock, reason v1.DisruptionReason) map[string]int {
-	budget := map[string]int{}
-	for name, np := range nodePoolMap {
-		allowed := np.MustGetAllowedDisruptions(clk, numNodes[name], reason)
-		remaining := allowed - disrupting[name]
-		if remaining < 0 {
-			log.FromContext(ctx).V(1).WithValues(
-				"nodePool", name,
-				"reason", string(reason),
-				"allowed", allowed,
-				"disrupting", disrupting[name],
-			).Info("disruption budget already exhausted; clamping to 0")
-			remaining = 0
-		}
-		budget[name] = remaining
-	}
-	return budget
 }
 
 func hasNodeDoNotDisrupt(node *state.StateNode) bool {
