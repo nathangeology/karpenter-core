@@ -42,13 +42,15 @@ import (
 // assigns each node the pod-deletion-cost value that steers the ReplicaSet
 // controller toward evicting the right pods first. See RFC #2935 §31.
 //
-//   - Group A: Nodes carrying the karpenter.sh/disrupted taint (Draining per
-//     RFC #2935), get math.MinInt32. Do not consume budget.
+//   - Group A: Nodes that are draining or otherwise going away
+//     (karpenter.sh/disrupted taint or NodeClaim marked-for-deletion), get
+//     math.MinInt32. Do not consume budget.
 //   - Group B: Drifted nodes, sequential ranks deleted first.
 //   - Group C: Normal nodes, sequential ranks deleted second.
-//   - Group D: Not-disruptable nodes (do-not-disrupt annotation on node or
-//     pod, consolidation disabled, PDB-blocked pods, or non-RS-owned pods).
-//     Annotations are cleared; RS controller uses default scale-down ordering.
+//   - Group D: Cleanup-only nodes (StateNode.ValidateNodeDisruptable or
+//     ValidatePodsDisruptable rejects, non-RS-owned pods, consolidation
+//     disabled, or an unresolvable instance type). Annotations are cleared;
+//     RS controller uses default scale-down ordering.
 //
 // Within Groups B and C the sort mirrors the disruption controller's
 // SavingsRatio DESC ordering (see disruption.consolidation.sortCandidates and
@@ -63,12 +65,6 @@ func RankNodes(ctx context.Context, kubeClient client.Client, clk clock.Clock, n
 	}
 	defer metrics.Measure(rankingDurationSeconds, noLabels)()
 
-	// Pre-fetch pods per node once so partitionNodes and sortBySavingsRatio
-	// don't repeat the API call.
-	nodePods, err := fetchNodePods(ctx, kubeClient, nodes)
-	if err != nil {
-		return nil, fmt.Errorf("listing pods on candidate nodes, %w", err)
-	}
 	// PDB-blocked pods route to Group D on any candidate, tainted or not,
 	// so the cluster-wide PDB list is needed on every reconcile.
 	pdbs, err := pdb.NewLimits(ctx, kubeClient)
@@ -76,9 +72,15 @@ func RankNodes(ctx context.Context, kubeClient client.Client, clk clock.Clock, n
 		return nil, fmt.Errorf("listing pod disruption budgets, %w", err)
 	}
 
-	sortBySavingsRatio(ctx, nodes, nodePods, nodePoolToInstanceTypesMap)
+	disruptedBlocked, drifted, normal, cleanupOnly, nodePods, err := partitionNodes(ctx, kubeClient, clk, nodes, nodePoolMap, nodePoolToInstanceTypesMap, pdbs)
+	if err != nil {
+		return nil, err
+	}
 
-	disruptedBlocked, drifted, normal, doNotDisrupt := partitionNodes(clk, nodes, nodePoolMap, nodePoolToInstanceTypesMap, nodePods, pdbs)
+	// Sort operates on Group B and C in place under the SavingsRatio DESC
+	// ordering; Group A and D order does not affect annotation output.
+	sortBySavingsRatio(ctx, drifted, nodePods, nodePoolToInstanceTypesMap)
+	sortBySavingsRatio(ctx, normal, nodePods, nodePoolToInstanceTypesMap)
 
 	// Per-NodePool budget limits move overflow from B/C into D.
 	// NodePoolStatsFromNodes and NodePoolBudgetMap are the shared helpers
@@ -91,8 +93,8 @@ func RankNodes(ctx context.Context, kubeClient client.Client, clk clock.Clock, n
 	var driftOverflow, normalOverflow []*state.StateNode
 	drifted, driftOverflow = applyPerNodePoolBudget(drifted, driftBudget)
 	normal, normalOverflow = applyPerNodePoolBudget(normal, consolidationBudget)
-	doNotDisrupt = append(doNotDisrupt, driftOverflow...)
-	doNotDisrupt = append(doNotDisrupt, normalOverflow...)
+	cleanupOnly = append(cleanupOnly, driftOverflow...)
+	cleanupOnly = append(cleanupOnly, normalOverflow...)
 
 	// Groups B and C receive sequential ranks starting at -(B+C) up to -1
 	// so drift and normal sort first under PodDeletionCost-ascending
@@ -115,10 +117,10 @@ func RankNodes(ctx context.Context, kubeClient client.Client, clk clock.Clock, n
 		result = append(result, NodeRank{Node: node, Rank: currentRank, Pods: nodePods[node.Name()]})
 		currentRank++
 	}
-	for _, node := range doNotDisrupt {
-		// Rank unused for Group D — the queue sees HasDoNotDisrupt=true and
+	for _, node := range cleanupOnly {
+		// Rank unused for Group D — the queue sees CleanupOnly=true and
 		// clears the annotation rather than reading Rank.
-		result = append(result, NodeRank{Node: node, HasDoNotDisrupt: true, Pods: nodePods[node.Name()]})
+		result = append(result, NodeRank{Node: node, CleanupOnly: true, Pods: nodePods[node.Name()]})
 	}
 
 	log.FromContext(ctx).V(1).WithValues(
@@ -126,7 +128,7 @@ func RankNodes(ctx context.Context, kubeClient client.Client, clk clock.Clock, n
 		"disruptedNodes", len(disruptedBlocked),
 		"driftedNodes", len(drifted),
 		"normalNodes", len(normal),
-		"doNotDisruptNodes", len(doNotDisrupt),
+		"cleanupOnlyNodes", len(cleanupOnly),
 	).Info("completed node ranking")
 	return result, nil
 }
@@ -148,38 +150,68 @@ func applyPerNodePoolBudget(nodes []*state.StateNode, budget map[string]int) (bo
 	return bounded, overflow
 }
 
-// fetchNodePods gathers the pod list per node so partitionNodes and
-// sortBySavingsRatio don't repeat the API call.
-func fetchNodePods(ctx context.Context, kubeClient client.Client, nodes []*state.StateNode) (map[string][]*corev1.Pod, error) {
-	out := make(map[string][]*corev1.Pod, len(nodes))
+// partitionNodes splits nodes into the four tiers documented on RankNodes and
+// returns the pod list observed per node so the sort and rank walk avoid a
+// second API call. Route order:
+//
+//  1. isGoingAway (taint or MarkedForDeletion) → Group A. Once a node is
+//     draining the disruption path no longer re-checks do-not-disrupt (see
+//     disruption/queue.go and validation.go, both pre-taint only), so a
+//     going-away node stays in Group A regardless of any other signal.
+//  2. StateNode.ValidateNodeDisruptable → Group D. Reuses the disruption
+//     controller's node-level check (do-not-disrupt annotation, missing
+//     nodeclaim, not initialized, nominated, missing NodePool label).
+//  3. StateNode.ValidatePodsDisruptable → Group D on PodBlockEvictionError.
+//     Same helper the disruption controller uses; covers pod-level
+//     do-not-disrupt (including duration-based annotations) and PDB-blocked
+//     pods in one call.
+//  4. PDC-specific checks: non-RS-owned pods, consolidation policy
+//     disabled, unresolvable instance type → Group D.
+//  5. Remaining nodes: drifted → Group B, else Group C.
+func partitionNodes(ctx context.Context, kubeClient client.Client, clk clock.Clock, nodes []*state.StateNode, nodePoolMap map[string]*v1.NodePool, nodePoolToInstanceTypesMap map[string]map[string]*cloudprovider.InstanceType, pdbs pdb.Limits) (disruptedBlocked, drifted, normal, cleanupOnly []*state.StateNode, nodePods map[string][]*corev1.Pod, err error) {
+	nodePods = make(map[string][]*corev1.Pod, len(nodes))
 	for _, node := range nodes {
-		pods, err := node.Pods(ctx, kubeClient)
-		if err != nil {
-			return nil, fmt.Errorf("listing pods on node %q, %w", node.Name(), err)
-		}
-		out[node.Name()] = pods
-	}
-	return out, nil
-}
-
-// partitionNodes splits nodes into the four tiers documented on RankNodes.
-// isDisrupted must run first: once the taint is applied the disruption path
-// no longer re-checks do-not-disrupt (see disruption/queue.go and
-// validation.go — both pre-taint only), so a tainted node stays in Group A
-// regardless of any other signal.
-func partitionNodes(clk clock.Clock, nodes []*state.StateNode, nodePoolMap map[string]*v1.NodePool, nodePoolToInstanceTypesMap map[string]map[string]*cloudprovider.InstanceType, nodePods map[string][]*corev1.Pod, pdbs pdb.Limits) (disruptedBlocked, drifted, normal, doNotDisrupt []*state.StateNode) {
-	for _, node := range nodes {
-		pods := nodePods[node.Name()]
-		if isDisrupted(node) {
+		if isGoingAway(node) {
+			pods, perr := node.Pods(ctx, kubeClient)
+			if perr != nil {
+				return nil, nil, nil, nil, nil, fmt.Errorf("listing pods on node %q, %w", node.Name(), perr)
+			}
+			nodePods[node.Name()] = pods
 			disruptedBlocked = append(disruptedBlocked, node)
 			continue
 		}
-		if hasNodeDoNotDisrupt(node) || hasPDBBlockedPods(clk, pods, pdbs) || hasNonRSOwnedPods(pods) {
-			doNotDisrupt = append(doNotDisrupt, node)
+		if verr := node.ValidateNodeDisruptable(clk); verr != nil {
+			// ValidateNodeDisruptable rejects short-circuit before pod
+			// listing; fetch pods separately so the enqueue site can still
+			// clear annotations on this node's existing pods.
+			pods, perr := node.Pods(ctx, kubeClient)
+			if perr != nil {
+				return nil, nil, nil, nil, nil, fmt.Errorf("listing pods on node %q, %w", node.Name(), perr)
+			}
+			nodePods[node.Name()] = pods
+			cleanupOnly = append(cleanupOnly, node)
+			continue
+		}
+		// ValidatePodsDisruptable returns pods even on PodBlockEvictionError,
+		// so we always capture the list once here. Nil recorder skips event
+		// emission — the disruption controller already publishes for these
+		// pods during its own reconcile.
+		pods, verr := node.ValidatePodsDisruptable(ctx, kubeClient, pdbs, clk, nil)
+		if verr != nil && !state.IsPodBlockEvictionError(verr) {
+			return nil, nil, nil, nil, nil, fmt.Errorf("validating pods on node %q, %w", node.Name(), verr)
+		}
+		nodePods[node.Name()] = pods
+		if verr != nil {
+			// PodBlockEvictionError: pod-level do-not-disrupt or PDB block.
+			cleanupOnly = append(cleanupOnly, node)
+			continue
+		}
+		if hasNonRSOwnedPods(pods) {
+			cleanupOnly = append(cleanupOnly, node)
 			continue
 		}
 		if isConsolidationDisabled(node, nodePoolMap) {
-			doNotDisrupt = append(doNotDisrupt, node)
+			cleanupOnly = append(cleanupOnly, node)
 			continue
 		}
 		// Consolidation excludes nodes whose NodePool has no resolvable
@@ -189,11 +221,7 @@ func partitionNodes(clk clock.Clock, nodes []*state.StateNode, nodePoolMap map[s
 		// PDC steering RS eviction toward a node consolidation can never
 		// pick.
 		if isInstanceTypeUnresolvable(node, nodePoolToInstanceTypesMap) {
-			doNotDisrupt = append(doNotDisrupt, node)
-			continue
-		}
-		if hasDoNotDisruptPods(pods) {
-			doNotDisrupt = append(doNotDisrupt, node)
+			cleanupOnly = append(cleanupOnly, node)
 			continue
 		}
 		if isDrifted(node) {
@@ -202,7 +230,7 @@ func partitionNodes(clk clock.Clock, nodes []*state.StateNode, nodePoolMap map[s
 			normal = append(normal, node)
 		}
 	}
-	return disruptedBlocked, drifted, normal, doNotDisrupt
+	return disruptedBlocked, drifted, normal, cleanupOnly, nodePods, nil
 }
 
 // isInstanceTypeUnresolvable reports whether disruption.NewCandidate would
@@ -237,14 +265,6 @@ func isInstanceTypeUnresolvable(node *state.StateNode, nodePoolToInstanceTypesMa
 	return false
 }
 
-func hasNodeDoNotDisrupt(node *state.StateNode) bool {
-	annotations := node.Annotations()
-	if annotations == nil {
-		return false
-	}
-	return annotations[v1.DoNotDisruptAnnotationKey] == "true"
-}
-
 func isConsolidationDisabled(node *state.StateNode, nodePoolMap map[string]*v1.NodePool) bool {
 	nodePoolName := node.Labels()[v1.NodePoolLabelKey]
 	if nodePoolName == "" {
@@ -257,7 +277,14 @@ func isConsolidationDisabled(node *state.StateNode, nodePoolMap map[string]*v1.N
 	return np.Spec.Disruption.ConsolidateAfter.Duration == nil
 }
 
-func isDisrupted(node *state.StateNode) bool {
+// isGoingAway reports whether the node is draining
+// (karpenter.sh/disrupted taint applied) or the NodeClaim is marked for
+// deletion. Either state routes to Group A: the pods are about to terminate,
+// and RS should evict them first regardless of the taint-vs-deletion ordering.
+func isGoingAway(node *state.StateNode) bool {
+	if node.MarkedForDeletion() {
+		return true
+	}
 	if node.Node == nil {
 		return false
 	}
@@ -274,27 +301,6 @@ func isDrifted(node *state.StateNode) bool {
 		return false
 	}
 	return node.NodeClaim.StatusConditions().Get(v1.ConditionTypeDrifted).IsTrue()
-}
-
-// hasPDBBlockedPods reports whether any pod on the node is currently blocked
-// by a matching PDB. Delegates to pdb.Limits.CanEvictPods, the same helper
-// the disruption controller uses, so the two agree on what "PDB-blocked"
-// means.
-func hasPDBBlockedPods(clk clock.Clock, pods []*corev1.Pod, pdbs pdb.Limits) bool {
-	if len(pods) == 0 || len(pdbs) == 0 {
-		return false
-	}
-	_, canEvict := pdbs.CanEvictPods(pods, clk, nil)
-	return !canEvict
-}
-
-func hasDoNotDisruptPods(pods []*corev1.Pod) bool {
-	for _, pod := range pods {
-		if pod.Annotations[v1.DoNotDisruptAnnotationKey] == "true" {
-			return true
-		}
-	}
-	return false
 }
 
 // hasNonRSOwnedPods reports whether any non-kube-system pod on the node has

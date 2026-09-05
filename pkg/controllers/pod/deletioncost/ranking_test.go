@@ -272,7 +272,7 @@ var _ = Describe("Ranking", func() {
 			// treatment stays aligned with actual controller behavior.
 			// Direct-helper because both classifications produce the same
 			// annotated pod-deletion-cost (MinInt32 vs. cleared), and we need
-			// to observe HasDoNotDisrupt directly.
+			// to observe CleanupOnly directly.
 			nodeClaims, nodes := test.NodeClaimsAndNodes(2, v1.NodeClaim{
 				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{v1.NodePoolLabelKey: nodePool.Name}},
 				Status:     v1.NodeClaimStatus{Allocatable: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("4"), corev1.ResourceMemory: resource.MustParse("8Gi")}},
@@ -298,11 +298,11 @@ var _ = Describe("Ranking", func() {
 			Expect(ranks).To(HaveLen(2))
 
 			// Node 0 (disrupted + do-not-disrupt): Group A, MinInt32,
-			// HasDoNotDisrupt=false. Node 1 (normal): Group C, strictly
+			// CleanupOnly=false. Node 1 (normal): Group C, strictly
 			// greater than MinInt32.
 			for _, r := range ranks {
 				if r.Node.Node.Name == nodes[0].Name {
-					Expect(r.HasDoNotDisrupt).To(BeFalse(), "disrupted-tainted node must stay in Group A regardless of do-not-disrupt")
+					Expect(r.CleanupOnly).To(BeFalse(), "disrupted-tainted node must stay in Group A regardless of do-not-disrupt")
 					Expect(r.Rank).To(Equal(int(math.MinInt32)))
 				} else {
 					Expect(r.Rank).To(BeNumerically(">", math.MinInt32))
@@ -840,7 +840,7 @@ var _ = Describe("Ranking", func() {
 			// Node 0 (disrupted) is Group A → math.MinInt32.
 			// Node 1 (normal) is Group C → strictly greater than MinInt32.
 			for _, r := range ranks {
-				Expect(r.HasDoNotDisrupt).To(BeFalse())
+				Expect(r.CleanupOnly).To(BeFalse())
 				if r.Node.Node.Name == nodes[0].Name {
 					Expect(r.Rank).To(Equal(int(math.MinInt32)))
 				} else {
@@ -923,7 +923,7 @@ var _ = Describe("Ranking", func() {
 
 		// Bare and StatefulSet pods route their host node to Group D.
 		// Job, DaemonSet, and kube-system pods do not — they fall through
-		// to Group C. Observes HasDoNotDisrupt on NodeRank because Group C
+		// to Group C. Observes CleanupOnly on NodeRank because Group C
 		// and Group D produce different annotation states but the same
 		// helper output shape.
 		DescribeTable("should _Edge_ classify non-RS-owned pods as Group D (not disruptable)",
@@ -967,9 +967,9 @@ var _ = Describe("Ranking", func() {
 					}
 				}
 				if expectGroupD {
-					Expect(node0.HasDoNotDisrupt).To(BeTrue(), "non-RS-owned pod should route its host to Group D")
+					Expect(node0.CleanupOnly).To(BeTrue(), "non-RS-owned pod should route its host to Group D")
 				} else {
-					Expect(node0.HasDoNotDisrupt).To(BeFalse(), "Job/DaemonSet-owned or system pods must not push their host to Group D")
+					Expect(node0.CleanupOnly).To(BeFalse(), "Job/DaemonSet-owned or system pods must not push their host to Group D")
 					Expect(node0.Rank).To(BeNumerically(">", math.MinInt32), "expected Group B/C rank for RS/Job/DaemonSet-owned or system pod")
 				}
 			},

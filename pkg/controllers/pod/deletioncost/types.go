@@ -23,11 +23,11 @@ import (
 )
 
 // NodeRank is produced by RankNodes and consumed by the annotation Queue to
-// derive per-pod PDC values. HasDoNotDisrupt=true marks Group D entries whose
+// derive per-pod PDC values. CleanupOnly=true marks Group D entries whose
 // annotations get cleared rather than written; Rank is unused in that case.
 type NodeRank struct {
-	Node            *state.StateNode
-	Rank            int
-	HasDoNotDisrupt bool
-	Pods            []*corev1.Pod
+	Node        *state.StateNode
+	Rank        int
+	CleanupOnly bool
+	Pods        []*corev1.Pod
 }

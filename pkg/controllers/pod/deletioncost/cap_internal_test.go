@@ -146,12 +146,12 @@ var _ = Describe("filterNoOpNodes", func() {
 
 	It("drops Group D nodes whose pods are all already cleared", func() {
 		in := []NodeRank{
-			{HasDoNotDisrupt: true, Pods: []*corev1.Pod{podWithCost(""), podWithCost("")}},
-			{HasDoNotDisrupt: true, Pods: []*corev1.Pod{podWithCost("-5"), podWithCost("")}},
+			{CleanupOnly: true, Pods: []*corev1.Pod{podWithCost(""), podWithCost("")}},
+			{CleanupOnly: true, Pods: []*corev1.Pod{podWithCost("-5"), podWithCost("")}},
 		}
 		got := filterNoOpNodes(in)
 		Expect(got).To(HaveLen(1))
-		Expect(got[0].HasDoNotDisrupt).To(BeTrue())
+		Expect(got[0].CleanupOnly).To(BeTrue())
 	})
 
 	It("drops nodes with empty pod lists (unless Group A)", func() {

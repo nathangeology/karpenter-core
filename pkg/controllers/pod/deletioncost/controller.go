@@ -157,7 +157,7 @@ func (c *Controller) enqueueAnnotationWrites(nodeRanks []NodeRank) {
 	for i := range nodeRanks {
 		nr := &nodeRanks[i]
 		for _, pod := range nr.Pods {
-			c.queue.Add(pod, nr.Rank, nr.HasDoNotDisrupt)
+			c.queue.Add(pod, nr.Rank, nr.CleanupOnly)
 		}
 	}
 }
@@ -177,7 +177,7 @@ func filterNoOpNodes(nodeRanks []NodeRank) []NodeRank {
 }
 
 func nodeMutatesAnyPod(nr NodeRank) bool {
-	if nr.HasDoNotDisrupt {
+	if nr.CleanupOnly {
 		for _, pod := range nr.Pods {
 			if _, ok := pod.Annotations[corev1.PodDeletionCost]; ok {
 				return true
