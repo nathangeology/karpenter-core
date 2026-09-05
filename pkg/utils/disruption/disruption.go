@@ -105,25 +105,35 @@ func LifetimeRemaining(clock clock.Clock, nodePool *v1.NodePool, nodeClaim *v1.N
 func EvictionCost(ctx context.Context, p *corev1.Pod) float64 {
 	cost := 1.0
 	if costStr, ok := p.Annotations[v1.DisruptionCostAnnotationKey]; ok {
-		parsedCost, err := strconv.ParseFloat(costStr, 64)
+		// karpenter.sh/disruption-cost is specified as int32. Parse strictly
+		// so a non-int value logs and skips instead of quietly widening the
+		// input type to float. Non-crashing failure mode (per PR review): a
+		// bad user annotation must not stall the controller loop; log + skip
+		// keeps the reconcile progressing and lets the pod fall back to the
+		// default 1.0 cost.
+		parsedCost, err := strconv.ParseInt(costStr, 10, 32)
 		if err != nil {
 			log.FromContext(ctx).Error(err, "failed parsing disruption cost",
 				"annotation", v1.DisruptionCostAnnotationKey, "value", costStr, "pod", client.ObjectKeyFromObject(p))
 		} else {
 			// the disruptionCost is in [-2147483647, 2147483647]
 			// the min pod disruptionCost makes one pod ~ -15 pods, and the max pod disruptionCost to ~ 17 pods.
-			cost += parsedCost / math.Pow(2, 27.0)
+			cost += float64(parsedCost) / math.Pow(2, 27.0)
 		}
 	} else if !podDeletionCostManagementEnabled(ctx) {
 		if podDeletionCostStr, ok := p.Annotations[corev1.PodDeletionCost]; ok {
-			podDeletionCost, err := strconv.ParseFloat(podDeletionCostStr, 64)
+			// controller.kubernetes.io/pod-deletion-cost is int32 per the
+			// Kubernetes API spec. Match the RS controller's parsing contract
+			// so a non-int value produced by a misconfigured writer surfaces
+			// the same way here — log + skip.
+			podDeletionCost, err := strconv.ParseInt(podDeletionCostStr, 10, 32)
 			if err != nil {
 				log.FromContext(ctx).Error(err, "failed parsing pod deletion cost",
 					"annotation", corev1.PodDeletionCost, "value", podDeletionCostStr, "pod", client.ObjectKeyFromObject(p))
 			} else {
 				// Same 2^27 normalization as above; legacy fall-back for
 				// gate-OFF behavior reads the upstream annotation.
-				cost += podDeletionCost / math.Pow(2, 27.0)
+				cost += float64(podDeletionCost) / math.Pow(2, 27.0)
 			}
 		}
 	}
