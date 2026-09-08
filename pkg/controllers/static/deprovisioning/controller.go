@@ -83,6 +83,11 @@ func (c *Controller) Name() string {
 
 func (c *Controller) Reconcile(ctx context.Context, np *v1.NodePool) (reconcile.Result, error) {
 	ctx = injection.WithControllerName(ctx, c.Name())
+	// Thread the Recorder into ctx so downstream cost sort
+	// (disruptionutils.ReschedulingCost → EvictionCost) can emit per-pod
+	// Warning events on malformed annotations without changing the utility
+	// signatures.
+	ctx = events.WithRecorder(ctx, c.recorder)
 
 	if !nodepoolutils.IsManaged(np, c.cloudProvider) || np.Spec.Replicas == nil || !np.DeletionTimestamp.IsZero() {
 		return reconcile.Result{}, nil

@@ -82,7 +82,7 @@ var _ = BeforeSuite(func() {
 	}))
 	ctx = options.ToContext(ctx, test.Options())
 	cloudProvider = fake.NewCloudProvider()
-	cluster = state.NewCluster(env.Clock, env.Client, cloudProvider)
+	cluster = state.NewCluster(env.Clock, env.Client, cloudProvider, nil)
 	clusterCost = cost.NewClusterCost(ctx, cloudProvider, env.Client)
 	nodeClaimController = informer.NewNodeClaimController(env.Client, cloudProvider, cluster, clusterCost)
 	nodeController = informer.NewNodeController(env.Client, cluster)

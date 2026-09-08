@@ -70,11 +70,11 @@ var _ = BeforeSuite(func() {
 	ctx = options.ToContext(ctx, opts)
 	cloudProvider = fake.NewCloudProvider()
 	fakeClock = clock.NewFakeClock(time.Now())
-	cluster = state.NewCluster(fakeClock, env.Client, cloudProvider)
+	recorder = test.NewEventRecorder()
+	cluster = state.NewCluster(fakeClock, env.Client, cloudProvider, recorder)
 	nodeStateController = informer.NewNodeController(env.Client, cluster)
 	clusterCost := cost.NewClusterCost(ctx, cloudProvider, env.Client)
 	nodeClaimStateController = informer.NewNodeClaimController(env.Client, cloudProvider, cluster, clusterCost)
-	recorder = test.NewEventRecorder()
 })
 
 var _ = AfterSuite(func() {

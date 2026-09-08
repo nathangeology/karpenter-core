@@ -35,6 +35,7 @@ import (
 	"sigs.k8s.io/karpenter/pkg/cloudprovider"
 	"sigs.k8s.io/karpenter/pkg/controllers/disruption"
 	"sigs.k8s.io/karpenter/pkg/controllers/state"
+	"sigs.k8s.io/karpenter/pkg/events"
 	"sigs.k8s.io/karpenter/pkg/operator/injection"
 )
 
@@ -97,6 +98,10 @@ func (c *Controller) Name() string {
 // the ranking loop.
 func (c *Controller) Reconcile(ctx context.Context) (reconciler.Result, error) {
 	ctx = injection.WithControllerName(ctx, c.Name())
+	// Thread the cluster's Recorder into ctx so downstream ranking math
+	// (sortBySavingsRatio → ComputeRescheduleDisruptionCost → EvictionCost)
+	// can emit per-pod Warning events on malformed annotations. Nil-safe.
+	ctx = events.WithRecorder(ctx, c.cluster.Recorder())
 
 	if !c.cluster.Synced(ctx) {
 		return reconciler.Result{RequeueAfter: time.Second}, nil
