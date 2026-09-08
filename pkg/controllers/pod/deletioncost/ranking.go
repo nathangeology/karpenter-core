@@ -72,10 +72,7 @@ func RankNodes(ctx context.Context, kubeClient client.Client, clk clock.Clock, n
 		return nil, fmt.Errorf("listing pod disruption budgets, %w", err)
 	}
 
-	disruptedBlocked, drifted, normal, cleanupOnly, nodePods, err := partitionNodes(ctx, kubeClient, clk, nodes, nodePoolMap, nodePoolToInstanceTypesMap, pdbs)
-	if err != nil {
-		return nil, err
-	}
+	disruptedBlocked, drifted, normal, cleanupOnly, nodePods := partitionNodes(ctx, kubeClient, clk, nodes, nodePoolMap, nodePoolToInstanceTypesMap, pdbs)
 
 	// Sort operates on Group B and C in place under the SavingsRatio DESC
 	// ordering; Group A and D order does not affect annotation output.
@@ -136,6 +133,13 @@ func RankNodes(ctx context.Context, kubeClient client.Client, clk clock.Clock, n
 // applyPerNodePoolBudget admits each node until its NodePool's remaining
 // budget is exhausted; the rest overflow. The caller decides what to do with
 // the overflow (deletion-cost routes it to Group D).
+//
+// Order-sensitive: nodes must be pre-sorted by cross-pool SavingsRatio DESC
+// (see sortBySavingsRatio) so the sequential rank assignment in RankNodes
+// places the highest-SavingsRatio node at the most-negative rank regardless
+// of pool identity. A lo.GroupBy-based rewrite was considered and rejected
+// because map iteration order is non-deterministic in Go, which would
+// randomize cross-pool priority in the returned bounded slice.
 func applyPerNodePoolBudget(nodes []*state.StateNode, budget map[string]int) (bounded, overflow []*state.StateNode) {
 	used := map[string]int{}
 	for _, node := range nodes {
@@ -163,26 +167,22 @@ const (
 // partitionNodes splits nodes into the four tiers documented on RankNodes and
 // returns the pod list observed per node so the sort and rank walk avoid a
 // second API call. Delegates the per-node routing to classifyNode.
-func partitionNodes(ctx context.Context, kubeClient client.Client, clk clock.Clock, nodes []*state.StateNode, nodePoolMap map[string]*v1.NodePool, nodePoolToInstanceTypesMap map[string]map[string]*cloudprovider.InstanceType, pdbs pdb.Limits) (disruptedBlocked, drifted, normal, cleanupOnly []*state.StateNode, nodePods map[string][]*corev1.Pod, err error) {
+//
+// Side effect: the closure below populates nodePods as it classifies so the
+// sort and rank walk read the same pod slice classifyNode already fetched;
+// this avoids a second List per node. classifyNode has no per-node error
+// return: kubeClient reads flow through controller-runtime's informer cache,
+// which cannot fail per-node in steady state. The only real failure mode is
+// informer-not-synced at startup, which surfaces as an empty pod list; the
+// reconciler requeues and re-runs, catching the cache once it syncs.
+func partitionNodes(ctx context.Context, kubeClient client.Client, clk clock.Clock, nodes []*state.StateNode, nodePoolMap map[string]*v1.NodePool, nodePoolToInstanceTypesMap map[string]map[string]*cloudprovider.InstanceType, pdbs pdb.Limits) (disruptedBlocked, drifted, normal, cleanupOnly []*state.StateNode, nodePods map[string][]*corev1.Pod) {
 	nodePods = make(map[string][]*corev1.Pod, len(nodes))
-	for _, node := range nodes {
-		part, pods, cerr := classifyNode(ctx, kubeClient, clk, node, nodePoolMap, nodePoolToInstanceTypesMap, pdbs)
-		if cerr != nil {
-			return nil, nil, nil, nil, nil, cerr
-		}
-		nodePods[node.Name()] = pods
-		switch part {
-		case partitionDisrupted:
-			disruptedBlocked = append(disruptedBlocked, node)
-		case partitionDrifted:
-			drifted = append(drifted, node)
-		case partitionNormal:
-			normal = append(normal, node)
-		case partitionCleanupOnly:
-			cleanupOnly = append(cleanupOnly, node)
-		}
-	}
-	return disruptedBlocked, drifted, normal, cleanupOnly, nodePods, nil
+	groups := lo.GroupBy(nodes, func(n *state.StateNode) nodePartition {
+		part, pods := classifyNode(ctx, kubeClient, clk, n, nodePoolMap, nodePoolToInstanceTypesMap, pdbs)
+		nodePods[n.Name()] = pods
+		return part
+	})
+	return groups[partitionDisrupted], groups[partitionDrifted], groups[partitionNormal], groups[partitionCleanupOnly], nodePods
 }
 
 // classifyNode determines which disruption tier a single node belongs to and
@@ -197,23 +197,23 @@ func partitionNodes(ctx context.Context, kubeClient client.Client, clk clock.Clo
 //     nodeclaim, not initialized, nominated, missing NodePool label).
 //  3. classifyDisruptableNode: StateNode.ValidatePodsDisruptable +
 //     PDC-specific checks.
-func classifyNode(ctx context.Context, kubeClient client.Client, clk clock.Clock, node *state.StateNode, nodePoolMap map[string]*v1.NodePool, nodePoolToInstanceTypesMap map[string]map[string]*cloudprovider.InstanceType, pdbs pdb.Limits) (nodePartition, []*corev1.Pod, error) {
+//
+// Per-node kubeClient reads route through controller-runtime's informer
+// cache, which cannot return a per-node error in steady state (the cache is
+// either synced cluster-wide or it is not). An informer-not-synced startup
+// window returns an empty pod slice; the reconcile requeues via
+// consolidationState churn once pods flow into the cache.
+func classifyNode(ctx context.Context, kubeClient client.Client, clk clock.Clock, node *state.StateNode, nodePoolMap map[string]*v1.NodePool, nodePoolToInstanceTypesMap map[string]map[string]*cloudprovider.InstanceType, pdbs pdb.Limits) (nodePartition, []*corev1.Pod) {
 	if isGoingAway(node) {
-		pods, perr := node.Pods(ctx, kubeClient)
-		if perr != nil {
-			return 0, nil, fmt.Errorf("listing pods on node %q, %w", node.Name(), perr)
-		}
-		return partitionDisrupted, pods, nil
+		pods, _ := node.Pods(ctx, kubeClient)
+		return partitionDisrupted, pods
 	}
 	if verr := node.ValidateNodeDisruptable(clk); verr != nil {
 		// ValidateNodeDisruptable rejects short-circuit before pod
 		// listing; fetch pods separately so the enqueue site can still
 		// clear annotations on this node's existing pods.
-		pods, perr := node.Pods(ctx, kubeClient)
-		if perr != nil {
-			return 0, nil, fmt.Errorf("listing pods on node %q, %w", node.Name(), perr)
-		}
-		return partitionCleanupOnly, pods, nil
+		pods, _ := node.Pods(ctx, kubeClient)
+		return partitionCleanupOnly, pods
 	}
 	return classifyDisruptableNode(ctx, kubeClient, clk, node, nodePoolMap, nodePoolToInstanceTypesMap, pdbs)
 }
@@ -227,28 +227,25 @@ func classifyNode(ctx context.Context, kubeClient client.Client, clk clock.Clock
 // "NodePool not found"), so PDC must too — otherwise a GetInstanceTypes
 // failure or an unevaluated overlay would leave PDC steering RS eviction
 // toward a node consolidation can never pick.
-func classifyDisruptableNode(ctx context.Context, kubeClient client.Client, clk clock.Clock, node *state.StateNode, nodePoolMap map[string]*v1.NodePool, nodePoolToInstanceTypesMap map[string]map[string]*cloudprovider.InstanceType, pdbs pdb.Limits) (nodePartition, []*corev1.Pod, error) {
+func classifyDisruptableNode(ctx context.Context, kubeClient client.Client, clk clock.Clock, node *state.StateNode, nodePoolMap map[string]*v1.NodePool, nodePoolToInstanceTypesMap map[string]map[string]*cloudprovider.InstanceType, pdbs pdb.Limits) (nodePartition, []*corev1.Pod) {
 	// ValidatePodsDisruptable returns pods even on PodBlockEvictionError, so
 	// we always capture the list once here. Nil recorder skips event emission
-	// — the disruption controller already publishes for these pods during its
+	// - the disruption controller already publishes for these pods during its
 	// own reconcile. PodBlockEvictionError (pod-level do-not-disrupt or PDB
-	// block) routes to Group D; anything else is a hard failure.
+	// block) routes to Group D. Any other error path is informer-cache-only
+	// in steady state; route the node to Group D so its stale annotations get
+	// cleared and let the next reconcile re-classify once the cache resyncs.
 	pods, verr := node.ValidatePodsDisruptable(ctx, kubeClient, pdbs, clk, nil)
-	switch {
-	case verr == nil:
-		// fall through to PDC-specific checks below.
-	case state.IsPodBlockEvictionError(verr):
-		return partitionCleanupOnly, pods, nil
-	default:
-		return 0, nil, fmt.Errorf("validating pods on node %q, %w", node.Name(), verr)
+	if verr != nil {
+		return partitionCleanupOnly, pods
 	}
 	if hasNonRSOwnedPods(pods) || isConsolidationDisabled(node, nodePoolMap) || isInstanceTypeUnresolvable(node, nodePoolToInstanceTypesMap) {
-		return partitionCleanupOnly, pods, nil
+		return partitionCleanupOnly, pods
 	}
 	if isDrifted(node) {
-		return partitionDrifted, pods, nil
+		return partitionDrifted, pods
 	}
-	return partitionNormal, pods, nil
+	return partitionNormal, pods
 }
 
 // isInstanceTypeUnresolvable reports whether disruption.NewCandidate would
