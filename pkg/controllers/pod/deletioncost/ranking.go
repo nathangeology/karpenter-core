@@ -203,6 +203,12 @@ func partitionNodes(ctx context.Context, kubeClient client.Client, clk clock.Clo
 // either synced cluster-wide or it is not). An informer-not-synced startup
 // window returns an empty pod slice; the reconcile requeues via
 // consolidationState churn once pods flow into the cache.
+//
+// The design deliberately drops per-node errors rather than plumbing an
+// outer sentinel for cache-not-synced: controller-runtime's WaitForCacheSync
+// gates reconciles at manager startup, so a sentinel would add control-flow
+// complexity without catching a case that occurs in practice. A future
+// cache-read failure would silently route the node to Group D.
 func classifyNode(ctx context.Context, kubeClient client.Client, clk clock.Clock, node *state.StateNode, nodePoolMap map[string]*v1.NodePool, nodePoolToInstanceTypesMap map[string]map[string]*cloudprovider.InstanceType, pdbs pdb.Limits) (nodePartition, []*corev1.Pod) {
 	if isGoingAway(node) {
 		pods, _ := node.Pods(ctx, kubeClient)
