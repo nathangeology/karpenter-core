@@ -113,6 +113,12 @@ func run(outputDir string, iterations int, out *os.File) error {
 	if err != nil {
 		return err
 	}
+	// Fail closed when no reports were found. Emitting empty benchmark files
+	// with exit 0 would let the pipeline promote a run that gathered no
+	// data, so surface it as an aggregator failure instead.
+	if len(reportsByTest) == 0 {
+		return fmt.Errorf("no performance reports found under %s across %d iterations", outputDir, iterations)
+	}
 
 	// Iterate test keys in a stable order so the emitted arrays and the
 	// printed table are reproducible across runs.

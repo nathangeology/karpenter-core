@@ -169,22 +169,16 @@ func assertSummaryMedians(t *testing.T, dir string) {
 	}
 }
 
-func TestRunHandlesMissingIterationDir(t *testing.T) {
-	// The test intentionally supplies no iter_* subdirs. run must succeed
-	// and emit empty benchmark files rather than panic on nil maps.
+func TestRunFailsClosedOnMissingReports(t *testing.T) {
+	// The test intentionally supplies no iter_* subdirs. run must return an
+	// error so an empty-output aggregation cannot promote as a green run.
 	tmp := t.TempDir()
-	if err := run(tmp, 5, os.Stdout); err != nil {
-		t.Fatalf("run: %v", err)
+	err := run(tmp, 5, os.Stdout)
+	if err == nil {
+		t.Fatal("run: expected error on empty output dir, got nil")
 	}
-	entries := loadEntries(t, filepath.Join(tmp, "benchmark-results-smaller.json"))
-	if len(entries) != 0 {
-		t.Errorf("expected empty smaller results, got %d", len(entries))
-	}
-	// The CV file must also be present-but-empty so the informational
-	// benchmark-action step doesn't fail on a missing input path.
-	cvEntries := loadEntries(t, filepath.Join(tmp, "benchmark-results-cv.json"))
-	if len(cvEntries) != 0 {
-		t.Errorf("expected empty cv results, got %d", len(cvEntries))
+	if !strings.Contains(err.Error(), "no performance reports found") {
+		t.Errorf("run error: got %q, want message containing %q", err.Error(), "no performance reports found")
 	}
 }
 
