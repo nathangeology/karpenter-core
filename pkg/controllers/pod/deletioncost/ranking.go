@@ -137,9 +137,9 @@ func RankNodes(ctx context.Context, kubeClient client.Client, clk clock.Clock, n
 // Order-sensitive: nodes must be pre-sorted by cross-pool SavingsRatio DESC
 // (see sortBySavingsRatio) so the sequential rank assignment in RankNodes
 // places the highest-SavingsRatio node at the most-negative rank regardless
-// of pool identity. A lo.GroupBy-based rewrite was considered and rejected
-// because map iteration order is non-deterministic in Go, which would
-// randomize cross-pool priority in the returned bounded slice.
+// of pool identity.
+// Do not rewrite with lo.GroupBy: Go map iteration is non-deterministic and
+// would randomize cross-pool priority.
 func applyPerNodePoolBudget(nodes []*state.StateNode, budget map[string]int) (bounded, overflow []*state.StateNode) {
 	used := map[string]int{}
 	for _, node := range nodes {
@@ -170,11 +170,7 @@ const (
 //
 // Side effect: the closure below populates nodePods as it classifies so the
 // sort and rank walk read the same pod slice classifyNode already fetched;
-// this avoids a second List per node. classifyNode has no per-node error
-// return: kubeClient reads flow through controller-runtime's informer cache,
-// which cannot fail per-node in steady state. The only real failure mode is
-// informer-not-synced at startup, which surfaces as an empty pod list; the
-// reconciler requeues and re-runs, catching the cache once it syncs.
+// this avoids a second List per node.
 func partitionNodes(ctx context.Context, kubeClient client.Client, clk clock.Clock, nodes []*state.StateNode, nodePoolMap map[string]*v1.NodePool, nodePoolToInstanceTypesMap map[string]map[string]*cloudprovider.InstanceType, pdbs pdb.Limits) (disruptedBlocked, drifted, normal, cleanupOnly []*state.StateNode, nodePods map[string][]*corev1.Pod) {
 	nodePods = make(map[string][]*corev1.Pod, len(nodes))
 	groups := lo.GroupBy(nodes, func(n *state.StateNode) nodePartition {
@@ -204,11 +200,9 @@ func partitionNodes(ctx context.Context, kubeClient client.Client, clk clock.Clo
 // window returns an empty pod slice; the reconcile requeues via
 // consolidationState churn once pods flow into the cache.
 //
-// The design deliberately drops per-node errors rather than plumbing an
-// outer sentinel for cache-not-synced: controller-runtime's WaitForCacheSync
-// gates reconciles at manager startup, so a sentinel would add control-flow
-// complexity without catching a case that occurs in practice. A future
-// cache-read failure would silently route the node to Group D.
+// Cache-read failures route silently to Group D: WaitForCacheSync gates
+// reconciles at manager startup, so cache-not-synced does not occur in
+// steady state and a per-node sentinel would not catch a real case.
 func classifyNode(ctx context.Context, kubeClient client.Client, clk clock.Clock, node *state.StateNode, nodePoolMap map[string]*v1.NodePool, nodePoolToInstanceTypesMap map[string]map[string]*cloudprovider.InstanceType, pdbs pdb.Limits) (nodePartition, []*corev1.Pod) {
 	if isGoingAway(node) {
 		pods, _ := node.Pods(ctx, kubeClient)
@@ -224,15 +218,6 @@ func classifyNode(ctx context.Context, kubeClient client.Client, clk clock.Clock
 	return classifyDisruptableNode(ctx, kubeClient, clk, node, nodePoolMap, nodePoolToInstanceTypesMap, pdbs)
 }
 
-// classifyDisruptableNode handles the routing after ValidateNodeDisruptable
-// passes: it calls StateNode.ValidatePodsDisruptable (same helper the
-// disruption controller uses; covers pod-level do-not-disrupt including
-// duration-based annotations and PDB-blocked pods in one call), then applies
-// the PDC-specific checks. Consolidation excludes nodes whose NodePool has no
-// resolvable instance-type entry (see disruption.NewCandidate rejecting with
-// "NodePool not found"), so PDC must too — otherwise a GetInstanceTypes
-// failure or an unevaluated overlay would leave PDC steering RS eviction
-// toward a node consolidation can never pick.
 func classifyDisruptableNode(ctx context.Context, kubeClient client.Client, clk clock.Clock, node *state.StateNode, nodePoolMap map[string]*v1.NodePool, nodePoolToInstanceTypesMap map[string]map[string]*cloudprovider.InstanceType, pdbs pdb.Limits) (nodePartition, []*corev1.Pod) {
 	// ValidatePodsDisruptable returns pods even on PodBlockEvictionError, so
 	// we always capture the list once here. Nil recorder skips event emission
