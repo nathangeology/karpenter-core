@@ -198,18 +198,21 @@ var _ = Describe("Performance", Label(debug.NoWatch), func() {
 				By(fmt.Sprintf("Waiting %s for NodePool subcontrollers to reach steady state", manyNodePoolsWarmUpDuration))
 				time.Sleep(manyNodePoolsWarmUpDuration)
 
-				// Phase 1: initial scale-out 0 -> 2 pods per NodePool.
+				// Phase 1: initial scale-out 0 -> 2 pods per NodePool. Start
+				// the harness before the deployment-create loop so the /metrics
+				// baseline snapshot does not subtract out reconciler work
+				// completed while the loop is still creating deployments.
 				scaleOutPrefix := fmt.Sprintf("%s_scale_out", filePrefixBase)
 				scaleOutName := fmt.Sprintf("%s Scale Out", testNameBase)
 				By(fmt.Sprintf("Phase 1 scale-out: 0 -> %d pods per NodePool (%d pods total)", manyNodePoolsPodsPerPool, totalInitialPods))
 
+				scaleOutHarness := startPhaseLatencyHarness()
 				deployments := make([]*appsv1.Deployment, nodePoolCount)
 				for i := 0; i < nodePoolCount; i++ {
 					deployments[i] = buildManyNodePoolDeployment(pools[i].Name, int32(manyNodePoolsPodsPerPool))
 					env.ExpectCreated(deployments[i])
 				}
 
-				scaleOutHarness := startPhaseLatencyHarness()
 				scaleOutReport, err := ReportScaleOutWithOutput(env, scaleOutName, totalInitialPods, 30*time.Minute, scaleOutPrefix)
 				Expect(err).ToNot(HaveOccurred(), "Phase 1 scale-out should complete without error")
 				scaleOutLatency, err := scaleOutHarness.Stop()
@@ -219,17 +222,18 @@ var _ = Describe("Performance", Label(debug.NoWatch), func() {
 				Expect(scaleOutReport.TotalPods).To(Equal(totalInitialPods))
 				initialNodes := scaleOutReport.TotalNodes
 
-				// Phase 2: scale-in 2 -> 1 pod per NodePool.
+				// Phase 2: scale-in 2 -> 1 pod per NodePool. Start the harness
+				// before the update loop for the same reason as Phase 1.
 				consolidationPrefix := fmt.Sprintf("%s_consolidation", filePrefixBase)
 				consolidationName := fmt.Sprintf("%s Consolidation", testNameBase)
 				By(fmt.Sprintf("Phase 2 scale-in: %d -> %d pods per NodePool (%d pods total)", manyNodePoolsPodsPerPool, manyNodePoolsScaleInPodsPerPool, totalScaleInPods))
 
+				consolidationHarness := startPhaseLatencyHarness()
 				for i := 0; i < nodePoolCount; i++ {
 					deployments[i].Spec.Replicas = new(int32(manyNodePoolsScaleInPodsPerPool))
 					env.ExpectUpdated(deployments[i])
 				}
 
-				consolidationHarness := startPhaseLatencyHarness()
 				consolidationReport, err := ReportConsolidationWithOutput(env, consolidationName, totalInitialPods, totalScaleInPods, initialNodes, 30*time.Minute, consolidationPrefix)
 				Expect(err).ToNot(HaveOccurred(), "Phase 2 consolidation should complete without error")
 				consolidationLatency, err := consolidationHarness.Stop()
@@ -247,12 +251,12 @@ var _ = Describe("Performance", Label(debug.NoWatch), func() {
 				scaleOutRepeatName := fmt.Sprintf("%s Scale Out Repeat", testNameBase)
 				By(fmt.Sprintf("Phase 3 scale-out repeat: %d -> %d pods per NodePool (%d pods total)", manyNodePoolsScaleInPodsPerPool, manyNodePoolsPodsPerPool, totalInitialPods))
 
+				scaleOutRepeatHarness := startPhaseLatencyHarness()
 				for i := 0; i < nodePoolCount; i++ {
 					deployments[i].Spec.Replicas = new(int32(manyNodePoolsPodsPerPool))
 					env.ExpectUpdated(deployments[i])
 				}
 
-				scaleOutRepeatHarness := startPhaseLatencyHarness()
 				scaleOutRepeatReport, err := ReportScaleOutWithOutput(env, scaleOutRepeatName, totalInitialPods, 30*time.Minute, scaleOutRepeatPrefix)
 				Expect(err).ToNot(HaveOccurred(), "Phase 3 scale-out repeat should complete without error")
 				scaleOutRepeatLatency, err := scaleOutRepeatHarness.Stop()

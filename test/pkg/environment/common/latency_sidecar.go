@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 )
 
@@ -40,9 +39,8 @@ type LatencySidecar struct {
 
 // WriteLatencySidecar writes sc to <dir>/<filePrefix>_latency.json. Returns
 // nil (no-op) when dir is empty, matching the report.go artifact posture so
-// suites can run without OUTPUT_DIR configured. filePrefix is sanitized via
-// filepath.Base + filepath.Clean and the resolved path is checked to stay
-// under dir before writing.
+// suites can run without OUTPUT_DIR configured. filePrefix is reduced to its
+// basename so a caller-supplied prefix cannot escape dir.
 func WriteLatencySidecar(dir, filePrefix string, sc LatencySidecar) error {
 	if dir == "" {
 		return nil
@@ -51,12 +49,8 @@ func WriteLatencySidecar(dir, filePrefix string, sc LatencySidecar) error {
 	if err != nil {
 		return fmt.Errorf("marshal latency sidecar: %w", err)
 	}
-	safeDir := filepath.Clean(dir)
 	safePrefix := filepath.Base(filepath.Clean(filePrefix))
-	path := filepath.Join(safeDir, fmt.Sprintf("%s_latency.json", safePrefix))
-	if rel, relErr := filepath.Rel(safeDir, path); relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("latency sidecar path escapes %q", safeDir)
-	}
+	path := filepath.Join(filepath.Clean(dir), fmt.Sprintf("%s_latency.json", safePrefix))
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		return fmt.Errorf("write latency sidecar %s: %w", path, err)
 	}

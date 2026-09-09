@@ -92,8 +92,11 @@ type LatencyHarness struct {
 // reduction.
 func StartLatencyHarness(env *Environment) (*LatencyHarness, error) {
 	pod, err := env.FindActiveKarpenterPod(env.Context)
-	if err != nil || pod == nil {
+	if err != nil {
 		return nil, fmt.Errorf("finding karpenter pod: %w", err)
+	}
+	if pod == nil {
+		return nil, fmt.Errorf("no active karpenter pod found")
 	}
 	h := &LatencyHarness{env: env, podName: pod.Name}
 	families, err := scrapeKarpenterMetricFamilies(env.Context, env, pod.Name)
