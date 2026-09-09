@@ -80,8 +80,7 @@ type LatencyResult struct {
 
 // LatencyHarness captures a start-of-phase snapshot of Karpenter's /metrics
 // endpoint and produces per-histogram percentile summaries by bucket-count
-// delta at Stop. It reuses the pod-proxy scrape pattern from
-// KarpenterMetricsPoller.
+// delta at Stop.
 type LatencyHarness struct {
 	env     *Environment
 	podName string
@@ -90,7 +89,7 @@ type LatencyHarness struct {
 
 // StartLatencyHarness discovers the active Karpenter pod, scrapes /metrics
 // once, and stores a compacted snapshot (target series only) for later delta
-// reduction. Symmetric with StartKarpenterMetricsPoller.
+// reduction.
 func StartLatencyHarness(env *Environment) (*LatencyHarness, error) {
 	pod, err := env.FindActiveKarpenterPod(env.Context)
 	if err != nil || pod == nil {
@@ -108,8 +107,8 @@ func StartLatencyHarness(env *Environment) (*LatencyHarness, error) {
 
 // Stop scrapes the end snapshot and reduces the histogram / counter deltas
 // into a LatencyResult. On the first scrape failure the harness refreshes the
-// active-pod name once (matches KarpenterMetricsPoller's leader-election
-// handling) and retries; a second failure returns the error.
+// active-pod name once (in case leader election moved the pod) and retries; a
+// second failure returns the error.
 func (h *LatencyHarness) Stop() (*LatencyResult, error) {
 	ctx := h.env.Context
 	end, err := scrapeKarpenterMetricFamilies(ctx, h.env, h.podName)
@@ -143,8 +142,7 @@ func (h *LatencyHarness) Stop() (*LatencyResult, error) {
 }
 
 // scrapeKarpenterMetricFamilies fetches and parses /metrics from a Karpenter
-// pod via the API-server pod proxy. Shared between LatencyHarness and
-// KarpenterMetricsPoller.
+// pod via the API-server pod proxy.
 func scrapeKarpenterMetricFamilies(ctx context.Context, env *Environment, podName string) (map[string]*dto.MetricFamily, error) {
 	data, err := env.KubeClient.CoreV1().Pods("kube-system").ProxyGet("http", podName, "8080", "/metrics", nil).DoRaw(ctx)
 	if err != nil {
@@ -191,7 +189,6 @@ func seriesKey(name string, labels []*dto.LabelPair) string {
 	return name + "{" + strings.Join(pairs, ",") + "}"
 }
 
-// labelMap returns the labels of a Metric as a plain map for HistogramStats.
 func labelMap(labels []*dto.LabelPair) map[string]string {
 	if len(labels) == 0 {
 		return nil
@@ -256,7 +253,6 @@ func deltaCounter(name string, start, end *dto.MetricFamily) map[string]uint64 {
 	return out
 }
 
-// indexBySeries returns metrics from mf keyed by seriesKey.
 func indexBySeries(name string, mf *dto.MetricFamily) map[string]*dto.Metric {
 	out := map[string]*dto.Metric{}
 	if mf == nil {

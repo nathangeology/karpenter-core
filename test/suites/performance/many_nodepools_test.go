@@ -61,21 +61,12 @@ const (
 	manyNodePoolsWarmUpDuration = 60 * time.Second
 )
 
-// manyNodePoolsFamilies is the KWOK instance-family set. parseFamilyFromType in
-// kwok/cloudprovider/helpers.go splits the instance-type name on the first
-// [.-] and takes the first token. Instance-type names in kwok/cloudprovider/
-// instance_types.json use format "<family>-<size>x-<arch>-<os>", producing
-// families c, m, s (verified via a scan of instance_types.json at scoping
-// time).
+// manyNodePoolsFamilies and manyNodePoolsSizes must intersect the value sets
+// that KWOK's fake instance-type catalog and the suite BeforeEach admit for
+// the karpenter.kwok.sh/instance-family and instance-size labels; the suite
+// BeforeEach caps instance-size to Lt "32". Empty intersection produces a
+// NodePool the scheduler cannot satisfy.
 var manyNodePoolsFamilies = []string{"c", "m", "s"}
-
-// manyNodePoolsSizes is the KWOK instance-size set as it appears on the node
-// label karpenter.kwok.sh/instance-size. parseSizeFromType falls back to the
-// CPU-count string when the AWS name regex does not match, so the label
-// carries values like "1", "2", "4", "8", "16". The suite-wide BeforeEach in
-// suite_test.go replaces the instance-size requirement with Lt "32" for KWOK,
-// which admits only these five sizes; keep the set aligned so per-pool
-// requirements do not intersect to empty.
 var manyNodePoolsSizes = []string{"1", "2", "4", "8", "16"}
 
 // buildManyNodePool returns a NodePool derived from the suite BeforeEach's
@@ -150,10 +141,9 @@ func buildManyNodePoolDeployment(poolName string, replicas int32) *appsv1.Deploy
 	return test.Deployment(opts)
 }
 
-// startPhaseLatencyHarness wraps the harness Start / Stop pair with the
-// sidecar-write posture used by the Balanced perf specs on the same LatencyHarness
-// substrate. Callers Stop() the harness after the phase's Report* returns and
-// invoke writeLatencySidecar to emit the paired JSON when OUTPUT_DIR is set.
+// startPhaseLatencyHarness starts a per-phase LatencyHarness against the
+// active Karpenter pod. Callers Stop the harness after the phase's Report*
+// returns and pass the LatencyResult to writeManyNodePoolsLatencySidecar.
 func startPhaseLatencyHarness() *common.LatencyHarness {
 	harness, err := common.StartLatencyHarness(env)
 	Expect(err).ToNot(HaveOccurred())
@@ -161,12 +151,11 @@ func startPhaseLatencyHarness() *common.LatencyHarness {
 }
 
 // writeManyNodePoolsLatencySidecar emits a paired latency-companion JSON to
-// OUTPUT_DIR when set, matching the shape performance-suite peers use. A
-// write error is logged and swallowed: the primary report is already on
-// disk, and downstream analysis treats the sidecar as best-effort. The
-// consolidation-policy field records the effective policy for the phase so
-// the sidecar carries the run-time value rather than a compile-time
-// constant.
+// OUTPUT_DIR when set. A write error is logged and swallowed: the primary
+// PerformanceReport is already on disk, and downstream analysis treats the
+// sidecar as best-effort. The consolidation-policy field records the
+// effective policy for the phase so the sidecar carries the run-time value
+// rather than a compile-time constant.
 func writeManyNodePoolsLatencySidecar(testName, filePrefix string, policy v1.ConsolidationPolicy, result *common.LatencyResult) {
 	err := common.WriteLatencySidecar(os.Getenv("OUTPUT_DIR"), filePrefix, common.LatencySidecar{
 		TestName:            testName,

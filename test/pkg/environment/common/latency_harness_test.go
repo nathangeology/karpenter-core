@@ -23,19 +23,17 @@ import (
 	dto "github.com/prometheus/client_model/go"
 )
 
-// mkBucket returns a *dto.Bucket with the given upper bound and cumulative count.
 func mkBucket(upper float64, cum uint64) *dto.Bucket {
 	return &dto.Bucket{UpperBound: &upper, CumulativeCount: &cum}
 }
 
-// mkHistogram returns a *dto.Histogram with the given cumulative buckets and
-// total sample_count / sample_sum. The buckets slice MUST be sorted by
-// upper bound ascending; cum is cumulative (Prometheus convention).
+// mkHistogram builds a *dto.Histogram with the given cumulative buckets. The
+// buckets slice MUST be sorted by upper bound ascending; cum is cumulative
+// (Prometheus convention).
 func mkHistogram(count uint64, sum float64, buckets []*dto.Bucket) *dto.Histogram {
 	return &dto.Histogram{SampleCount: &count, SampleSum: &sum, Bucket: buckets}
 }
 
-// mkMetric wraps a histogram into a labeled dto.Metric.
 func mkMetric(h *dto.Histogram, labels map[string]string) *dto.Metric {
 	m := &dto.Metric{Histogram: h}
 	for k, v := range labels {
@@ -45,13 +43,11 @@ func mkMetric(h *dto.Histogram, labels map[string]string) *dto.Metric {
 	return m
 }
 
-// mkFamily wraps a set of Metric into a MetricFamily of the given type.
 func mkFamily(name string, mtype dto.MetricType, metrics ...*dto.Metric) *dto.MetricFamily {
 	n, t := name, mtype
 	return &dto.MetricFamily{Name: &n, Type: &t, Metric: metrics}
 }
 
-// mkCounterMetric wraps a counter value into a labeled dto.Metric.
 func mkCounterMetric(v float64, labels map[string]string) *dto.Metric {
 	m := &dto.Metric{Counter: &dto.Counter{Value: &v}}
 	for k, val := range labels {
