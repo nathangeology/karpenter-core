@@ -131,9 +131,9 @@ var _ = Describe("Performance", Label(debug.NoWatch), func() {
 		// wrapped with LatencyHarness so the hero histograms
 		// (scheduling_decision, voluntary_disruption_decision_evaluation,
 		// pods_bound) are captured for both scale-out and consolidation. The
-		// suite-wide default policy is already WhenEmptyOrUnderutilized
-		// (suite_test.go:62), so this spec exists as the reference latency
-		// distribution the marginal Balanced runs compare against.
+		// suite-wide default policy pinned in suite_test.go BeforeEach is
+		// WhenEmptyOrUnderutilized, so this spec exists as the reference
+		// latency distribution the marginal Balanced runs compare against.
 		// Cross-policy delta analysis is offline on the paired sidecar
 		// JSONs; asserting deltas in-band would encode KWOK-timing flake
 		// into CI.
@@ -147,8 +147,8 @@ var _ = Describe("Performance", Label(debug.NoWatch), func() {
 		// Two variants share the 1000-pod fixture. The only difference is
 		// the small deployment's pod-deletion-cost annotation, which shifts
 		// the pool's total_disruption_cost denominator and pushes the
-		// consolidation score across the 1/k=0.5 threshold. See the RFC's
-		// "Marginal Move" example (designs/balanced-consolidation.md:236).
+		// consolidation score across the 1/k=0.5 threshold. See the "Marginal
+		// Move (rejected)" section in designs/balanced-consolidation.md.
 		//
 		// Neither variant asserts an exact count from
 		// karpenter_consolidation_moves_total{decision=...}; KWOK timing
