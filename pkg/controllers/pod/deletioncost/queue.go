@@ -25,7 +25,6 @@ import (
 	"golang.org/x/time/rate"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog/v2"
 	controllerruntime "sigs.k8s.io/controller-runtime"
@@ -38,6 +37,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
+	"sigs.k8s.io/karpenter/pkg/controllers/node/termination/terminator"
 	"sigs.k8s.io/karpenter/pkg/metrics"
 	"sigs.k8s.io/karpenter/pkg/operator/injection"
 	utilscontroller "sigs.k8s.io/karpenter/pkg/utils/controller"
@@ -51,19 +51,6 @@ const (
 	minReconciles = 100
 	maxReconciles = 5000
 )
-
-// QueueKey identifies a pod in the queue. UID is included so a pod replaced
-// with the same namespace/name but a different UID between Add and Reconcile
-// is treated as a distinct item and cannot inherit stale desired state — this
-// mirrors terminator.QueueKey.
-type QueueKey struct {
-	types.NamespacedName
-	UID types.UID
-}
-
-func NewQueueKey(pod *corev1.Pod) QueueKey {
-	return QueueKey{NamespacedName: client.ObjectKeyFromObject(pod), UID: pod.UID}
-}
 
 // queueItem carries the desired annotation state for a single pod. Rank is
 // the target value; clear=true means remove the annotation instead of writing
@@ -82,14 +69,14 @@ type Queue struct {
 	sync.Mutex
 
 	source     chan event.TypedGenericEvent[*corev1.Pod]
-	items      map[QueueKey]queueItem
+	items      map[terminator.QueueKey]queueItem
 	kubeClient client.Client
 }
 
 func NewQueue(kubeClient client.Client) *Queue {
 	return &Queue{
 		source:     make(chan event.TypedGenericEvent[*corev1.Pod], 10000),
-		items:      map[QueueKey]queueItem{},
+		items:      map[terminator.QueueKey]queueItem{},
 		kubeClient: kubeClient,
 	}
 }
@@ -126,7 +113,7 @@ func (q *Queue) Add(pod *corev1.Pod, rank int, clear bool) {
 	q.Lock()
 	defer q.Unlock()
 
-	qk := NewQueueKey(pod)
+	qk := terminator.NewQueueKey(pod)
 	_, enqueued := q.items[qk]
 	q.items[qk] = queueItem{rank: rank, clear: clear}
 	if !enqueued {
@@ -137,11 +124,11 @@ func (q *Queue) Add(pod *corev1.Pod, rank int, clear bool) {
 func (q *Queue) Has(pod *corev1.Pod) bool {
 	q.Lock()
 	defer q.Unlock()
-	_, ok := q.items[NewQueueKey(pod)]
+	_, ok := q.items[terminator.NewQueueKey(pod)]
 	return ok
 }
 
-func (q *Queue) complete(qk QueueKey) {
+func (q *Queue) complete(qk terminator.QueueKey) {
 	q.Lock()
 	defer q.Unlock()
 	delete(q.items, qk)
@@ -156,7 +143,7 @@ func (q *Queue) Reconcile(ctx context.Context, pod *corev1.Pod) (reconcile.Resul
 	ctx = injection.WithControllerName(ctx, q.Name())
 	defer metrics.Measure(annotationDurationSeconds, noLabels)()
 
-	qk := NewQueueKey(pod)
+	qk := terminator.NewQueueKey(pod)
 	q.Lock()
 	item, ok := q.items[qk]
 	q.Unlock()
