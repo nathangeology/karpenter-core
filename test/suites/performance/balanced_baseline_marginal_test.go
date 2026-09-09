@@ -178,12 +178,13 @@ var _ = Describe("Performance", Label(debug.NoWatch), func() {
 })
 
 // hasScoreSeriesForDecision reports whether the LatencyStats delta contains
-// a karpenter_consolidation_score observation carrying decision=<decision>.
-// Reads HistogramStats.MetricName + Labels directly rather than parsing the
-// series-key string.
+// a karpenter_consolidation_score observation carrying decision=<decision>
+// with at least one sample landed during the phase. deltaHistogram emits every
+// end-of-phase series, including ones with zero delta from a previous phase,
+// so the Count > 0 check is what makes the return value phase-scoped.
 func hasScoreSeriesForDecision(latencyStats map[string]common.HistogramStats, decision string) bool {
 	for _, s := range latencyStats {
-		if s.MetricName == "karpenter_consolidation_score" && s.Labels["decision"] == decision {
+		if s.MetricName == "karpenter_consolidation_score" && s.Labels["decision"] == decision && s.Count > 0 {
 			return true
 		}
 	}
