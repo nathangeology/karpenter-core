@@ -280,22 +280,40 @@ func reduceHistogramDelta(end *dto.Histogram, startHistogram *dto.Histogram) His
 	startCount, startSum, startCumBy := resolveDeltaBaseline(startHistogram, endCount)
 	deltaCount := endCount - startCount
 	if deltaCount == 0 {
-		return HistogramStats{Count: 0, Sum: endSum - startSum}
+		// Guard against a coincidental same-count reset (endSum < startSum with
+		// endCount == startCount > 0): treat the sum delta as fresh.
+		deltaSum := endSum - startSum
+		if deltaSum < 0 {
+			deltaSum = endSum
+		}
+		return HistogramStats{Count: 0, Sum: deltaSum}
 	}
 	endBuckets := end.GetBucket()
 	deltaCum := make([]uint64, len(endBuckets))
 	for i, b := range endBuckets {
 		endCum := b.GetCumulativeCount()
 		startCum := startCumBy[b.GetUpperBound()]
+		// Per-bucket clamp: if a single bucket's start_cum exceeds end_cum without
+		// the histogram's total sample_count also decreasing (already handled in
+		// resolveDeltaBaseline), treat that bucket's baseline as zero. The
+		// Prometheus Go client resets all buckets together with sample_count on
+		// pod restart, so this branch is defensive against a broken exporter
+		// (rogue bucket rewrite, corrupted parse). Under such a scenario deltaCum
+		// may become non-monotonic and the truncation-rate guard below may
+		// under-report; downstream analysis should sanity-check bucket_truncation_rate
+		// against sample_count before trusting the percentile output.
 		if endCum < startCum {
 			startCum = 0
 		}
 		deltaCum[i] = endCum - startCum
 	}
 	// The +Inf bucket count is deltaCount (per Prometheus contract). Truncation
-	// rate is what escaped the finite tail.
+	// rate is what escaped the finite tail. When a histogram has no finite
+	// buckets at all, every observation is truncated by definition.
 	trunc := 0.0
-	if len(deltaCum) > 0 && deltaCount > deltaCum[len(deltaCum)-1] {
+	if len(deltaCum) == 0 {
+		trunc = 1.0
+	} else if deltaCount > deltaCum[len(deltaCum)-1] {
 		trunc = float64(deltaCount-deltaCum[len(deltaCum)-1]) / float64(deltaCount)
 	}
 	deltaSum := endSum - startSum

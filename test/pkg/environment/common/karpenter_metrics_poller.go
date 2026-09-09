@@ -100,8 +100,12 @@ func (mp *KarpenterMetricsPoller) run(ctx context.Context) {
 	state := &pollerState{firstSample: true}
 
 	pod, err := mp.env.FindActiveKarpenterPod(ctx)
-	if err != nil || pod == nil {
+	if err != nil {
 		mp.recordError(fmt.Errorf("finding karpenter pod: %w", err))
+		return
+	}
+	if pod == nil {
+		mp.recordError(fmt.Errorf("no active karpenter pod found"))
 		return
 	}
 	state.podName = pod.Name

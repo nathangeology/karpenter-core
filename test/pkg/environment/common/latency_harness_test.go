@@ -167,6 +167,38 @@ func TestReduceHistogramDelta_NoNewObservations(t *testing.T) {
 	}
 }
 
+// Test 4b. Histogram with only the +Inf bucket (no finite buckets) reports
+// 100% truncation instead of silently zeroing the truncation rate.
+func TestReduceHistogramDelta_AllTruncated(t *testing.T) {
+	end := mkHistogram(10, 100.0, nil)
+	stats := reduceHistogramDelta(end, nil)
+	if stats.Count != 10 {
+		t.Errorf("Count: got %d, want 10", stats.Count)
+	}
+	if math.Abs(stats.BucketTruncationRate-1.0) > 1e-9 {
+		t.Errorf("BucketTruncationRate with no finite buckets: got %v, want 1.0", stats.BucketTruncationRate)
+	}
+}
+
+// Test 4c. Zero-delta with a coincidental sum reset does not emit a negative
+// Sum (endCount == startCount but endSum < startSum, e.g., pod restarted with
+// the same sample_count).
+func TestReduceHistogramDelta_ZeroDeltaSumReset(t *testing.T) {
+	start := mkHistogram(50, 500.0, []*dto.Bucket{
+		mkBucket(1.0, 50),
+	})
+	end := mkHistogram(50, 5.0, []*dto.Bucket{
+		mkBucket(1.0, 50),
+	})
+	stats := reduceHistogramDelta(end, start)
+	if stats.Count != 0 {
+		t.Errorf("Count under zero-delta sum reset: got %d, want 0", stats.Count)
+	}
+	if stats.Sum < 0 {
+		t.Errorf("Sum under zero-delta sum reset: got %v, want non-negative", stats.Sum)
+	}
+}
+
 // Test 5. Counter-reset (pod restart) between snapshots. end_count < start_count
 // should fall back to end as fresh observations.
 func TestReduceHistogramDelta_CounterReset(t *testing.T) {
