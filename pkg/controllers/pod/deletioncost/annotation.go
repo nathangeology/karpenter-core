@@ -31,6 +31,7 @@ import (
 // pkg/controllers/nodeclaim/lifecycle/controller.go:295-309 for the same
 // annotation-race precedent.
 func clearAnnotation(ctx context.Context, kubeClient client.Client, pod *corev1.Pod) error {
+	// MergeFromWithOptions captures pod by pointer; mutate a copy so the diff is non-empty.
 	updated := pod.DeepCopy()
 	delete(updated.Annotations, corev1.PodDeletionCost)
 	patch := client.MergeFromWithOptions(pod, client.MergeFromWithOptimisticLock{})
@@ -41,6 +42,7 @@ func clearAnnotation(ctx context.Context, kubeClient client.Client, pod *corev1.
 // optimistic lock. Symmetric with clearAnnotation; see that function's
 // comment for the Conflict-detection rationale.
 func patchAnnotation(ctx context.Context, kubeClient client.Client, pod *corev1.Pod, value string) error {
+	// MergeFromWithOptions captures pod by pointer; mutate a copy so the diff is non-empty.
 	updated := pod.DeepCopy()
 	if updated.Annotations == nil {
 		updated.Annotations = map[string]string{}
