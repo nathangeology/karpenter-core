@@ -127,11 +127,6 @@ func (c *Controller) Register(_ context.Context, m manager.Manager) error {
 
 func (c *Controller) Reconcile(ctx context.Context) (reconciler.Result, error) {
 	ctx = injection.WithControllerName(ctx, c.Name())
-	// Thread the Recorder into ctx so downstream candidate scoring
-	// (NewCandidate → ReschedulingCost/ComputeRescheduleDisruptionCost →
-	// EvictionCost) can emit per-pod Warning events on malformed annotations
-	// without every intermediate caller taking a Recorder parameter.
-	ctx = events.WithRecorder(ctx, c.recorder)
 
 	// this won't catch if the reconciler loop hangs forever, but it will catch other issues
 	c.logAbnormalRuns(ctx)

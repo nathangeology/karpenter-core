@@ -56,7 +56,6 @@ import (
 	"sigs.k8s.io/karpenter/pkg/controllers/provisioning"
 	"sigs.k8s.io/karpenter/pkg/controllers/state"
 	"sigs.k8s.io/karpenter/pkg/controllers/state/informer"
-	"sigs.k8s.io/karpenter/pkg/events"
 	"sigs.k8s.io/karpenter/pkg/operator/options"
 	"sigs.k8s.io/karpenter/pkg/scheduling"
 	"sigs.k8s.io/karpenter/pkg/test"
@@ -100,10 +99,10 @@ var _ = BeforeSuite(func() {
 	cloudProvider = fake.NewCloudProvider()
 	clusterCost = cost.NewClusterCost(ctx, cloudProvider, env.Client)
 	pricingController = informer.NewPricingController(env.Client, cloudProvider, clusterCost)
-	recorder = test.NewEventRecorder()
-	cluster = state.NewCluster(env.Clock, env.Client, cloudProvider, recorder)
+	cluster = state.NewCluster(env.Clock, env.Client, cloudProvider)
 	nodeStateController = informer.NewNodeController(env.Client, cluster)
 	nodeClaimStateController = informer.NewNodeClaimController(env.Client, cloudProvider, cluster, clusterCost)
+	recorder = test.NewEventRecorder()
 	draController = deviceallocation.NewController(env.Client)
 	prov = provisioning.NewProvisioner(env.Client, recorder, cloudProvider, cluster, env.Clock, draController, virtualpods.NewVirtualPodCache(env.Client))
 	queue = disruption.NewQueue(env.Client, recorder, cluster, env.Clock, prov)
@@ -940,37 +939,6 @@ var _ = Describe("Pod Eviction Cost", func() {
 			}},
 		})
 		Expect(cost).To(BeNumerically(">", standardPodCost))
-	})
-	It("should fall back to the default cost and emit a Warning event on a malformed karpenter.sh/disruption-cost", func() {
-		pod := test.Pod(test.PodOptions{
-			ObjectMeta: metav1.ObjectMeta{
-				Annotations: map[string]string{v1.DisruptionCostAnnotationKey: "3.5"},
-			},
-		})
-		malformedCtx := events.WithRecorder(ctx, recorder)
-		cost := disruptionutils.EvictionCost(malformedCtx, pod)
-		Expect(cost).To(BeNumerically("==", standardPodCost))
-		Expect(recorder.Calls("MalformedDisruptionCostAnnotation")).To(Equal(1))
-	})
-	It("should fall back to the default cost and emit a Warning event on a malformed controller.kubernetes.io/pod-deletion-cost", func() {
-		pod := test.Pod(test.PodOptions{
-			ObjectMeta: metav1.ObjectMeta{
-				Annotations: map[string]string{corev1.PodDeletionCost: "not-a-number"},
-			},
-		})
-		malformedCtx := events.WithRecorder(ctx, recorder)
-		cost := disruptionutils.EvictionCost(malformedCtx, pod)
-		Expect(cost).To(BeNumerically("==", standardPodCost))
-		Expect(recorder.Calls("MalformedPodDeletionCostAnnotation")).To(Equal(1))
-	})
-	It("should not panic on a malformed annotation when no recorder is attached to the context", func() {
-		pod := test.Pod(test.PodOptions{
-			ObjectMeta: metav1.ObjectMeta{
-				Annotations: map[string]string{v1.DisruptionCostAnnotationKey: "bogus"},
-			},
-		})
-		cost := disruptionutils.EvictionCost(ctx, pod)
-		Expect(cost).To(BeNumerically("==", standardPodCost))
 	})
 })
 

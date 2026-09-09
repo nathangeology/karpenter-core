@@ -29,7 +29,6 @@ import (
 
 	v1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 	"sigs.k8s.io/karpenter/pkg/cloudprovider"
-	"sigs.k8s.io/karpenter/pkg/events"
 	"sigs.k8s.io/karpenter/pkg/operator/options"
 )
 
@@ -108,17 +107,14 @@ func EvictionCost(ctx context.Context, p *corev1.Pod) float64 {
 	if costStr, ok := p.Annotations[v1.DisruptionCostAnnotationKey]; ok {
 		// karpenter.sh/disruption-cost is specified as int32. Parse strictly
 		// so a non-int value logs and skips instead of quietly widening the
-		// input type to float. Non-crashing failure mode: a bad user
-		// annotation MUST NOT stall the controller loop or block other
-		// pods; log, emit a Warning event on the pod, and let this pod
-		// fall back to the default 1.0 cost so correct pods keep working.
+		// input type to float. Non-crashing failure mode (per PR review): a
+		// bad user annotation must not stall the controller loop; log + skip
+		// keeps the reconcile progressing and lets the pod fall back to the
+		// default 1.0 cost.
 		parsedCost, err := strconv.ParseInt(costStr, 10, 32)
 		if err != nil {
 			log.FromContext(ctx).Error(err, "failed parsing disruption cost",
 				"annotation", v1.DisruptionCostAnnotationKey, "value", costStr, "pod", client.ObjectKeyFromObject(p))
-			if recorder := events.FromContext(ctx); recorder != nil {
-				recorder.Publish(MalformedDisruptionCostAnnotationEvent(p, costStr, err))
-			}
 		} else {
 			// the disruptionCost is in [-2147483647, 2147483647]
 			// the min pod disruptionCost makes one pod ~ -15 pods, and the max pod disruptionCost to ~ 17 pods.
@@ -129,15 +125,11 @@ func EvictionCost(ctx context.Context, p *corev1.Pod) float64 {
 			// controller.kubernetes.io/pod-deletion-cost is int32 per the
 			// Kubernetes API spec. Match the RS controller's parsing contract
 			// so a non-int value produced by a misconfigured writer surfaces
-			// the same way here: log + emit a Warning event on the pod, and
-			// fall back to the default cost without disturbing other pods.
+			// the same way here — log + skip.
 			podDeletionCost, err := strconv.ParseInt(podDeletionCostStr, 10, 32)
 			if err != nil {
 				log.FromContext(ctx).Error(err, "failed parsing pod deletion cost",
 					"annotation", corev1.PodDeletionCost, "value", podDeletionCostStr, "pod", client.ObjectKeyFromObject(p))
-				if recorder := events.FromContext(ctx); recorder != nil {
-					recorder.Publish(MalformedPodDeletionCostAnnotationEvent(p, podDeletionCostStr, err))
-				}
 			} else {
 				// Same 2^27 normalization as above; legacy fall-back for
 				// gate-OFF behavior reads the upstream annotation.

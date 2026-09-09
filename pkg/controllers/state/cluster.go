@@ -44,7 +44,6 @@ import (
 
 	v1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 	"sigs.k8s.io/karpenter/pkg/cloudprovider"
-	"sigs.k8s.io/karpenter/pkg/events"
 	"sigs.k8s.io/karpenter/pkg/scheduling"
 	nodeclaimutils "sigs.k8s.io/karpenter/pkg/utils/nodeclaim"
 	podutils "sigs.k8s.io/karpenter/pkg/utils/pod"
@@ -56,12 +55,7 @@ type Cluster struct {
 	kubeClient    client.Client
 	cloudProvider cloudprovider.CloudProvider
 	clock         clock.Clock
-	// recorder is used to publish Kubernetes Events surfaced by state
-	// mutations (e.g. malformed disruption-cost annotations on pods). May be
-	// nil in tests that construct Cluster without event plumbing; callers
-	// MUST nil-check before Publish.
-	recorder  events.Recorder
-	hasSynced atomic.Bool
+	hasSynced     atomic.Bool
 
 	mu                        sync.RWMutex
 	nodes                     map[string]*StateNode           // provider id -> cached node
@@ -107,18 +101,11 @@ type Cluster struct {
 	bufferPodCounts   map[string]int
 }
 
-// NewCluster constructs the in-memory cluster state cache. recorder is
-// threaded through pod-usage paths (UpdatePod / populateResourceRequests)
-// into ctx so downstream code (e.g. disruption.EvictionCost) can emit
-// per-pod Warning events without every intermediate caller taking a
-// Recorder parameter. Pass a nil recorder in tests that do not exercise
-// event emission; the recorder-in-ctx read is nil-safe.
-func NewCluster(clk clock.Clock, client client.Client, cloudProvider cloudprovider.CloudProvider, recorder events.Recorder) *Cluster {
+func NewCluster(clk clock.Clock, client client.Client, cloudProvider cloudprovider.CloudProvider) *Cluster {
 	return &Cluster{
 		clock:                     clk,
 		kubeClient:                client,
 		cloudProvider:             cloudProvider,
-		recorder:                  recorder,
 		nodes:                     map[string]*StateNode{},
 		bindings:                  map[types.NamespacedName]string{},
 		daemonSetPods:             sync.Map{},
@@ -136,13 +123,6 @@ func NewCluster(clk clock.Clock, client client.Client, cloudProvider cloudprovid
 		podHealthyNodePoolScheduledTime: sync.Map{},
 		podToNodeClaim:                  sync.Map{},
 	}
-}
-
-// Recorder returns the events.Recorder wired into the Cluster at construction.
-// Returns nil when the Cluster was constructed without a Recorder (tests).
-// Callers that use the returned Recorder MUST nil-check before Publish.
-func (c *Cluster) Recorder() events.Recorder {
-	return c.recorder
 }
 
 // Synced validates that the NodeClaims and the Nodes that are stored in the apiserver
@@ -448,11 +428,6 @@ func (c *Cluster) DeleteNode(name string) {
 func (c *Cluster) UpdatePod(ctx context.Context, pod *corev1.Pod) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
-	// Thread the Cluster's Recorder into ctx so downstream pod-annotation
-	// parsers (disruptionutils.EvictionCost) can emit per-pod Warning events
-	// without every intermediate caller taking a Recorder parameter. Nil-safe.
-	ctx = events.WithRecorder(ctx, c.recorder)
 
 	var err error
 	if podutils.IsTerminal(pod) {
@@ -895,9 +870,6 @@ func (c *Cluster) populateResourceRequests(ctx context.Context, n *StateNode) er
 	if err := c.kubeClient.List(ctx, &pods, client.MatchingFields{"spec.nodeName": n.Node.Name}); err != nil {
 		return fmt.Errorf("listing pods, %w", err)
 	}
-	// Node-adoption path also calls into updateForPod → EvictionCost, so the
-	// same recorder plumbing applied at UpdatePod is applied here. Nil-safe.
-	ctx = events.WithRecorder(ctx, c.recorder)
 	for i := range pods.Items {
 		pod := &pods.Items[i]
 		if podutils.IsTerminal(pod) {
