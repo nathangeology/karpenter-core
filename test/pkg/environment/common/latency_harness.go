@@ -108,9 +108,10 @@ func StartLatencyHarness(env *Environment) (*LatencyHarness, error) {
 }
 
 // Stop scrapes the end snapshot and reduces the histogram / counter deltas
-// into a LatencyResult. On the first scrape failure the harness refreshes the
-// active-pod name once (matches KarpenterMetricsPoller's leader-election
-// handling) and retries; a second failure returns the error.
+// into a LatencyResult. On scrape failure the harness rediscovers the active
+// pod; if a new pod is observed (leader-election handover) it retries the
+// scrape once. Any failure after that (or a failure with no pod change)
+// surfaces the scrape error to the caller.
 func (h *LatencyHarness) Stop() (*LatencyResult, error) {
 	ctx := h.env.Context
 	end, err := scrapeKarpenterMetricFamilies(ctx, h.env, h.podName)
@@ -348,20 +349,30 @@ func resolveDeltaBaseline(startHistogram *dto.Histogram, endCount uint64) (uint6
 	return startCount, startHistogram.GetSampleSum(), cumBy
 }
 
-// inferMaxBound returns the tightest finite bucket upper bound that saw a
-// non-zero delta. When every delta observation fell beyond the last finite
-// bucket (the +Inf bucket), the last finite bound is returned; callers pair
-// this with BucketTruncationRate to detect that condition.
+// inferMaxBound returns the upper bound of the highest finite bucket that
+// received a non-zero per-bucket delta. Cumulative counts are monotonically
+// non-decreasing, so a naive right-to-left scan of deltaCum reports the top
+// bucket whenever any observation occurred; the per-bucket-delta scan below
+// is what makes Max sensitive to where samples actually landed. When every
+// delta observation fell beyond the last finite bucket (the +Inf bucket) the
+// last finite bound is returned; callers pair this with BucketTruncationRate
+// to detect that condition.
 func inferMaxBound(endBuckets []*dto.Bucket, deltaCum []uint64) float64 {
 	if len(endBuckets) == 0 {
 		return 0
 	}
-	for i := len(deltaCum) - 1; i >= 0; i-- {
-		if deltaCum[i] > 0 {
-			return endBuckets[i].GetUpperBound()
+	prevCum := uint64(0)
+	maxIdx := -1
+	for i, c := range deltaCum {
+		if c > prevCum {
+			maxIdx = i
 		}
+		prevCum = c
 	}
-	return endBuckets[len(endBuckets)-1].GetUpperBound()
+	if maxIdx < 0 {
+		return endBuckets[len(endBuckets)-1].GetUpperBound()
+	}
+	return endBuckets[maxIdx].GetUpperBound()
 }
 
 // interpolatePercentile returns the linearly-interpolated percentile from a

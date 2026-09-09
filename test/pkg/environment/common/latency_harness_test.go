@@ -155,6 +155,25 @@ func TestReduceHistogramDelta_BucketTruncation(t *testing.T) {
 	}
 }
 
+// Test 3b. Concentrated distribution: all observations land in a middle
+// bucket. Because cumulative counts are non-decreasing, a naive right-to-left
+// scan over deltaCum would report the top bucket for any non-empty phase.
+// inferMaxBound must return the highest bucket that received a per-bucket
+// non-zero delta, not the highest index that carries a non-zero cumulative.
+func TestReduceHistogramDelta_ConcentratedDistributionMaxBound(t *testing.T) {
+	end := mkHistogram(100, 50.0, []*dto.Bucket{
+		mkBucket(0.1, 0),
+		mkBucket(0.5, 100),
+		mkBucket(1.0, 100),
+		mkBucket(5.0, 100),
+		mkBucket(10.0, 100),
+	})
+	stats := reduceHistogramDelta(end, nil)
+	if math.Abs(stats.Max-0.5) > 1e-9 {
+		t.Errorf("Max under concentrated distribution: got %v, want 0.5 (tightest bucket with samples)", stats.Max)
+	}
+}
+
 // Test 4. Zero-observation phase yields zero-valued stats.
 func TestReduceHistogramDelta_NoNewObservations(t *testing.T) {
 	same := mkHistogram(50, 5.0, []*dto.Bucket{

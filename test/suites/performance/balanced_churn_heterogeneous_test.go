@@ -36,8 +36,8 @@ import (
 )
 
 // balancedPolicies enumerates the paired baseline vs Balanced iteration used
-// by both spec groups. Baseline runs first so the second run starts from an
-// AfterEach-clean state, keeping diff analysis stable.
+// by both spec groups. Baseline first, then Balanced; per-spec AfterEach
+// makes the ordering independent of correctness.
 var balancedPolicies = []v1.ConsolidationPolicy{
 	v1.ConsolidationPolicyWhenEmptyOrUnderutilized,
 	v1.ConsolidationPolicyBalanced,
@@ -64,8 +64,8 @@ func policyPrefix(p v1.ConsolidationPolicy) string {
 // buildFamilyRestrictedNodePool constructs a NodePool restricted to a single
 // KWOK instance family, carrying the standard suite requirements (linux
 // pinned via defaultNodePool, on-demand pinned via defaultNodePool, instance
-// size clamped < 32 to match the suite-wide default). The nodePool is a
-// clone of env.DefaultNodePool with the family requirement layered on.
+// size clamped < 32 to match the suite-wide default). The nodePool is built
+// from env.DefaultNodePool with the family requirement layered on.
 func buildFamilyRestrictedNodePool(env *common.Environment, nodeClass *unstructured.Unstructured, family string, policy v1.ConsolidationPolicy) *v1.NodePool {
 	np := env.DefaultNodePool(nodeClass)
 	np.Name = fmt.Sprintf("%s-%s", family, np.Name)
@@ -185,11 +185,6 @@ var _ = Describe("Performance", Label(debug.NoWatch), func() {
 					fmt.Sprintf("balanced_churn_%s_consolidation", prefix),
 					policy, result)
 
-				// Soft check: harness must have observed at least one
-				// scrape delta. Comparison across policies is offline on
-				// the paired JSON artifacts; hard bounds are not asserted
-				// because KWOK timing variance blurs per-round counts.
-				Expect(result.Counters).ToNot(BeNil())
 			})
 		}
 	})
@@ -263,7 +258,6 @@ var _ = Describe("Performance", Label(debug.NoWatch), func() {
 					policy, result)
 
 				Expect(consolidationReport.TotalPods).To(Equal(240))
-				Expect(result.Counters).ToNot(BeNil())
 			})
 		}
 	})

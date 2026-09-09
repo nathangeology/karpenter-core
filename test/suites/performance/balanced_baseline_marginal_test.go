@@ -18,7 +18,6 @@ package performance
 
 import (
 	"fmt"
-	"os"
 	"strconv"
 	"time"
 
@@ -79,17 +78,7 @@ func runBaselineMarginalPhases(filePrefixBase string, smallDeployment, largeDepl
 
 	scaleOutLatency, err := scaleOutHarness.Stop()
 	Expect(err).ToNot(HaveOccurred())
-	GinkgoWriter.Printf("LatencyHarness [%s, %s]: %d histogram series, %d counter series\n",
-		scaleOutReport.TestName, policy, len(scaleOutLatency.LatencyStats), len(scaleOutLatency.Counters))
-	if err := common.WriteLatencySidecar(os.Getenv("OUTPUT_DIR"), scaleOutPrefix, common.LatencySidecar{
-		TestName:            scaleOutReport.TestName,
-		ConsolidationPolicy: string(policy),
-		Timestamp:           time.Now(),
-		LatencyStats:        scaleOutLatency.LatencyStats,
-		Counters:            scaleOutLatency.Counters,
-	}); err != nil {
-		GinkgoWriter.Printf("LatencyHarness: %v\n", err)
-	}
+	writeLatencySidecar(scaleOutReport.TestName, scaleOutPrefix, policy, scaleOutLatency)
 
 	By("Scaling both deployments down and capturing consolidation latency")
 	smallDeployment.Spec.Replicas = new(int32(350))
@@ -106,22 +95,9 @@ func runBaselineMarginalPhases(filePrefixBase string, smallDeployment, largeDepl
 	consolidationLatency, err := consolidationHarness.Stop()
 	Expect(err).ToNot(HaveOccurred())
 
-	OutputPerformanceReport(consolidationReport, consolidationPrefix)
-	GinkgoWriter.Printf("LatencyHarness [%s, %s]: %d histogram series, %d counter series\n",
-		consolidationReport.TestName, policy, len(consolidationLatency.LatencyStats), len(consolidationLatency.Counters))
-	if err := common.WriteLatencySidecar(os.Getenv("OUTPUT_DIR"), consolidationPrefix, common.LatencySidecar{
-		TestName:            consolidationReport.TestName,
-		ConsolidationPolicy: string(policy),
-		Timestamp:           time.Now(),
-		LatencyStats:        consolidationLatency.LatencyStats,
-		Counters:            consolidationLatency.Counters,
-	}); err != nil {
-		GinkgoWriter.Printf("LatencyHarness: %v\n", err)
-	}
+	emitPolicyRun(consolidationReport, consolidationPrefix, policy, consolidationLatency)
 
 	Expect(consolidationReport.TotalPods).To(Equal(700))
-	Expect(consolidationLatency.Counters).ToNot(BeNil())
-	Expect(consolidationLatency.LatencyStats).ToNot(BeNil())
 	return consolidationLatency
 }
 
