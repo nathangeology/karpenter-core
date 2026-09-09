@@ -115,7 +115,7 @@ func RankNodes(ctx context.Context, kubeClient client.Client, clk clock.Clock, n
 		currentRank++
 	}
 	for _, node := range cleanupOnly {
-		// Rank unused for Group D — the queue sees CleanupOnly=true and
+		// Rank unused for Group D: the queue sees CleanupOnly=true and
 		// clears the annotation rather than reading Rank.
 		result = append(result, NodeRank{Node: node, CleanupOnly: true, Pods: nodePods[node.Name()]})
 	}

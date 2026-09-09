@@ -793,8 +793,7 @@ var _ = Describe("Ranking", func() {
 	// tiebreak, negative classification of disrupted-but-not-PDB-blocked
 	// nodes, RankNodes' own empty-input handling). The Reconcile-driven
 	// variants would assert on annotation values that don't distinguish
-	// these cases. The _Edge_ marker in the It descriptions makes the
-	// bypass explicit for reviewers.
+	// these cases.
 	Context("Edge: direct-helper partition checks", func() {
 		It("should _Edge_ leave RankNodes a no-op on empty node list", func() {
 			ranks, err := deletioncost.RankNodes(ctx, env.Client, fakeClock, nil, map[string]*v1.NodePool{nodePool.Name: nodePool}, nil)
