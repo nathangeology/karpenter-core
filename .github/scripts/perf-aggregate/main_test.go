@@ -90,17 +90,42 @@ var _ = Describe("Perf Aggregate", func() {
 				Expect(run(tmp, iters, os.Stdout)).To(Succeed())
 			})
 
-			It("routes utilization/efficiency metrics into bigger-is-better and other metrics into smaller-is-better", func() {
-				smaller := loadEntries(filepath.Join(tmp, "benchmark-results-smaller.json"))
+			It("routes utilization/efficiency into bigger-is-better, Controller CPU into smaller-loose, and other smaller metrics into smaller-tight", func() {
+				smallerTight := loadEntries(filepath.Join(tmp, "benchmark-results-smaller-tight.json"))
+				smallerLoose := loadEntries(filepath.Join(tmp, "benchmark-results-smaller-loose.json"))
 				bigger := loadEntries(filepath.Join(tmp, "benchmark-results-bigger.json"))
-				Expect(smaller).ToNot(BeEmpty(), "expected at least one smaller-is-better entry")
+				Expect(smallerTight).ToNot(BeEmpty(), "expected at least one smaller-tight entry")
+				Expect(smallerLoose).ToNot(BeEmpty(), "expected at least one smaller-loose entry")
 				Expect(bigger).ToNot(BeEmpty(), "expected at least one bigger-is-better entry")
-				for _, e := range smaller {
-					Expect(e.Name).ToNot(ContainSubstring("Utilization"), "smaller group leaked bigger-is-better metric: %s", e.Name)
-					Expect(e.Name).ToNot(ContainSubstring("Efficiency"), "smaller group leaked bigger-is-better metric: %s", e.Name)
+				for _, e := range smallerTight {
+					Expect(e.Name).ToNot(ContainSubstring("Utilization"), "smaller-tight group leaked bigger-is-better metric: %s", e.Name)
+					Expect(e.Name).ToNot(ContainSubstring("Efficiency"), "smaller-tight group leaked bigger-is-better metric: %s", e.Name)
+					Expect(e.Name).ToNot(ContainSubstring("Controller CPU"), "smaller-tight group leaked Controller CPU (should be loose): %s", e.Name)
+					Expect(e.Name).ToNot(ContainSubstring("Consolidation Rounds"), "smaller-tight group leaked Consolidation Rounds (should be informational-only): %s", e.Name)
+				}
+				for _, e := range smallerLoose {
+					Expect(e.Name).To(ContainSubstring("Controller CPU"), "smaller-loose group has non-CPU metric: %s", e.Name)
 				}
 				for _, e := range bigger {
 					Expect(strings.Contains(e.Name, "Utilization") || strings.Contains(e.Name, "Efficiency")).To(BeTrue(), "bigger group has non-utilization metric: %s", e.Name)
+				}
+			})
+
+			It("emits Consolidation Rounds into the CV file only, never into gate files", func() {
+				smallerTight := loadEntries(filepath.Join(tmp, "benchmark-results-smaller-tight.json"))
+				smallerLoose := loadEntries(filepath.Join(tmp, "benchmark-results-smaller-loose.json"))
+				bigger := loadEntries(filepath.Join(tmp, "benchmark-results-bigger.json"))
+				cv := loadEntries(filepath.Join(tmp, "benchmark-results-cv.json"))
+				hasRoundsCV := false
+				for _, e := range cv {
+					if strings.Contains(e.Name, "Consolidation Rounds") {
+						hasRoundsCV = true
+						break
+					}
+				}
+				Expect(hasRoundsCV).To(BeTrue(), "expected Consolidation Rounds in CV list")
+				for _, e := range append(append(smallerTight, smallerLoose...), bigger...) {
+					Expect(e.Name).ToNot(ContainSubstring("Consolidation Rounds"), "gate file leaked Consolidation Rounds: %s", e.Name)
 				}
 			})
 

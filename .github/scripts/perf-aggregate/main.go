@@ -46,6 +46,31 @@ const (
 	biggerIsBetter
 )
 
+// tier controls which gating benchmark-action step consumes a metric. Static
+// tiers approximate the per-metric stddev gating @ryan-mist suggested (PR#2994
+// comment 3961447028) by routing high-CV metrics to a looser threshold and
+// low-CV metrics to a tighter threshold; per-metric CV was measured across
+// 15 push-triggered kind-perf-e2e runs on kubernetes-sigs/karpenter@main
+// between 2026-08-19 and 2026-09-02 (n=120 (test, metric) samples).
+type tier int
+
+const (
+	// tierTight metrics gate at 150% (the previous flat threshold). Cross-run
+	// batch-median CV for these metrics stayed under 10% across all tests in
+	// the sampled window, so the 150% threshold is well above noise.
+	tierTight tier = iota
+	// tierLoose metrics gate at a wider threshold in the yaml (currently
+	// 250%). Controller CPU is the one such metric today: its per-test P90
+	// CV was 38% (max 44%), so a batch-median comparison at 150% would fire
+	// on runner-jitter alone.
+	tierLoose
+	// tierInformational metrics skip the gating benchmark-action steps and
+	// only emit into the informational CV file. Consolidation Rounds falls
+	// in this bucket: the integer 0-9 range and per-test P90 CV of 149% make
+	// any relative-threshold gate an FP generator.
+	tierInformational
+)
+
 // metricSpec describes how to extract, label, and classify one field from a
 // performance report.
 type metricSpec struct {
@@ -53,17 +78,18 @@ type metricSpec struct {
 	display   string
 	unit      string
 	dir       direction
+	tier      tier
 }
 
 var metrics = []metricSpec{
-	{"total_time", "Duration", "seconds", smallerIsBetter},
-	{"karpenter_p95_memory_mb", "Controller Peak Memory", "MB", smallerIsBetter},
-	{"karpenter_p95_cpu_cores", "Controller CPU", "cores", smallerIsBetter},
-	{"total_nodes", "Final Nodes", "nodes", smallerIsBetter},
-	{"total_reserved_cpu_utilization", "CPU Utilization", "percent", biggerIsBetter},
-	{"resource_efficiency_score", "Efficiency Score", "score", biggerIsBetter},
-	{"total_reserved_memory_utilization", "Memory Utilization", "percent", biggerIsBetter},
-	{"rounds", "Consolidation Rounds", "rounds", smallerIsBetter},
+	{"total_time", "Duration", "seconds", smallerIsBetter, tierTight},
+	{"karpenter_p95_memory_mb", "Controller Peak Memory", "MB", smallerIsBetter, tierTight},
+	{"karpenter_p95_cpu_cores", "Controller CPU", "cores", smallerIsBetter, tierLoose},
+	{"total_nodes", "Final Nodes", "nodes", smallerIsBetter, tierTight},
+	{"total_reserved_cpu_utilization", "CPU Utilization", "percent", biggerIsBetter, tierTight},
+	{"resource_efficiency_score", "Efficiency Score", "score", biggerIsBetter, tierTight},
+	{"total_reserved_memory_utilization", "Memory Utilization", "percent", biggerIsBetter, tierTight},
+	{"rounds", "Consolidation Rounds", "rounds", smallerIsBetter, tierInformational},
 }
 
 type stats struct {
@@ -130,7 +156,10 @@ func run(outputDir string, iterations int, out *os.File) error {
 
 	summary, results := buildResults(testKeys, reportsByTest)
 
-	if err := writeJSON(filepath.Join(outputDir, "benchmark-results-smaller.json"), results.smaller); err != nil {
+	if err := writeJSON(filepath.Join(outputDir, "benchmark-results-smaller-tight.json"), results.smallerTight); err != nil {
+		return err
+	}
+	if err := writeJSON(filepath.Join(outputDir, "benchmark-results-smaller-loose.json"), results.smallerLoose); err != nil {
 		return err
 	}
 	if err := writeJSON(filepath.Join(outputDir, "benchmark-results-bigger.json"), results.bigger); err != nil {
@@ -143,18 +172,22 @@ func run(outputDir string, iterations int, out *os.File) error {
 		return err
 	}
 	printTable(out, testKeys, summary)
-	fmt.Fprintf(out, "\nEmitted %d smaller-is-better, %d bigger-is-better, %d CV metrics\n",
-		len(results.smaller), len(results.bigger), len(results.cv))
+	fmt.Fprintf(out, "\nEmitted %d smaller-tight, %d smaller-loose, %d bigger-is-better, %d CV metrics\n",
+		len(results.smallerTight), len(results.smallerLoose), len(results.bigger), len(results.cv))
 	return nil
 }
 
-// benchmarkResults holds the three parallel benchmark-action arrays this
-// aggregator emits: one gating file per direction plus one informational
-// CV file.
+// benchmarkResults holds the four parallel benchmark-action arrays this
+// aggregator emits: one gating file per (direction, tier) pair plus one
+// informational CV file. Splitting smaller-is-better into tight and loose
+// tiers lets the yaml apply per-metric-key thresholds without moving the gate
+// decision into Go: benchmark-action still owns the compare against cached
+// batch median, but each tier feeds its own step with its own threshold.
 type benchmarkResults struct {
-	smaller []benchmarkEntry
-	bigger  []benchmarkEntry
-	cv      []benchmarkEntry
+	smallerTight []benchmarkEntry
+	smallerLoose []benchmarkEntry
+	bigger       []benchmarkEntry
+	cv           []benchmarkEntry
 }
 
 // buildResults computes stats for every (test, metric) pair and appends
@@ -186,8 +219,10 @@ func buildResults(testKeys []string, reportsByTest map[string][]map[string]any) 
 
 // appendMetric records both the gating (median-based) entry and the
 // informational CV entry for a single (test, metric) pair. Gating entries
-// route to smaller/bigger by metric direction; CV entries share a single
-// smaller-is-better list because lower batch variance is always better.
+// route to smaller-tight, smaller-loose, or bigger by (direction, tier);
+// tierInformational metrics skip gating entirely and land in the CV list
+// only. CV entries share a single smaller-is-better list because lower batch
+// variance is always better.
 func (r *benchmarkResults) appendMetric(name string, m metricSpec, s stats) {
 	gate := benchmarkEntry{
 		Name:  fmt.Sprintf("%s - %s (median, n=%d)", name, m.display, s.N),
@@ -199,10 +234,16 @@ func (r *benchmarkResults) appendMetric(name string, m metricSpec, s stats) {
 			s.Mean, s.Stddev, s.CVPct, s.Min, s.Max, s.N,
 		),
 	}
-	if m.dir == biggerIsBetter {
+	switch {
+	case m.tier == tierInformational:
+		// Do not emit a gating entry. The CV entry below still fires so the
+		// metric shows up in the batch-CV chart.
+	case m.dir == biggerIsBetter:
 		r.bigger = append(r.bigger, gate)
-	} else {
-		r.smaller = append(r.smaller, gate)
+	case m.tier == tierLoose:
+		r.smallerLoose = append(r.smallerLoose, gate)
+	default:
+		r.smallerTight = append(r.smallerTight, gate)
 	}
 	// CV entries feed an informational-only benchmark-action invocation
 	// (fail-on-alert: false). They surface when a batch's within-batch

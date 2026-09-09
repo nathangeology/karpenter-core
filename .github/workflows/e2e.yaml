@@ -93,12 +93,18 @@ jobs:
       shell: bash
       run: |
         go run ./.github/scripts/perf-aggregate
-    - name: Download previous benchmark data (smaller-is-better)
+    - name: Download previous benchmark data (smaller-tight)
       if: always() && env.OUTPUT_DIR != '' && inputs.repeat > 1
       uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
       with:
-        path: ./cache-smaller
-        key: ${{ runner.os }}-perf-benchmark-smaller-${{ inputs.test_name || inputs.suite }}
+        path: ./cache-smaller-tight
+        key: ${{ runner.os }}-perf-benchmark-smaller-tight-${{ inputs.test_name || inputs.suite }}
+    - name: Download previous benchmark data (smaller-loose)
+      if: always() && env.OUTPUT_DIR != '' && inputs.repeat > 1
+      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+      with:
+        path: ./cache-smaller-loose
+        key: ${{ runner.os }}-perf-benchmark-smaller-loose-${{ inputs.test_name || inputs.suite }}
     - name: Download previous benchmark data (bigger-is-better)
       if: always() && env.OUTPUT_DIR != '' && inputs.repeat > 1
       uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
@@ -119,20 +125,50 @@ jobs:
     # PR#2994 variance question. benchmark-action persists CV entries in
     # the same cache format as the median entries; no cache-schema change
     # is required.
-    - name: Compare smaller-is-better metrics
+    #
+    # The smaller-is-better group is split into two tiers by observed
+    # per-metric CV so a single flat threshold does not force a choice
+    # between too-tight (FP on Controller CPU / Duration jitter) and too-loose
+    # (miss a real regression on stable metrics like Peak Memory or Final
+    # Nodes). Tiers are static approximations of @ryan-mist's stddev-based
+    # gate ask (PR#2994 comment 3961447028); a proper stddev-history gate
+    # remains a follow-up per the assessment.
+    - name: Compare smaller-is-better metrics (tight)
       if: always() && env.OUTPUT_DIR != '' && inputs.repeat > 1
       uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba # v1.22.1
       with:
-        name: Karpenter Performance (${{ inputs.test_name || inputs.suite }}) - smaller-is-better
+        name: Karpenter Performance (${{ inputs.test_name || inputs.suite }}) - smaller-tight
         tool: customSmallerIsBetter
-        output-file-path: ${{ env.OUTPUT_DIR }}/benchmark-results-smaller.json
-        external-data-json-path: ./cache-smaller/benchmark-data.json
+        output-file-path: ${{ env.OUTPUT_DIR }}/benchmark-results-smaller-tight.json
+        external-data-json-path: ./cache-smaller-tight/benchmark-data.json
         github-token: ${{ secrets.GITHUB_TOKEN }}
-        # Alert if batch median is 50% worse than previous batch median.
-        # At n=10 with observed CV ~48%, batch median CV is ~15%. A 130%
-        # threshold would yield ~7% false positives per test (~40% across
-        # the 7-test matrix). 150% keeps false alarm rate under 5% total.
+        # Tight tier: Duration, Controller Peak Memory, Final Nodes. Cross-run
+        # batch-median CV for these metrics stayed under 10% across the
+        # 15-run sample (see the CV comment below). 150% is ~3 batch-median
+        # sigmas above the noise floor for the noisiest tight-tier metric, so
+        # analytical FP < 1% per (test, metric).
         alert-threshold: '150%'
+        fail-on-alert: true
+        comment-on-alert: true
+        alert-comment-cc-users: '@nathangeology'
+        summary-always: true
+    - name: Compare smaller-is-better metrics (loose)
+      if: always() && env.OUTPUT_DIR != '' && inputs.repeat > 1
+      uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba # v1.22.1
+      with:
+        name: Karpenter Performance (${{ inputs.test_name || inputs.suite }}) - smaller-loose
+        tool: customSmallerIsBetter
+        output-file-path: ${{ env.OUTPUT_DIR }}/benchmark-results-smaller-loose.json
+        external-data-json-path: ./cache-smaller-loose/benchmark-data.json
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        # Loose tier: Controller CPU (per-test P90 CV 38%, max 44%). A flat
+        # 150% here fired analytically on ~5-27% of identical-code batches;
+        # 250% pushes analytical per-key FP under 1%. Still catches the
+        # PR#2671-shape 3x controller-CPU regression the customer saw
+        # (issue #2954), because ratio 3.0 > 2.5. Consolidation Rounds is
+        # excluded from both smaller-tier gate files (see main.go
+        # tierInformational) — it lives only in the CV file below.
+        alert-threshold: '250%'
         fail-on-alert: true
         comment-on-alert: true
         alert-comment-cc-users: '@nathangeology'
@@ -185,7 +221,8 @@ jobs:
         path: |
           ${{ env.OUTPUT_DIR }}/**/*_performance_report.json
           ${{ env.OUTPUT_DIR }}/aggregated_summary.json
-          ${{ env.OUTPUT_DIR }}/benchmark-results-smaller.json
+          ${{ env.OUTPUT_DIR }}/benchmark-results-smaller-tight.json
+          ${{ env.OUTPUT_DIR }}/benchmark-results-smaller-loose.json
           ${{ env.OUTPUT_DIR }}/benchmark-results-bigger.json
           ${{ env.OUTPUT_DIR }}/benchmark-results-cv.json
           ${{ env.OUTPUT_DIR }}/karpenter_memory_profile_*.pb.gz
