@@ -108,20 +108,50 @@ func BenchmarkIgnorePreferences(b *testing.B) {
 	benchmarkScheduler(b, makePreferencePods(4000), scheduling.IgnorePreferences)
 }
 
+// nodePoolIndexLabel is the label key each NodePool declares (via In requirement)
+// with a unique per-index value. Pods pin to a specific NodePool by setting the
+// same key on their NodeSelector. This makes exactly one template match per pod
+// so parallelizeUntil workers must traverse the entire nodeClaimTemplates slice
+// before returning, causing per-pod cost inside Scheduler.Solve to scale with
+// NodePool count.
+const nodePoolIndexLabel = "test.karpenter.sh/nodepool-index"
+
 // BenchmarkSchedulingMultiNodePool extends the existing BenchmarkScheduling*
 // family with a (NodePoolCount, PodCount) grid so per-NodePool cost inside
 // Scheduler.Solve surfaces in the numbers. The single-NodePool benches average
 // that cost into a single number. Solve fans out over s.nodeClaimTemplates per
 // pod inside parallelizeUntil, so a regression there lands on the row of the
 // grid that exercises it.
+//
+// NodePools are heterogeneous: each declares a unique nodePoolIndexLabel value
+// in its Requirements, and each pod's NodeSelector pins it round-robin to one
+// specific NodePool. This defeats the parallelizeUntil short-circuit that would
+// otherwise let identical NodePools succeed on the first workers and skip the
+// remaining templates. It also forces every fan-out to evaluate every template,
+// so the cost of addToNewNodeClaim grows with NodePoolCount.
 func BenchmarkSchedulingMultiNodePool(b *testing.B) {
 	for _, nodePoolCount := range []int{5, 10, 20} {
 		for _, podCount := range []int{100, 500, 1000} {
 			b.Run(fmt.Sprintf("%dNP_%dPods", nodePoolCount, podCount), func(b *testing.B) {
-				benchmarkSchedulerMultiNodePool(b, makeDiversePods(podCount), nodePoolCount)
+				benchmarkSchedulerMultiNodePool(b, makeDiversePodsPinnedRoundRobin(podCount, nodePoolCount), nodePoolCount)
 			})
 		}
 	}
+}
+
+// makeDiversePodsPinnedRoundRobin returns diverse pods with each pod's
+// NodeSelector set to nodePoolIndexLabel = (podIndex mod nodePoolCount). This
+// keeps the workload diversity of makeDiversePods while ensuring every pod
+// matches exactly one NodePool template.
+func makeDiversePodsPinnedRoundRobin(count, nodePoolCount int) []*corev1.Pod {
+	pods := makeDiversePods(count)
+	for i, p := range pods {
+		if p.Spec.NodeSelector == nil {
+			p.Spec.NodeSelector = map[string]string{}
+		}
+		p.Spec.NodeSelector[nodePoolIndexLabel] = fmt.Sprintf("%d", i%nodePoolCount)
+	}
+	return pods
 }
 
 func benchmarkSchedulerMultiNodePool(b *testing.B, pods []*corev1.Pod, nodePoolCount int, opts ...scheduling.Options) {
@@ -159,6 +189,17 @@ func setupMultiNodePoolScheduler(ctx context.Context, pods []*corev1.Pod, nodePo
 				Limits: v1.Limits{
 					corev1.ResourceCPU:    resource.MustParse("10000000"),
 					corev1.ResourceMemory: resource.MustParse("10000000Gi"),
+				},
+				Template: v1.NodeClaimTemplate{
+					Spec: v1.NodeClaimTemplateSpec{
+						Requirements: []v1.NodeSelectorRequirementWithMinValues{
+							{
+								Key:      nodePoolIndexLabel,
+								Operator: corev1.NodeSelectorOpIn,
+								Values:   []string{fmt.Sprintf("%d", i)},
+							},
+						},
+					},
 				},
 			},
 		})
