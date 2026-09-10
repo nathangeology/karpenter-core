@@ -21,7 +21,6 @@ package disruption_test
 import (
 	"context"
 	"fmt"
-	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -63,9 +62,6 @@ import (
 // for the target node instead of the full pod list. That keeps setup at 1000
 // nodes in the sub-minute range instead of the tens of minutes an envtest
 // apiserver + etcd round-trip per object costs.
-//
-// Benches are gated behind the test_performance build tag so this file is
-// invisible to normal `go test ./...` invocations.
 //
 // The maximum cluster size across all benches is populated once and all sub-
 // sizes are prefix-slices of the same candidate list, amortizing setup cost.
@@ -143,20 +139,17 @@ func setupBenchOnce(b *testing.B) {
 	benchNodeClaims, benchNodes = createBenchClusterState(b, benchMaxNodes, benchNodePools, benchInstType, off, rs)
 }
 
-// pickExpensiveOnDemand returns the most expensive on-demand instance type.
-// Consolidation attempts to find a cheaper replacement; picking the top
-// keeps filterByPrice from returning empty.
+// pickExpensiveOnDemand keeps consolidation's filterByPrice from ever returning
+// empty by handing it the highest-priced on-demand type as the starting point.
 func pickExpensiveOnDemand(its []*cloudprovider.InstanceType) *cloudprovider.InstanceType {
 	ods := lo.Filter(its, func(it *cloudprovider.InstanceType, _ int) bool {
-		for _, o := range it.Offerings.Available() {
-			if o.Requirements.Get(v1.CapacityTypeLabelKey).Any() == v1.CapacityTypeOnDemand {
-				return true
-			}
-		}
-		return false
+		return lo.ContainsBy(it.Offerings.Available(), func(o *cloudprovider.Offering) bool {
+			return o.Requirements.Get(v1.CapacityTypeLabelKey).Any() == v1.CapacityTypeOnDemand
+		})
 	})
-	sort.Slice(ods, func(i, j int) bool { return ods[i].Offerings.Cheapest().Price < ods[j].Offerings.Cheapest().Price })
-	return ods[len(ods)-1]
+	return lo.MaxBy(ods, func(a, b *cloudprovider.InstanceType) bool {
+		return a.Offerings.Cheapest().Price > b.Offerings.Cheapest().Price
+	})
 }
 
 func createBenchNodePools(b *testing.B, count int) []*v1.NodePool {
@@ -281,8 +274,8 @@ func buildBenchPod(idx int, nodeName string, rs client.Object, antiSel metav1.La
 	return pod
 }
 
-// candidatesForBench builds fresh disruption.Candidate values against the
-// pre-populated cluster and returns the first numNodes of them.
+// candidatesForBench resets cluster.consolidated so GetCandidates re-emits
+// the shared cluster's nodes every iteration; caller times only ComputeCommands.
 func candidatesForBench(b *testing.B, m disruption.Method, numNodes int) (map[string]int, []*disruption.Candidate) {
 	b.Helper()
 	benchCluster.MarkUnconsolidated()
