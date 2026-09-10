@@ -84,7 +84,6 @@ const benchMaxNodes = 1000
 var (
 	benchOnce       sync.Once
 	benchCtx        context.Context
-	benchCancel     context.CancelFunc
 	benchClient     client.Client
 	benchClock      *clocktesting.FakeClock
 	benchCP         *fake.CloudProvider
@@ -101,163 +100,185 @@ var (
 
 func setupBench(b *testing.B) {
 	b.Helper()
-	benchOnce.Do(func() {
-		log.SetLogger(logging.NopLogger)
-		benchClock = clocktesting.NewFakeClock(stdtime.Now())
-		benchCtx, benchCancel = context.WithCancel(TestContextWithLogger(b))
-		benchCtx = injection.WithControllerName(benchCtx, "disruption-bench")
-		benchCtx = options.ToContext(benchCtx, test.Options())
+	benchOnce.Do(func() { setupBenchOnce(b) })
+}
 
-		// karpenter/v1 and test/v1alpha1 register themselves with
-		// scheme.Scheme in their init() functions; blank-import above.
-		benchClient = fakecr.NewClientBuilder().
-			WithScheme(scheme.Scheme).
-			WithStatusSubresource(&v1.NodeClaim{}, &v1.NodePool{}).
-			WithIndex(&corev1.Pod{}, "spec.nodeName", func(obj client.Object) []string {
-				return []string{obj.(*corev1.Pod).Spec.NodeName}
-			}).
-			Build()
+func setupBenchOnce(b *testing.B) {
+	b.Helper()
+	log.SetLogger(logging.NopLogger)
+	benchClock = clocktesting.NewFakeClock(stdtime.Now())
+	// Bench context lives for the whole test binary; no cancel needed.
+	benchCtx = TestContextWithLogger(b)
+	benchCtx = injection.WithControllerName(benchCtx, "disruption-bench")
+	benchCtx = options.ToContext(benchCtx, test.Options())
 
-		benchCP = fake.NewCloudProvider()
-		benchCP.InstanceTypes = fake.InstanceTypesAssorted()
-		benchClusterCst = cost.NewClusterCost(benchCtx, benchCP, benchClient)
-		benchCluster = pstate.NewCluster(benchClock, benchClient, benchCP)
-		benchRecorder = test.NewEventRecorder()
-		draCtl := deviceallocation.NewController(benchClient)
-		benchProv = provisioning.NewProvisioner(benchClient, benchRecorder, benchCP, benchCluster, benchClock, draCtl, virtualpods.NewVirtualPodCache(benchClient))
-		benchQueue = disruption.NewQueue(benchClient, benchRecorder, benchCluster, benchClock, benchProv)
+	// karpenter/v1 and test/v1alpha1 register themselves with scheme.Scheme
+	// in their init() functions (blank-imported above).
+	benchClient = fakecr.NewClientBuilder().
+		WithScheme(scheme.Scheme).
+		WithStatusSubresource(&v1.NodeClaim{}, &v1.NodePool{}).
+		WithIndex(&corev1.Pod{}, "spec.nodeName", func(obj client.Object) []string {
+			return []string{obj.(*corev1.Pod).Spec.NodeName}
+		}).
+		Build()
 
-		// Pick the most expensive on-demand instance type as the cluster shape.
-		// Consolidation attempts to find a cheaper replacement; every other
-		// type is cheaper, so filterByPrice always has candidates.
-		its := lo.Filter(benchCP.InstanceTypes, func(it *cloudprovider.InstanceType, _ int) bool {
-			for _, o := range it.Offerings.Available() {
-				if o.Requirements.Get(v1.CapacityTypeLabelKey).Any() == v1.CapacityTypeOnDemand {
-					return true
-				}
-			}
-			return false
-		})
-		sort.Slice(its, func(i, j int) bool { return its[i].Offerings.Cheapest().Price < its[j].Offerings.Cheapest().Price })
-		benchInstType = its[len(its)-1]
-		off := benchInstType.Offerings.Available()[0]
-		zone := off.Requirements.Get(corev1.LabelTopologyZone).Any()
-		capType := off.Requirements.Get(v1.CapacityTypeLabelKey).Any()
+	benchCP = fake.NewCloudProvider()
+	benchCP.InstanceTypes = fake.InstanceTypesAssorted()
+	benchClusterCst = cost.NewClusterCost(benchCtx, benchCP, benchClient)
+	benchCluster = pstate.NewCluster(benchClock, benchClient, benchCP)
+	benchRecorder = test.NewEventRecorder()
+	draCtl := deviceallocation.NewController(benchClient)
+	benchProv = provisioning.NewProvisioner(benchClient, benchRecorder, benchCP, benchCluster, benchClock, draCtl, virtualpods.NewVirtualPodCache(benchClient))
+	benchQueue = disruption.NewQueue(benchClient, benchRecorder, benchCluster, benchClock, benchProv)
 
-		benchNodePools = test.NodePools(3, v1.NodePool{
-			Spec: v1.NodePoolSpec{
-				Disruption: v1.Disruption{
-					ConsolidationPolicy: v1.ConsolidationPolicyWhenEmptyOrUnderutilized,
-					ConsolidateAfter:    v1.MustParseNillableDuration("0s"),
-					Budgets:             []v1.Budget{{Nodes: "100%"}},
-				},
-			},
-		})
-		for _, np := range benchNodePools {
-			if err := benchClient.Create(benchCtx, np); err != nil {
-				b.Fatalf("create nodepool: %v", err)
+	benchInstType = pickExpensiveOnDemand(benchCP.InstanceTypes)
+	off := benchInstType.Offerings.Available()[0]
+
+	benchNodePools = createBenchNodePools(b, 3)
+
+	rs := test.ReplicaSet()
+	if err := benchClient.Create(benchCtx, rs); err != nil {
+		b.Fatalf("create replicaset: %v", err)
+	}
+	benchNodeClaims, benchNodes = createBenchClusterState(b, benchMaxNodes, benchNodePools, benchInstType, off, rs)
+}
+
+// pickExpensiveOnDemand returns the most expensive on-demand instance type.
+// Consolidation attempts to find a cheaper replacement; picking the top
+// keeps filterByPrice from returning empty.
+func pickExpensiveOnDemand(its []*cloudprovider.InstanceType) *cloudprovider.InstanceType {
+	ods := lo.Filter(its, func(it *cloudprovider.InstanceType, _ int) bool {
+		for _, o := range it.Offerings.Available() {
+			if o.Requirements.Get(v1.CapacityTypeLabelKey).Any() == v1.CapacityTypeOnDemand {
+				return true
 			}
 		}
-
-		rs := test.ReplicaSet()
-		if err := benchClient.Create(benchCtx, rs); err != nil {
-			b.Fatalf("create replicaset: %v", err)
-		}
-
-		benchNodeClaims = make([]*v1.NodeClaim, 0, benchMaxNodes)
-		benchNodes = make([]*corev1.Node, 0, benchMaxNodes)
-		antiSelector := metav1.LabelSelector{MatchLabels: map[string]string{"bench": "stress"}}
-		for i := 0; i < benchMaxNodes; i++ {
-			np := benchNodePools[i%len(benchNodePools)]
-			nc, nd := test.NodeClaimAndNode(v1.NodeClaim{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels: map[string]string{
-						v1.NodePoolLabelKey:            np.Name,
-						corev1.LabelInstanceTypeStable: benchInstType.Name,
-						v1.CapacityTypeLabelKey:        capType,
-						corev1.LabelTopologyZone:       zone,
-					},
-				},
-				Status: v1.NodeClaimStatus{
-					Allocatable: map[corev1.ResourceName]resource.Quantity{
-						corev1.ResourceCPU:    resource.MustParse("32"),
-						corev1.ResourceMemory: resource.MustParse("128Gi"),
-						corev1.ResourcePods:   resource.MustParse("100"),
-					},
-				},
-			})
-			// Mark as Launched/Registered/Initialized so the state controller
-			// treats the node as usable, and Consolidatable so it is a valid
-			// disruption candidate.
-			nc.StatusConditions().SetTrue(v1.ConditionTypeLaunched)
-			nc.StatusConditions().SetTrue(v1.ConditionTypeRegistered)
-			nc.StatusConditions().SetTrue(v1.ConditionTypeInitialized)
-			nc.StatusConditions().SetTrue(v1.ConditionTypeConsolidatable)
-			// Match ExpectMakeNodesReady/Initialized: taint-free, Ready=True,
-			// registered+initialized labels set.
-			nd.Spec.Taints = nil
-			if nd.Labels == nil {
-				nd.Labels = map[string]string{}
-			}
-			nd.Labels[v1.NodeRegisteredLabelKey] = "true"
-			nd.Labels[v1.NodeInitializedLabelKey] = "true"
-			nd.Status.Phase = corev1.NodeRunning
-			nd.Status.Conditions = []corev1.NodeCondition{{
-				Type:               corev1.NodeReady,
-				Status:             corev1.ConditionTrue,
-				LastHeartbeatTime:  metav1.NewTime(benchClock.Now()),
-				LastTransitionTime: metav1.NewTime(benchClock.Now()),
-				Reason:             "KubeletReady",
-			}}
-			if err := benchClient.Create(benchCtx, nc); err != nil {
-				b.Fatalf("create nodeclaim: %v", err)
-			}
-			if err := benchClient.Status().Update(benchCtx, nc); err != nil {
-				b.Fatalf("status update nodeclaim: %v", err)
-			}
-			if err := benchClient.Create(benchCtx, nd); err != nil {
-				b.Fatalf("create node: %v", err)
-			}
-			if err := benchClient.Status().Update(benchCtx, nd); err != nil {
-				b.Fatalf("status update node: %v", err)
-			}
-
-			pod := test.Pod(test.PodOptions{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels: map[string]string{
-						"bench": "stress",
-						"app":   fmt.Sprintf("bench-%d", i),
-					},
-					OwnerReferences: []metav1.OwnerReference{{
-						APIVersion:         "apps/v1",
-						Kind:               "ReplicaSet",
-						Name:               rs.Name,
-						UID:                rs.UID,
-						Controller:         lo.ToPtr(true),
-						BlockOwnerDeletion: lo.ToPtr(true),
-					}},
-				},
-				PodAntiRequirements: []corev1.PodAffinityTerm{{
-					LabelSelector: &antiSelector,
-					TopologyKey:   corev1.LabelHostname,
-				}},
-				ResourceRequirements: corev1.ResourceRequirements{
-					Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m")},
-				},
-			})
-			pod.Spec.NodeName = nd.Name
-			if err := benchClient.Create(benchCtx, pod); err != nil {
-				b.Fatalf("create pod: %v", err)
-			}
-
-			benchCluster.UpdateNodeClaim(nc)
-			if err := benchCluster.UpdateNode(benchCtx, nd); err != nil {
-				b.Fatalf("cluster.UpdateNode: %v", err)
-			}
-			benchNodeClaims = append(benchNodeClaims, nc)
-			benchNodes = append(benchNodes, nd)
-		}
+		return false
 	})
+	sort.Slice(ods, func(i, j int) bool { return ods[i].Offerings.Cheapest().Price < ods[j].Offerings.Cheapest().Price })
+	return ods[len(ods)-1]
+}
+
+func createBenchNodePools(b *testing.B, count int) []*v1.NodePool {
+	b.Helper()
+	nps := test.NodePools(count, v1.NodePool{
+		Spec: v1.NodePoolSpec{
+			Disruption: v1.Disruption{
+				ConsolidationPolicy: v1.ConsolidationPolicyWhenEmptyOrUnderutilized,
+				ConsolidateAfter:    v1.MustParseNillableDuration("0s"),
+				Budgets:             []v1.Budget{{Nodes: "100%"}},
+			},
+		},
+	})
+	for _, np := range nps {
+		if err := benchClient.Create(benchCtx, np); err != nil {
+			b.Fatalf("create nodepool: %v", err)
+		}
+	}
+	return nps
+}
+
+func createBenchClusterState(b *testing.B, n int, nps []*v1.NodePool, inst *cloudprovider.InstanceType, off *cloudprovider.Offering, rs client.Object) ([]*v1.NodeClaim, []*corev1.Node) {
+	b.Helper()
+	zone := off.Requirements.Get(corev1.LabelTopologyZone).Any()
+	capType := off.Requirements.Get(v1.CapacityTypeLabelKey).Any()
+	ncs := make([]*v1.NodeClaim, 0, n)
+	nds := make([]*corev1.Node, 0, n)
+	antiSel := metav1.LabelSelector{MatchLabels: map[string]string{"bench": "stress"}}
+	for i := 0; i < n; i++ {
+		np := nps[i%len(nps)]
+		nc, nd := buildBenchNodeClaimAndNode(np.Name, inst.Name, capType, zone)
+		if err := benchClient.Create(benchCtx, nc); err != nil {
+			b.Fatalf("create nodeclaim: %v", err)
+		}
+		if err := benchClient.Status().Update(benchCtx, nc); err != nil {
+			b.Fatalf("status update nodeclaim: %v", err)
+		}
+		if err := benchClient.Create(benchCtx, nd); err != nil {
+			b.Fatalf("create node: %v", err)
+		}
+		if err := benchClient.Status().Update(benchCtx, nd); err != nil {
+			b.Fatalf("status update node: %v", err)
+		}
+		pod := buildBenchPod(i, nd.Name, rs, antiSel)
+		if err := benchClient.Create(benchCtx, pod); err != nil {
+			b.Fatalf("create pod: %v", err)
+		}
+		benchCluster.UpdateNodeClaim(nc)
+		if err := benchCluster.UpdateNode(benchCtx, nd); err != nil {
+			b.Fatalf("cluster.UpdateNode: %v", err)
+		}
+		ncs = append(ncs, nc)
+		nds = append(nds, nd)
+	}
+	return ncs, nds
+}
+
+func buildBenchNodeClaimAndNode(nodePool, instanceType, capType, zone string) (*v1.NodeClaim, *corev1.Node) {
+	nc, nd := test.NodeClaimAndNode(v1.NodeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Labels: map[string]string{
+				v1.NodePoolLabelKey:            nodePool,
+				corev1.LabelInstanceTypeStable: instanceType,
+				v1.CapacityTypeLabelKey:        capType,
+				corev1.LabelTopologyZone:       zone,
+			},
+		},
+		Status: v1.NodeClaimStatus{
+			Allocatable: map[corev1.ResourceName]resource.Quantity{
+				corev1.ResourceCPU:    resource.MustParse("32"),
+				corev1.ResourceMemory: resource.MustParse("128Gi"),
+				corev1.ResourcePods:   resource.MustParse("100"),
+			},
+		},
+	})
+	nc.StatusConditions().SetTrue(v1.ConditionTypeLaunched)
+	nc.StatusConditions().SetTrue(v1.ConditionTypeRegistered)
+	nc.StatusConditions().SetTrue(v1.ConditionTypeInitialized)
+	nc.StatusConditions().SetTrue(v1.ConditionTypeConsolidatable)
+	nd.Spec.Taints = nil
+	if nd.Labels == nil {
+		nd.Labels = map[string]string{}
+	}
+	nd.Labels[v1.NodeRegisteredLabelKey] = "true"
+	nd.Labels[v1.NodeInitializedLabelKey] = "true"
+	nd.Status.Phase = corev1.NodeRunning
+	nd.Status.Conditions = []corev1.NodeCondition{{
+		Type:               corev1.NodeReady,
+		Status:             corev1.ConditionTrue,
+		LastHeartbeatTime:  metav1.NewTime(benchClock.Now()),
+		LastTransitionTime: metav1.NewTime(benchClock.Now()),
+		Reason:             "KubeletReady",
+	}}
+	return nc, nd
+}
+
+func buildBenchPod(idx int, nodeName string, rs client.Object, antiSel metav1.LabelSelector) *corev1.Pod {
+	pod := test.Pod(test.PodOptions{
+		ObjectMeta: metav1.ObjectMeta{
+			Labels: map[string]string{
+				"bench": "stress",
+				"app":   fmt.Sprintf("bench-%d", idx),
+			},
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion:         "apps/v1",
+				Kind:               "ReplicaSet",
+				Name:               rs.GetName(),
+				UID:                rs.GetUID(),
+				Controller:         lo.ToPtr(true),
+				BlockOwnerDeletion: lo.ToPtr(true),
+			}},
+		},
+		PodAntiRequirements: []corev1.PodAffinityTerm{{
+			LabelSelector: &antiSel,
+			TopologyKey:   corev1.LabelHostname,
+		}},
+		ResourceRequirements: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m")},
+		},
+	})
+	pod.Spec.NodeName = nodeName
+	return pod
 }
 
 // candidatesForBench builds fresh disruption.Candidate values against the
