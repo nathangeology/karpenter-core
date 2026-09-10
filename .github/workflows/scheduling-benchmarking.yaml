@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        path: ["pkg/controllers/provisioning/scheduling"]
+        path: ["pkg/controllers/provisioning/scheduling", "pkg/controllers/disruption"]
     uses: ./.github/workflows/run-bench-test.yaml
     secrets: inherit
     with:
@@ -27,10 +27,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        path: ["pkg/controllers/provisioning/scheduling"]
+        path: ["pkg/controllers/provisioning/scheduling", "pkg/controllers/disruption"]
     uses: ./.github/workflows/run-bench-test.yaml
     secrets: inherit
     with:
       path: ${{ matrix.path }}
-      runName: after-${{ strategy.job-index }}  
+      runName: after-${{ strategy.job-index }}
       githubSha: ${{ github.sha }}
