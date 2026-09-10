@@ -24,6 +24,7 @@ import (
 	"sort"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/samber/lo"
 	corev1 "k8s.io/api/core/v1"
@@ -31,7 +32,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/scheme"
 	clocktesting "k8s.io/utils/clock/testing"
-	stdtime "time"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	fakecr "sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -106,7 +106,7 @@ func setupBench(b *testing.B) {
 func setupBenchOnce(b *testing.B) {
 	b.Helper()
 	log.SetLogger(logging.NopLogger)
-	benchClock = clocktesting.NewFakeClock(stdtime.Now())
+	benchClock = clocktesting.NewFakeClock(time.Now())
 	// Bench context lives for the whole test binary; no cancel needed.
 	benchCtx = TestContextWithLogger(b)
 	benchCtx = injection.WithControllerName(benchCtx, "disruption-bench")
