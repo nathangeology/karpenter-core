@@ -18,6 +18,7 @@ package deletioncost_test
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 
@@ -41,6 +42,46 @@ import (
 	"sigs.k8s.io/karpenter/pkg/test/v1alpha1"
 	. "sigs.k8s.io/karpenter/pkg/utils/testing"
 )
+
+// nodeRankInfo carries the assertion-visible slots for a single node's
+// classification in a RankNodes result. Tests build it via rankInfoFor,
+// which folds the three RankNodes return slices into a name-keyed lookup
+// so per-test assertions read as declarative equalities.
+type nodeRankInfo struct {
+	rank    int
+	cleanup bool
+	found   bool
+}
+
+// rankInfoFor returns the rank/cleanup slot for a node name across the
+// three RankNodes return slices. Rank comes from deletioncost.RankForBC for
+// Groups B/C entries; Group A returns math.MinInt32; Group D returns
+// cleanup=true with rank unused.
+func rankInfoFor(name string, groupA, groupBC, groupD []*state.StateNode) nodeRankInfo {
+	for _, n := range groupA {
+		if n.Node != nil && n.Node.Name == name {
+			return nodeRankInfo{rank: math.MinInt32, cleanup: false, found: true}
+		}
+	}
+	for i, n := range groupBC {
+		if n.Node != nil && n.Node.Name == name {
+			return nodeRankInfo{rank: deletioncost.RankForBC(i, len(groupBC)), cleanup: false, found: true}
+		}
+	}
+	for _, n := range groupD {
+		if n.Node != nil && n.Node.Name == name {
+			return nodeRankInfo{cleanup: true, found: true}
+		}
+	}
+	return nodeRankInfo{}
+}
+
+// totalRanked returns the aggregate node count across the three RankNodes
+// return slices. Used by tests that want the pre-cap size regardless of
+// which partition a node landed in.
+func totalRanked(groupA, groupBC, groupD []*state.StateNode) int {
+	return len(groupA) + len(groupBC) + len(groupD)
+}
 
 var ctx context.Context
 var env *test.Environment

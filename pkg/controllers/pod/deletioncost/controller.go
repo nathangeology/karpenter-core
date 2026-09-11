@@ -40,18 +40,15 @@ import (
 
 const (
 	reconcileInterval = time.Minute
-	// maxNodesPerCycle bounds the Group B/C/D nodes actually annotated per
-	// reconcile. The pre-filter drops no-op nodes before the cap, so this
-	// is a ceiling on nodes-that-mutate. With ~30 pods/node this bounds
+	// maxNodesPerCycle bounds the Groups B/C/D nodes actually annotated per
+	// reconcile. Group A nodes are exempt. With ~30 pods/node this bounds
 	// worst-case per-cycle pod writes near the RFC's 1,500 write target.
-	// Group A nodes are exempt (see capNodeRanks).
 	maxNodesPerCycle = 50
 )
 
 // Controller ranks Karpenter-managed nodes by consolidation preference each
 // cycle and enqueues per-pod annotation writes on the fire-and-forget Queue.
-// Reconcile is serialized by the singleton reconciler adapter, so the
-// per-controller fields below are written without explicit synchronization.
+// Reconcile is serialized by the singleton reconciler adapter.
 type Controller struct {
 	clock         clock.Clock
 	kubeClient    client.Client
@@ -90,11 +87,8 @@ func (c *Controller) Name() string {
 }
 
 // Reconcile ranks the cluster's nodes and enqueues annotation writes on the
-// Queue. Feature-gate enforcement is at registration (see
-// pkg/controllers/controllers.go); if the gate is off this method is never
-// invoked. Annotation writes are fire-and-forget: this Reconcile does not
-// wait for the Queue to drain, so a stuck annotation write does not stall
-// the ranking loop.
+// Queue. Annotation writes are fire-and-forget: this Reconcile does not wait
+// for the Queue to drain.
 func (c *Controller) Reconcile(ctx context.Context) (reconciler.Result, error) {
 	ctx = injection.WithControllerName(ctx, c.Name())
 
@@ -107,12 +101,9 @@ func (c *Controller) Reconcile(ctx context.Context) (reconciler.Result, error) {
 		return reconciler.Result{RequeueAfter: reconcileInterval}, nil
 	}
 
-	// Best-effort snapshot: iterate the state.Cluster under its RLock and
-	// accumulate pointer aliases. state.Cluster occasionally mutates
-	// StateNode fields in place (e.g. clearing .Node on delete), so torn
-	// reads are possible mid-cycle. That is acceptable here because
-	// annotation writes are best-effort — the next reconcile picks up any
-	// drift.
+	// Best-effort snapshot of state.Cluster: pointer aliases only. Torn
+	// reads are acceptable because annotation writes are best-effort and
+	// the next reconcile picks up any drift.
 	var nodes []*state.StateNode
 	for n := range c.cluster.Nodes() {
 		nodes = append(nodes, n)
@@ -121,72 +112,125 @@ func (c *Controller) Reconcile(ctx context.Context) (reconciler.Result, error) {
 		return reconciler.Result{RequeueAfter: reconcileInterval}, nil
 	}
 
-	// Delegate map construction to the disruption package so the two
-	// controllers share instance-type lookups and stay in lockstep on which
-	// NodePools/instance types feed price + reschedule-cost math.
+	// Delegate map construction to the disruption package so PDC and
+	// consolidation share instance-type lookups.
 	nodePoolMap, nodePoolToInstanceTypesMap, err := disruption.BuildNodePoolMap(ctx, c.kubeClient, c.cloudProvider)
 	if err != nil {
 		return reconciler.Result{}, fmt.Errorf("building node pool map, %w", err)
 	}
 
-	nodeRanks, err := RankNodes(ctx, c.kubeClient, c.clock, nodes, nodePoolMap, nodePoolToInstanceTypesMap)
+	groupA, groupBC, groupD, err := RankNodes(ctx, c.kubeClient, c.clock, nodes, nodePoolMap, nodePoolToInstanceTypesMap)
 	if err != nil {
 		return reconciler.Result{}, fmt.Errorf("ranking nodes, %w", err)
 	}
-	nodeRanks = filterNoOpNodes(nodeRanks)
-	nodeRanks = capNodeRanks(nodeRanks, maxNodesPerCycle)
-	nodesRanked.Set(float64(len(nodeRanks)), noLabels)
+	annotated := c.enqueueAnnotationWrites(ctx, groupA, groupBC, groupD)
+	nodesRanked.Set(float64(annotated), noLabels)
 
-	c.enqueueAnnotationWrites(nodeRanks)
-
-	// Advance the skip cursor only after enqueueing succeeded. If a future
-	// error path is introduced above this line, this ordering preserves
-	// retry-on-same-state semantics.
+	// Advance the skip cursor only after enqueueing succeeded.
 	c.lastConsolidationState = currentState
 
-	if len(nodeRanks) > 0 {
-		log.FromContext(ctx).V(1).WithValues("nodeCount", len(nodeRanks)).Info("enqueued pod deletion cost annotation writes")
+	if annotated > 0 {
+		log.FromContext(ctx).V(1).WithValues("nodeCount", annotated).Info("enqueued pod deletion cost annotation writes")
 	}
 	return reconciler.Result{RequeueAfter: reconcileInterval}, nil
 }
 
-// enqueueAnnotationWrites hands each pod's desired annotation state off to
-// the fire-and-forget Queue. The Queue's Reconcile method decides
-// per-pod whether to write or skip and handles retry via controller-runtime.
-func (c *Controller) enqueueAnnotationWrites(nodeRanks []NodeRank) {
-	for i := range nodeRanks {
-		nr := &nodeRanks[i]
-		for _, pod := range nr.Pods {
-			c.queue.Add(pod, nr.Rank, nr.CleanupOnly)
-		}
-	}
+// enqueueAnnotationWrites walks the ranked groups and pushes per-pod
+// annotation writes onto the Queue. Ranks are derived from position within
+// groupBC via RankForBC. Group A is uncapped; Groups B/C/D share a per-
+// cycle cap of maxNodesPerCycle. Nodes whose pods already carry the planned
+// annotation state are skipped so they don't consume the cap. Pods are
+// read from the informer cache on demand rather than cached in a struct.
+// Returns the count of nodes actually enqueued (drives the nodes_ranked
+// gauge).
+func (c *Controller) enqueueAnnotationWrites(ctx context.Context, groupA, groupBC, groupD []*state.StateNode) int {
+	total := c.enqueueGroupA(ctx, groupA)
+	written := c.enqueueRankedBC(ctx, groupBC, maxNodesPerCycle)
+	written += c.enqueueCleanup(ctx, groupD, maxNodesPerCycle-written)
+	return total + written
 }
 
-// filterNoOpNodes drops entries whose per-pod annotations already match the
-// planned state. Otherwise these no-op nodes would consume slots in the
-// per-cycle cap without mutating any pod. Group A nodes carry the
-// math.MinInt32 sentinel and are always admitted so they annotate promptly.
-func filterNoOpNodes(nodeRanks []NodeRank) []NodeRank {
-	filtered := nodeRanks[:0]
-	for _, nr := range nodeRanks {
-		if nr.Rank == math.MinInt32 || nodeMutatesAnyPod(nr) {
-			filtered = append(filtered, nr)
+// enqueueGroupA writes the math.MinInt32 sentinel to every non-no-op Group
+// A node. Group A is uncapped; disrupted-tainted or marked-for-deletion
+// nodes always annotate promptly.
+func (c *Controller) enqueueGroupA(ctx context.Context, nodes []*state.StateNode) int {
+	count := 0
+	for _, node := range nodes {
+		pods, _ := node.Pods(ctx, c.kubeClient)
+		if !nodeMutatesAnyPod(pods, math.MinInt32, false) {
+			continue
 		}
+		for _, pod := range pods {
+			c.queue.Add(pod, math.MinInt32, false)
+		}
+		count++
 	}
-	return filtered
+	return count
 }
 
-func nodeMutatesAnyPod(nr NodeRank) bool {
-	if nr.CleanupOnly {
-		for _, pod := range nr.Pods {
+// enqueueRankedBC writes sequential ranks to Groups B and C, stopping when
+// budget non-no-op nodes have been enqueued. Rank per position is
+// RankForBC(i, len(nodes)).
+func (c *Controller) enqueueRankedBC(ctx context.Context, nodes []*state.StateNode, budget int) int {
+	if budget <= 0 {
+		return 0
+	}
+	n := len(nodes)
+	count := 0
+	for i, node := range nodes {
+		if count >= budget {
+			break
+		}
+		rank := RankForBC(i, n)
+		pods, _ := node.Pods(ctx, c.kubeClient)
+		if !nodeMutatesAnyPod(pods, rank, false) {
+			continue
+		}
+		for _, pod := range pods {
+			c.queue.Add(pod, rank, false)
+		}
+		count++
+	}
+	return count
+}
+
+// enqueueCleanup clears the pod-deletion-cost annotation on Group D nodes,
+// stopping when budget non-no-op nodes have been enqueued.
+func (c *Controller) enqueueCleanup(ctx context.Context, nodes []*state.StateNode, budget int) int {
+	if budget <= 0 {
+		return 0
+	}
+	count := 0
+	for _, node := range nodes {
+		if count >= budget {
+			break
+		}
+		pods, _ := node.Pods(ctx, c.kubeClient)
+		if !nodeMutatesAnyPod(pods, 0, true) {
+			continue
+		}
+		for _, pod := range pods {
+			c.queue.Add(pod, 0, true)
+		}
+		count++
+	}
+	return count
+}
+
+// nodeMutatesAnyPod reports whether at least one pod on the node would see
+// its pod-deletion-cost annotation change. cleanup=true means "clear if
+// present"; cleanup=false means "match rank".
+func nodeMutatesAnyPod(pods []*corev1.Pod, rank int, cleanup bool) bool {
+	if cleanup {
+		for _, pod := range pods {
 			if _, ok := pod.Annotations[corev1.PodDeletionCost]; ok {
 				return true
 			}
 		}
 		return false
 	}
-	value := strconv.Itoa(nr.Rank)
-	for _, pod := range nr.Pods {
+	value := strconv.Itoa(rank)
+	for _, pod := range pods {
 		if pod.Annotations[corev1.PodDeletionCost] != value {
 			return true
 		}
@@ -194,10 +238,10 @@ func nodeMutatesAnyPod(nr NodeRank) bool {
 	return false
 }
 
-// consolidationStateUnchanged compares currentState to the cursor advanced at
-// the end of the last successful reconcile. It does not mutate the cursor —
-// Reconcile advances lastConsolidationState only after enqueueing succeeds so
-// a mid-reconcile error retries against the same state next cycle.
+// consolidationStateUnchanged compares currentState to the cursor advanced
+// at the end of the last successful reconcile. It does not mutate the
+// cursor; Reconcile advances lastConsolidationState only after enqueueing
+// succeeds so a mid-reconcile error retries against the same state.
 func (c *Controller) consolidationStateUnchanged(ctx context.Context, currentState time.Time) bool {
 	if currentState.Equal(c.lastConsolidationState) {
 		log.FromContext(ctx).V(1).Info("no changes detected, skipping pod deletion cost update")
@@ -205,23 +249,4 @@ func (c *Controller) consolidationStateUnchanged(ctx context.Context, currentSta
 		return true
 	}
 	return false
-}
-
-// capNodeRanks admits every Group A node (Rank == math.MinInt32) and caps the
-// remaining groups (B/C/D) at limit. Group A nodes are already tainted for
-// disruption and expected to be stable once labeled, so labeling churn stays
-// bounded even when Group A exceeds limit.
-func capNodeRanks(nodeRanks []NodeRank, limit int) []NodeRank {
-	groupACount := 0
-	for _, r := range nodeRanks {
-		if r.Rank != math.MinInt32 {
-			break
-		}
-		groupACount++
-	}
-	tail := nodeRanks[groupACount:]
-	if len(tail) > limit {
-		tail = tail[:limit]
-	}
-	return nodeRanks[:groupACount+len(tail)]
 }

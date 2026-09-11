@@ -52,9 +52,9 @@ var (
 			Namespace: metrics.Namespace,
 			Subsystem: podDeletionCostSubsystem,
 			Name:      "pods_updated_total",
-			Help:      "Number of pod deletion cost annotations updated in total. Labeled by result (updated, skipped_unchanged, error). The error label counts per-pod patch failures.",
+			Help:      "Number of pod deletion cost annotations updated in total. Labeled by result (updated, skipped_unchanged, skipped_notfound, skipped_conflict, error). The error label counts per-pod patch failures; skipped_notfound covers pods that vanished before write; skipped_conflict covers writes lost to a racing writer.",
 		},
-		[]opmetrics.Label{{Name: resultLabel, Help: "Outcome of the annotation write (updated, skipped_unchanged, error)."}},
+		[]opmetrics.Label{{Name: resultLabel, Help: "Outcome of the annotation write (updated, skipped_unchanged, skipped_notfound, skipped_conflict, error)."}},
 	)
 	rankingDurationSeconds = opmetrics.NewPrometheusHistogram(
 		crmetrics.Registry,

@@ -31,5 +31,7 @@ const (
 	ResultLabel            = resultLabel
 	ResultUpdated          = "updated"
 	ResultSkippedUnchanged = "skipped_unchanged"
+	ResultSkippedNotFound  = "skipped_notfound"
+	ResultSkippedConflict  = "skipped_conflict"
 	ResultError            = "error"
 )

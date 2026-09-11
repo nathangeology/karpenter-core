@@ -58,6 +58,19 @@ func (c *throttlingClient) Patch(ctx context.Context, obj client.Object, patch c
 	return c.Client.Patch(ctx, obj, patch, opts...)
 }
 
+// notFoundClient wraps a client.Client and returns NotFound on every Patch.
+// Used to verify the queue's Reconcile routes IsNotFound through the
+// skipped_notfound branch. Real apiservers can return either NotFound or
+// Conflict for a stale-RV patch of a deleted object; this client pins the
+// NotFound path deterministically.
+type notFoundClient struct {
+	client.Client
+}
+
+func (c *notFoundClient) Patch(_ context.Context, obj client.Object, _ client.Patch, _ ...client.PatchOption) error {
+	return apierrors.NewNotFound(corev1.Resource("pods"), obj.GetName())
+}
+
 // blockingPatchClient blocks the first Patch invocation in-flight until the
 // caller closes proceed, signaling test setup that Patch has entered via the
 // entered channel. Subsequent Patch calls pass through unblocked. Used to
@@ -335,11 +348,14 @@ var _ = Describe("Annotation", func() {
 			live.Labels["racing-writer"] = "true"
 			Expect(env.Client.Update(ctx, live)).To(Succeed())
 
+			before := counterDelta("karpenter_pod_deletion_cost_pods_updated_total", map[string]string{deletioncost.ResultLabel: deletioncost.ResultSkippedConflict})
 			queue.Add(snapshot, -1, false)
 			result, err := queue.Reconcile(ctx, snapshot)
 			Expect(err).ToNot(HaveOccurred(), "409 must not surface as an error; the queue treats it as terminal")
 			Expect(result).To(BeZero())
 			Expect(queue.Has(snapshot)).To(BeFalse(), "queue must drop the item after Conflict")
+			after := counterDelta("karpenter_pod_deletion_cost_pods_updated_total", map[string]string{deletioncost.ResultLabel: deletioncost.ResultSkippedConflict})
+			Expect(after-before).To(Equal(1.0), "Conflict should increment pods_updated_total{result=skipped_conflict}")
 
 			// Live state preserved: the racing writer's label update stuck,
 			// and the queue's stale-RV patch never landed the annotation.
@@ -352,32 +368,25 @@ var _ = Describe("Annotation", func() {
 		})
 
 		It("should treat NotFound on the patch as skipped and drop the item from the queue", func() {
-			// Apply a pod, enqueue it, then delete it before Reconcile runs.
-			// The Patch call now 404s and the queue must treat that as
-			// terminal (drop the item, return nil) so controller-runtime does
-			// not retry a ghost pod indefinitely.
-			nodeClaims, nodes := test.NodeClaimsAndNodes(1, v1.NodeClaim{
-				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{v1.NodePoolLabelKey: nodePool.Name}},
-				Status:     v1.NodeClaimStatus{Allocatable: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("4"), corev1.ResourceMemory: resource.MustParse("8Gi")}},
-			})
-			ExpectApplied(ctx, env.Client, nodePool)
-			for i := range nodeClaims {
-				ExpectApplied(ctx, env.Client, nodeClaims[i], nodes[i])
-			}
-			pod := rsOwnedPod(test.PodOptions{NodeName: nodes[0].Name})
+			// The wrapping client returns a synthetic NotFound on Patch so
+			// the queue's Reconcile routes deterministically through the
+			// IsNotFound branch. Real apiservers return NotFound when the
+			// target pod has been deleted before the patch lands; controller
+			// -runtime's fake client can return either NotFound or Conflict
+			// depending on RV bookkeeping.
+			pod := rsOwnedPod(test.PodOptions{})
 			ExpectApplied(ctx, env.Client, pod)
-			ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, env.Clock, nodeStateController, nodeClaimStateController, nodes, nodeClaims)
-
-			// Snapshot the applied pod so it carries a ResourceVersion (required
-			// by the optimistic-lock merge patch). Then delete it and call
-			// Reconcile with the snapshot — the Patch API call will 404.
 			live := &corev1.Pod{}
 			Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(pod), live)).To(Succeed())
-			queue.Add(live, -1, false)
-			Expect(env.Client.Delete(ctx, live)).To(Succeed())
-			_, err := queue.Reconcile(ctx, live)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(queue.Has(live)).To(BeFalse())
+
+			q := deletioncost.NewQueue(&notFoundClient{Client: env.Client})
+			before := counterDelta("karpenter_pod_deletion_cost_pods_updated_total", map[string]string{deletioncost.ResultLabel: deletioncost.ResultSkippedNotFound})
+			q.Add(live, -1, false)
+			_, err := q.Reconcile(ctx, live)
+			Expect(err).ToNot(HaveOccurred(), "NotFound must not surface as an error; the queue treats it as terminal")
+			Expect(q.Has(live)).To(BeFalse(), "queue must drop the item after NotFound")
+			after := counterDelta("karpenter_pod_deletion_cost_pods_updated_total", map[string]string{deletioncost.ResultLabel: deletioncost.ResultSkippedNotFound})
+			Expect(after-before).To(Equal(1.0), "NotFound should increment pods_updated_total{result=skipped_notfound}")
 		})
 
 		It("should treat a UID mismatch as a race and drop the reconcile silently", func() {

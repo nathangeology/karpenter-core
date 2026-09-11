@@ -171,10 +171,17 @@ func (q *Queue) Reconcile(ctx context.Context, pod *corev1.Pod) (reconcile.Resul
 		return reconcile.Result{}, nil
 	}
 	// NotFound: pod is already gone. Conflict: another writer raced us and
-	// won; next reconcile will re-observe. Both are Skipped, not errors.
-	if apierrors.IsNotFound(err) || apierrors.IsConflict(err) {
-		log.FromContext(ctx).V(1).WithValues("pod", klog.KObj(pod)).Info("skipping pod annotation update")
-		podsUpdatedTotal.Inc(map[string]string{resultLabel: "skipped_unchanged"})
+	// won; next reconcile will re-observe. Counted separately so dashboards
+	// can distinguish target-disappeared from write-raced retries.
+	if apierrors.IsNotFound(err) {
+		log.FromContext(ctx).V(1).WithValues("pod", klog.KObj(pod)).Info("skipping pod annotation update, target not found")
+		podsUpdatedTotal.Inc(map[string]string{resultLabel: "skipped_notfound"})
+		q.complete(qk)
+		return reconcile.Result{}, nil
+	}
+	if apierrors.IsConflict(err) {
+		log.FromContext(ctx).V(1).WithValues("pod", klog.KObj(pod)).Info("skipping pod annotation update, write raced")
+		podsUpdatedTotal.Inc(map[string]string{resultLabel: "skipped_conflict"})
 		q.complete(qk)
 		return reconcile.Result{}, nil
 	}

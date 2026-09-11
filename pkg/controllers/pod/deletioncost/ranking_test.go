@@ -293,21 +293,21 @@ var _ = Describe("Ranking", func() {
 				stateNodes = append(stateNodes, n)
 			}
 
-			ranks, err := deletioncost.RankNodes(ctx, env.Client, fakeClock, stateNodes, map[string]*v1.NodePool{nodePool.Name: nodePool}, nil)
+			groupA, groupBC, groupD, err := deletioncost.RankNodes(ctx, env.Client, fakeClock, stateNodes, map[string]*v1.NodePool{nodePool.Name: nodePool}, nil)
 			Expect(err).ToNot(HaveOccurred())
-			Expect(ranks).To(HaveLen(2))
+			Expect(totalRanked(groupA, groupBC, groupD)).To(Equal(2))
 
 			// Node 0 (disrupted + do-not-disrupt): Group A, MinInt32,
-			// CleanupOnly=false. Node 1 (normal): Group C, strictly
-			// greater than MinInt32.
-			for _, r := range ranks {
-				if r.Node.Node.Name == nodes[0].Name {
-					Expect(r.CleanupOnly).To(BeFalse(), "disrupted-tainted node must stay in Group A regardless of do-not-disrupt")
-					Expect(r.Rank).To(Equal(int(math.MinInt32)))
-				} else {
-					Expect(r.Rank).To(BeNumerically(">", math.MinInt32))
-				}
-			}
+			// cleanup=false. Node 1 (normal): Group C, strictly greater
+			// than MinInt32.
+			info0 := rankInfoFor(nodes[0].Name, groupA, groupBC, groupD)
+			Expect(info0.found).To(BeTrue())
+			Expect(info0.cleanup).To(BeFalse(), "disrupted-tainted node must stay in Group A regardless of do-not-disrupt")
+			Expect(info0.rank).To(Equal(int(math.MinInt32)))
+
+			info1 := rankInfoFor(nodes[1].Name, groupA, groupBC, groupD)
+			Expect(info1.found).To(BeTrue())
+			Expect(info1.rank).To(BeNumerically(">", math.MinInt32))
 		})
 	})
 
@@ -796,9 +796,9 @@ var _ = Describe("Ranking", func() {
 	// these cases.
 	Context("Edge: direct-helper partition checks", func() {
 		It("should _Edge_ leave RankNodes a no-op on empty node list", func() {
-			ranks, err := deletioncost.RankNodes(ctx, env.Client, fakeClock, nil, map[string]*v1.NodePool{nodePool.Name: nodePool}, nil)
+			groupA, groupBC, groupD, err := deletioncost.RankNodes(ctx, env.Client, fakeClock, nil, map[string]*v1.NodePool{nodePool.Name: nodePool}, nil)
 			Expect(err).ToNot(HaveOccurred())
-			Expect(ranks).To(BeEmpty())
+			Expect(totalRanked(groupA, groupBC, groupD)).To(Equal(0))
 		})
 
 		It("should _Edge_ classify a disrupted node as Group A even without PDB-blocked pods", func() {
@@ -832,20 +832,21 @@ var _ = Describe("Ranking", func() {
 				stateNodes = append(stateNodes, n)
 			}
 
-			ranks, err := deletioncost.RankNodes(ctx, env.Client, fakeClock, stateNodes, map[string]*v1.NodePool{nodePool.Name: nodePool}, nil)
+			groupA, groupBC, groupD, err := deletioncost.RankNodes(ctx, env.Client, fakeClock, stateNodes, map[string]*v1.NodePool{nodePool.Name: nodePool}, nil)
 			Expect(err).ToNot(HaveOccurred())
-			Expect(ranks).To(HaveLen(2))
+			Expect(totalRanked(groupA, groupBC, groupD)).To(Equal(2))
 
-			// Node 0 (disrupted) is Group A → math.MinInt32.
-			// Node 1 (normal) is Group C → strictly greater than MinInt32.
-			for _, r := range ranks {
-				Expect(r.CleanupOnly).To(BeFalse())
-				if r.Node.Node.Name == nodes[0].Name {
-					Expect(r.Rank).To(Equal(int(math.MinInt32)))
-				} else {
-					Expect(r.Rank).To(BeNumerically(">", math.MinInt32))
-				}
-			}
+			// Node 0 (disrupted) is Group A -> math.MinInt32.
+			// Node 1 (normal) is Group C -> strictly greater than MinInt32.
+			info0 := rankInfoFor(nodes[0].Name, groupA, groupBC, groupD)
+			Expect(info0.found).To(BeTrue())
+			Expect(info0.cleanup).To(BeFalse())
+			Expect(info0.rank).To(Equal(int(math.MinInt32)))
+
+			info1 := rankInfoFor(nodes[1].Name, groupA, groupBC, groupD)
+			Expect(info1.found).To(BeTrue())
+			Expect(info1.cleanup).To(BeFalse())
+			Expect(info1.rank).To(BeNumerically(">", math.MinInt32))
 		})
 
 		It("should _Edge_ keep every disrupted+PDB-blocked node at MinInt32 regardless of relative sort order", func() {
@@ -896,28 +897,23 @@ var _ = Describe("Ranking", func() {
 				stateNodes = append(stateNodes, n)
 			}
 
-			ranks, err := deletioncost.RankNodes(ctx, env.Client, fakeClock, stateNodes, map[string]*v1.NodePool{nodePool.Name: nodePool}, nil)
+			groupA, groupBC, groupD, err := deletioncost.RankNodes(ctx, env.Client, fakeClock, stateNodes, map[string]*v1.NodePool{nodePool.Name: nodePool}, nil)
 			Expect(err).ToNot(HaveOccurred())
-			Expect(ranks).To(HaveLen(3))
+			Expect(totalRanked(groupA, groupBC, groupD)).To(Equal(3))
 
-			var node0Rank, node1Rank, node2Rank int
-			for _, r := range ranks {
-				switch r.Node.Node.Name {
-				case nodes[0].Name:
-					node0Rank = r.Rank
-				case nodes[1].Name:
-					node1Rank = r.Rank
-				case nodes[2].Name:
-					node2Rank = r.Rank
-				}
-			}
 			// Both disrupted+blocked nodes get math.MinInt32 (the pod-count
 			// tiebreak doesn't change Group A's sentinel rank; the property
 			// under test is that the sort completes without error and Group A
 			// stays at MinInt32 even with multiple members).
-			Expect(node0Rank).To(Equal(math.MinInt32))
-			Expect(node1Rank).To(Equal(math.MinInt32))
-			Expect(node2Rank).To(BeNumerically(">", math.MinInt32))
+			info0 := rankInfoFor(nodes[0].Name, groupA, groupBC, groupD)
+			info1 := rankInfoFor(nodes[1].Name, groupA, groupBC, groupD)
+			info2 := rankInfoFor(nodes[2].Name, groupA, groupBC, groupD)
+			Expect(info0.found).To(BeTrue())
+			Expect(info1.found).To(BeTrue())
+			Expect(info2.found).To(BeTrue())
+			Expect(info0.rank).To(Equal(math.MinInt32))
+			Expect(info1.rank).To(Equal(math.MinInt32))
+			Expect(info2.rank).To(BeNumerically(">", math.MinInt32))
 		})
 
 		// Bare and StatefulSet pods route their host node to Group D.
@@ -955,21 +951,17 @@ var _ = Describe("Ranking", func() {
 					stateNodes = append(stateNodes, n)
 				}
 
-				ranks, err := deletioncost.RankNodes(ctx, env.Client, fakeClock, stateNodes, map[string]*v1.NodePool{nodePool.Name: nodePool}, nil)
+				groupA, groupBC, groupD, err := deletioncost.RankNodes(ctx, env.Client, fakeClock, stateNodes, map[string]*v1.NodePool{nodePool.Name: nodePool}, nil)
 				Expect(err).ToNot(HaveOccurred())
-				Expect(ranks).To(HaveLen(2))
+				Expect(totalRanked(groupA, groupBC, groupD)).To(Equal(2))
 
-				var node0 deletioncost.NodeRank
-				for _, r := range ranks {
-					if r.Node.Node.Name == nodes[0].Name {
-						node0 = r
-					}
-				}
+				info0 := rankInfoFor(nodes[0].Name, groupA, groupBC, groupD)
+				Expect(info0.found).To(BeTrue())
 				if expectGroupD {
-					Expect(node0.CleanupOnly).To(BeTrue(), "non-RS-owned pod should route its host to Group D")
+					Expect(info0.cleanup).To(BeTrue(), "non-RS-owned pod should route its host to Group D")
 				} else {
-					Expect(node0.CleanupOnly).To(BeFalse(), "Job/DaemonSet-owned or system pods must not push their host to Group D")
-					Expect(node0.Rank).To(BeNumerically(">", math.MinInt32), "expected Group B/C rank for RS/Job/DaemonSet-owned or system pod")
+					Expect(info0.cleanup).To(BeFalse(), "Job/DaemonSet-owned or system pods must not push their host to Group D")
+					Expect(info0.rank).To(BeNumerically(">", math.MinInt32), "expected Group B/C rank for RS/Job/DaemonSet-owned or system pod")
 				}
 			},
 			Entry("bare pod (no owner references) routes to Group D", (*metav1.OwnerReference)(nil), true),
@@ -1087,22 +1079,17 @@ var _ = Describe("Ranking", func() {
 			for n := range cluster.Nodes() {
 				stateNodes = append(stateNodes, n)
 			}
-			ranks, err := deletioncost.RankNodes(ctx, env.Client, fakeClock, stateNodes, map[string]*v1.NodePool{nodePool.Name: nodePool}, itMap)
+			groupA, groupBC, groupD, err := deletioncost.RankNodes(ctx, env.Client, fakeClock, stateNodes, map[string]*v1.NodePool{nodePool.Name: nodePool}, itMap)
 			Expect(err).ToNot(HaveOccurred())
-			Expect(ranks).To(HaveLen(2))
+			Expect(totalRanked(groupA, groupBC, groupD)).To(Equal(2))
 
-			var node0Rank, node1Rank int
-			for _, r := range ranks {
-				switch r.Node.Node.Name {
-				case nodes[0].Name:
-					node0Rank = r.Rank
-				case nodes[1].Name:
-					node1Rank = r.Rank
-				}
-			}
-			// Node 0 (no reschedulable pods, ratio=1.0/1.0=1.0) must rank strictly
-			// deeper than Node 1 (one reschedulable pod, ratio=1.0/≥2.0≤0.5).
-			Expect(node0Rank).To(BeNumerically("<", node1Rank),
+			info0 := rankInfoFor(nodes[0].Name, groupA, groupBC, groupD)
+			info1 := rankInfoFor(nodes[1].Name, groupA, groupBC, groupD)
+			Expect(info0.found).To(BeTrue())
+			Expect(info1.found).To(BeTrue())
+			// Node 0 (no reschedulable pods, ratio=1.0/1.0=1.0) must rank
+			// strictly deeper than Node 1 (one reschedulable pod, ratio<=0.5).
+			Expect(info0.rank).To(BeNumerically("<", info1.rank),
 				"terminating-only node (higher SavingsRatio) must rank ahead of node with live reschedulable pod (lower ratio)")
 		})
 
@@ -1135,12 +1122,12 @@ var _ = Describe("Ranking", func() {
 				stateNodes = append(stateNodes, n)
 			}
 
-			ranks, err := deletioncost.RankNodes(ctx, env.Client, fakeClock, stateNodes, map[string]*v1.NodePool{nodePool.Name: nodePool}, nil)
+			groupA, groupBC, groupD, err := deletioncost.RankNodes(ctx, env.Client, fakeClock, stateNodes, map[string]*v1.NodePool{nodePool.Name: nodePool}, nil)
 			Expect(err).ToNot(HaveOccurred())
-			Expect(ranks).To(HaveLen(2))
-			for _, r := range ranks {
-				Expect(r.Rank).To(BeNumerically(">", math.MinInt32), "no node should reach Group A when the only unowned pod is in kube-system")
-			}
+			Expect(totalRanked(groupA, groupBC, groupD)).To(Equal(2))
+			// No node should end up in Group A when the only unowned pod is
+			// in kube-system.
+			Expect(groupA).To(BeEmpty(), "kube-system bare pods must not push a node to Group A")
 		})
 	})
 
