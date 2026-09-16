@@ -318,7 +318,7 @@ func extractValues(datas []map[string]any, jsonField string) []float64 {
 		if !ok || raw == nil {
 			continue
 		}
-		v, ok := toFloat(raw)
+		v, ok := raw.(float64)
 		if !ok {
 			continue
 		}
@@ -333,15 +333,6 @@ func extractValues(datas []map[string]any, jsonField string) []float64 {
 		values = append(values, v)
 	}
 	return values
-}
-
-// toFloat extracts a float64 from a value produced by encoding/json.Unmarshal
-// into a map[string]any. JSON numbers decode as float64 with the default
-// decoder (no UseNumber), so the single type assertion is exhaustive for this
-// code path.
-func toFloat(v any) (float64, bool) {
-	f, ok := v.(float64)
-	return f, ok
 }
 
 func computeStats(values []float64) stats {
