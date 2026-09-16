@@ -27,6 +27,15 @@ jobs:
       issues: write
     runs-on: ubuntu-latest
     name: ${{ inputs.test_name || format('suite-{0}', inputs.suite) }}
+    # Shared parameters for the four benchmark-action Compare steps below.
+    # Per-step configuration is limited to: name suffix, tool, output file,
+    # external-data path, alert threshold, and fail-on-alert.
+    env:
+      BENCH_NAME_PREFIX: Karpenter Performance (${{ inputs.test_name || inputs.suite }})
+      BENCH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      BENCH_CC_USERS: '@nathangeology'
+      BENCH_COMMENT_ON_ALERT: 'true'
+      BENCH_SUMMARY_ALWAYS: 'true'
     steps:
     - name: Debug workflow_run trigger
       run: |
@@ -75,17 +84,10 @@ jobs:
           ITERATIONS: ${{ inputs.repeat }}
       shell: bash
       run: |
-        OUTPUT_DIR=$(mktemp -d)
+        OUTPUT_DIR="$(mktemp -d)"
         export OUTPUT_DIR
-        echo OUTPUT_DIR="$OUTPUT_DIR" >> "$GITHUB_ENV"
-        for i in $(seq 1 "${ITERATIONS:-1}"); do
-          echo "=== Iteration $i / ${ITERATIONS:-1} ==="
-          TEST_SUITE="$SUITE" make e2etests
-          iter_dir="$OUTPUT_DIR/iter_${i}"
-          mkdir -p "$iter_dir"
-          # Move reports from this iteration into a per-iteration subdirectory
-          find "$OUTPUT_DIR" -maxdepth 1 -name "*_performance_report.json" -exec mv {} "$iter_dir/" \;
-        done
+        echo "OUTPUT_DIR=$OUTPUT_DIR" >> "$GITHUB_ENV"
+        bash .github/scripts/run-perf-iters.sh
     - name: Aggregate and compare against baseline
       if: always() && env.OUTPUT_DIR != '' && inputs.repeat > 1
       env:
@@ -93,30 +95,17 @@ jobs:
       shell: bash
       run: |
         go run ./.github/scripts/perf-aggregate
-    - name: Download previous benchmark data (smaller-tight)
+    # One cache blob for the four benchmark-action Compare steps below.
+    # Each tier writes its baseline file under ./cache/<tier>/benchmark-data.json;
+    # actions/cache save-post persists the whole ./cache tree.
+    # Cache key changed from four per-tier keys; first run on a given branch
+    # after this change will not restore, benchmark-action seeds a fresh baseline.
+    - name: Download previous benchmark data (all tiers)
       if: always() && env.OUTPUT_DIR != '' && inputs.repeat > 1
       uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
       with:
-        path: ./cache-smaller-tight
-        key: ${{ runner.os }}-perf-benchmark-smaller-tight-${{ inputs.test_name || inputs.suite }}
-    - name: Download previous benchmark data (smaller-loose)
-      if: always() && env.OUTPUT_DIR != '' && inputs.repeat > 1
-      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-      with:
-        path: ./cache-smaller-loose
-        key: ${{ runner.os }}-perf-benchmark-smaller-loose-${{ inputs.test_name || inputs.suite }}
-    - name: Download previous benchmark data (bigger-is-better)
-      if: always() && env.OUTPUT_DIR != '' && inputs.repeat > 1
-      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-      with:
-        path: ./cache-bigger
-        key: ${{ runner.os }}-perf-benchmark-bigger-${{ inputs.test_name || inputs.suite }}
-    - name: Download previous benchmark data (cv, informational)
-      if: always() && env.OUTPUT_DIR != '' && inputs.repeat > 1
-      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-      with:
-        path: ./cache-cv
-        key: ${{ runner.os }}-perf-benchmark-cv-${{ inputs.test_name || inputs.suite }}
+        path: ./cache
+        key: ${{ runner.os }}-perf-benchmark-${{ inputs.test_name || inputs.suite }}
     # The batch median regression alerts run below with fail-on-alert: true.
     # An additional CV entry is emitted per metric so a reviewer can see when
     # a batch's within-batch variance grows beyond its historical envelope.
@@ -137,11 +126,10 @@ jobs:
       if: always() && env.OUTPUT_DIR != '' && inputs.repeat > 1
       uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba # v1.22.1
       with:
-        name: Karpenter Performance (${{ inputs.test_name || inputs.suite }}) - smaller-tight
+        name: ${{ env.BENCH_NAME_PREFIX }} - smaller-tight
         tool: customSmallerIsBetter
         output-file-path: ${{ env.OUTPUT_DIR }}/benchmark-results-smaller-tight.json
-        external-data-json-path: ./cache-smaller-tight/benchmark-data.json
-        github-token: ${{ secrets.GITHUB_TOKEN }}
+        external-data-json-path: ./cache/smaller-tight/benchmark-data.json
         # Tight tier: Duration, Controller Peak Memory, Final Nodes. Cross-run
         # batch-median CV for these metrics stayed under 10% across the
         # 15-run sample (see the CV comment below). 150% is ~3 batch-median
@@ -149,55 +137,55 @@ jobs:
         # analytical FP < 1% per (test, metric).
         alert-threshold: '150%'
         fail-on-alert: true
-        comment-on-alert: true
-        alert-comment-cc-users: '@nathangeology'
-        summary-always: true
+        github-token: ${{ env.BENCH_TOKEN }}
+        alert-comment-cc-users: ${{ env.BENCH_CC_USERS }}
+        comment-on-alert: ${{ env.BENCH_COMMENT_ON_ALERT }}
+        summary-always: ${{ env.BENCH_SUMMARY_ALWAYS }}
     - name: Compare smaller-is-better metrics (loose)
       if: always() && env.OUTPUT_DIR != '' && inputs.repeat > 1
       uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba # v1.22.1
       with:
-        name: Karpenter Performance (${{ inputs.test_name || inputs.suite }}) - smaller-loose
+        name: ${{ env.BENCH_NAME_PREFIX }} - smaller-loose
         tool: customSmallerIsBetter
         output-file-path: ${{ env.OUTPUT_DIR }}/benchmark-results-smaller-loose.json
-        external-data-json-path: ./cache-smaller-loose/benchmark-data.json
-        github-token: ${{ secrets.GITHUB_TOKEN }}
+        external-data-json-path: ./cache/smaller-loose/benchmark-data.json
         # Loose tier: Controller CPU (per-test P90 CV 38%, max 44%). A flat
         # 150% here fired analytically on ~5-27% of identical-code batches;
         # 250% pushes analytical per-key FP under 1%. Still catches the
         # PR#2671-shape 3x controller-CPU regression the customer saw
         # (issue #2954), because ratio 3.0 > 2.5. Consolidation Rounds is
         # excluded from both smaller-tier gate files (see main.go
-        # tierInformational) — it lives only in the CV file below.
+        # tierInformational), it lives only in the CV file below.
         alert-threshold: '250%'
         fail-on-alert: true
-        comment-on-alert: true
-        alert-comment-cc-users: '@nathangeology'
-        summary-always: true
+        github-token: ${{ env.BENCH_TOKEN }}
+        alert-comment-cc-users: ${{ env.BENCH_CC_USERS }}
+        comment-on-alert: ${{ env.BENCH_COMMENT_ON_ALERT }}
+        summary-always: ${{ env.BENCH_SUMMARY_ALWAYS }}
     - name: Compare bigger-is-better metrics
       if: always() && env.OUTPUT_DIR != '' && inputs.repeat > 1
       uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba # v1.22.1
       with:
-        name: Karpenter Performance (${{ inputs.test_name || inputs.suite }}) - bigger-is-better
+        name: ${{ env.BENCH_NAME_PREFIX }} - bigger-is-better
         # Utilization and efficiency-score metrics fail when they DROP,
         # so they must not share a group with latency/resource-cost metrics.
         tool: customBiggerIsBetter
         output-file-path: ${{ env.OUTPUT_DIR }}/benchmark-results-bigger.json
-        external-data-json-path: ./cache-bigger/benchmark-data.json
-        github-token: ${{ secrets.GITHUB_TOKEN }}
+        external-data-json-path: ./cache/bigger/benchmark-data.json
         alert-threshold: '150%'
         fail-on-alert: true
-        comment-on-alert: true
-        alert-comment-cc-users: '@nathangeology'
-        summary-always: true
+        github-token: ${{ env.BENCH_TOKEN }}
+        alert-comment-cc-users: ${{ env.BENCH_CC_USERS }}
+        comment-on-alert: ${{ env.BENCH_COMMENT_ON_ALERT }}
+        summary-always: ${{ env.BENCH_SUMMARY_ALWAYS }}
     - name: Compare batch CV (informational only)
       if: always() && env.OUTPUT_DIR != '' && inputs.repeat > 1
       uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba # v1.22.1
       with:
-        name: Karpenter Performance (${{ inputs.test_name || inputs.suite }}) - batch CV
+        name: ${{ env.BENCH_NAME_PREFIX }} - batch CV
         tool: customSmallerIsBetter
         output-file-path: ${{ env.OUTPUT_DIR }}/benchmark-results-cv.json
-        external-data-json-path: ./cache-cv/benchmark-data.json
-        github-token: ${{ secrets.GITHUB_TOKEN }}
+        external-data-json-path: ./cache/cv/benchmark-data.json
         # Threshold is a benchmark-action ratio: alert fires when the
         # current batch CV is >= 2x the previous batch CV for that metric.
         # Derived empirically from 15 push-triggered kind-perf-e2e runs on
@@ -206,13 +194,14 @@ jobs:
         # median CV = 3.8%, per-metric P95/median ratios span 1.7x-7x.
         # Setting threshold to 200% (2x) is the informational analog to
         # the 2 sigma heuristic in @ryan-mist's PR#2994 variance comment
-        # (id 3857936029) — it fires when a batch's within-batch variance
+        # (id 3857936029): it fires when a batch's within-batch variance
         # doubles vs. its prior baseline without gating the pipeline.
         alert-threshold: '200%'
         fail-on-alert: false
-        comment-on-alert: true
-        alert-comment-cc-users: '@nathangeology'
-        summary-always: true
+        github-token: ${{ env.BENCH_TOKEN }}
+        alert-comment-cc-users: ${{ env.BENCH_CC_USERS }}
+        comment-on-alert: ${{ env.BENCH_COMMENT_ON_ALERT }}
+        summary-always: ${{ env.BENCH_SUMMARY_ALWAYS }}
     - name: Upload performance results
       if: always() && env.OUTPUT_DIR != ''
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
