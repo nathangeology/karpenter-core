@@ -32,10 +32,12 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -121,10 +123,12 @@ func main() {
 	}
 	iterations := 1
 	if v := os.Getenv("ITERATIONS"); v != "" {
-		if _, err := fmt.Sscanf(v, "%d", &iterations); err != nil || iterations < 1 {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
 			fmt.Fprintf(os.Stderr, "invalid ITERATIONS=%q: %v\n", v, err)
 			os.Exit(2)
 		}
+		iterations = n
 	}
 	if err := run(outputDir, iterations, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -134,7 +138,7 @@ func main() {
 
 // run performs the aggregation and returns nil on success. It is separated
 // from main so tests can drive it with synthetic input.
-func run(outputDir string, iterations int, out *os.File) error {
+func run(outputDir string, iterations int, out io.Writer) error {
 	reportsByTest, err := collectReports(outputDir, iterations)
 	if err != nil {
 		return err
@@ -144,6 +148,18 @@ func run(outputDir string, iterations int, out *os.File) error {
 	// data, so surface it as an aggregator failure instead.
 	if len(reportsByTest) == 0 {
 		return fmt.Errorf("no performance reports found under %s across %d iterations", outputDir, iterations)
+	}
+	// Per-test partial-data check: if any test has fewer report files than
+	// requested iterations, refuse to gate. A silent partial batch would let
+	// a batch-median regression slip through when half the samples went
+	// missing.
+	for testKey, datas := range reportsByTest {
+		if len(datas) < iterations {
+			return fmt.Errorf(
+				"%s: got %d/%d iteration reports; refusing to gate on partial data",
+				testKey, len(datas), iterations,
+			)
+		}
 	}
 
 	// Iterate test keys in a stable order so the emitted arrays and the
@@ -306,6 +322,11 @@ func extractValues(datas []map[string]any, jsonField string) []float64 {
 		if !ok {
 			continue
 		}
+		// Older performance report writers emit total_time in nanoseconds;
+		// newer writers emit seconds. 1e9 is the ns/s conversion factor.
+		// Any total_time above 1e9 is interpreted as ns and divided back to
+		// seconds so downstream comparisons stay in a single unit. Follow-up:
+		// canonicalize the emitters on seconds so this branch can be removed.
 		if jsonField == "total_time" && v > 1e9 {
 			v = v / 1e9
 		}
@@ -314,21 +335,13 @@ func extractValues(datas []map[string]any, jsonField string) []float64 {
 	return values
 }
 
+// toFloat extracts a float64 from a value produced by encoding/json.Unmarshal
+// into a map[string]any. JSON numbers decode as float64 with the default
+// decoder (no UseNumber), so the single type assertion is exhaustive for this
+// code path.
 func toFloat(v any) (float64, bool) {
-	switch x := v.(type) {
-	case float64:
-		return x, true
-	case float32:
-		return float64(x), true
-	case int:
-		return float64(x), true
-	case int64:
-		return float64(x), true
-	case json.Number:
-		f, err := x.Float64()
-		return f, err == nil
-	}
-	return 0, false
+	f, ok := v.(float64)
+	return f, ok
 }
 
 func computeStats(values []float64) stats {
@@ -392,7 +405,7 @@ func writeJSON(path string, v any) error {
 	return os.WriteFile(path, b, 0o600) //nolint:gosec // G304: path is scoped to CI-created OUTPUT_DIR
 }
 
-func printTable(out *os.File, testKeys []string, summary map[string]map[string]stats) {
+func printTable(out io.Writer, testKeys []string, summary map[string]map[string]stats) {
 	fmt.Fprintf(out, "\n%-55s %3s %10s %10s %10s %6s\n",
 		"Test / Metric", "n", "Median", "Mean", "Stddev", "CV")
 	fmt.Fprintln(out, "----------------------------------------------------------------------------------------------------")

@@ -165,6 +165,27 @@ var _ = Describe("Perf Aggregate", func() {
 				Expect(err.Error()).To(ContainSubstring("no performance reports found"))
 			})
 		})
+
+		Context("with a test missing an iteration report", func() {
+			It("fails closed rather than gating on partial data", func() {
+				// Seed 3 iterations for test_a but only 2 for test_b.
+				for i := 1; i <= 3; i++ {
+					iterDir := filepath.Join(tmp, "iter_"+strconv.Itoa(i))
+					Expect(os.MkdirAll(iterDir, 0o755)).To(Succeed())
+					writeReport(filepath.Join(iterDir, "test_a_performance_report.json"), map[string]any{
+						"total_nodes": 10 + i,
+					})
+					if i <= 2 {
+						writeReport(filepath.Join(iterDir, "test_b_performance_report.json"), map[string]any{
+							"total_nodes": 20 + i,
+						})
+					}
+				}
+				err := run(tmp, 3, os.Stdout)
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("refusing to gate on partial data"))
+			})
+		})
 	})
 
 	Describe("prettifyTestName", func() {
