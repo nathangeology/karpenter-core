@@ -1,0 +1,88 @@
+{
+  "lastUpdate": 1790017248844,
+  "repoUrl": "https://github.com/nathangeology/karpenter-core",
+  "entries": {
+    "replay-smaller-loose": [
+      {
+        "commit": {
+          "author": {
+            "email": "jonesflp@amazon.com",
+            "name": "Nathaniel Jones",
+            "username": "nathangeology"
+          },
+          "committer": {
+            "email": "jonesflp@amazon.com",
+            "name": "Nathaniel Jones",
+            "username": "nathangeology"
+          },
+          "distinct": true,
+          "id": "debf0aa218711df0754aa8198de716b249821a13",
+          "message": "experiment(perf): gate replay, seed phase\n\nNot for upstream. Real aggregator output from both experiment runs, committed\nso the pinned benchmark-action can be driven seed-then-compare across two\ncommits. This commit carries no replay-data/, so every tier takes the seed\npath.",
+          "timestamp": "2026-09-21T12:00:37-07:00",
+          "tree_id": "6ad8849c583e4ae82b7888f10ca1b2202eb69dcb",
+          "url": "https://github.com/nathangeology/karpenter-core/commit/debf0aa218711df0754aa8198de716b249821a13"
+        },
+        "date": 1790017248843,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Consolidation - Controller CPU (median, n=5)",
+            "value": 0.66,
+            "range": "0.09",
+            "unit": "cores",
+            "extra": "mean=0.62 stddev=0.09 cv=14% min=0.48 max=0.72 n=5"
+          },
+          {
+            "name": "Drift Execution - Controller CPU (median, n=5)",
+            "value": 1.54,
+            "range": "0.01",
+            "unit": "cores",
+            "extra": "mean=1.55 stddev=0.01 cv=0.9% min=1.53 max=1.56 n=5"
+          },
+          {
+            "name": "Drift Initial Deployment - Controller CPU (median, n=5)",
+            "value": 0.76,
+            "range": "0.13",
+            "unit": "cores",
+            "extra": "mean=0.81 stddev=0.13 cv=16.4% min=0.63 max=0.96 n=5"
+          },
+          {
+            "name": "Hostname Spread Consolidation - Controller CPU (median, n=5)",
+            "value": 0.75,
+            "range": "0.32",
+            "unit": "cores",
+            "extra": "mean=0.87 stddev=0.32 cv=36.5% min=0.62 max=1.5 n=5"
+          },
+          {
+            "name": "Hostname Spread Scale Out - Controller CPU (median, n=5)",
+            "value": 1.51,
+            "range": "0.11",
+            "unit": "cores",
+            "extra": "mean=1.48 stddev=0.11 cv=7.5% min=1.33 max=1.59 n=5"
+          },
+          {
+            "name": "Scale Out - Controller CPU (median, n=5)",
+            "value": 0.72,
+            "range": "0.05",
+            "unit": "cores",
+            "extra": "mean=0.72 stddev=0.05 cv=6.5% min=0.66 max=0.8 n=5"
+          },
+          {
+            "name": "Wide Deployments Consolidation - Controller CPU (median, n=5)",
+            "value": 1.15,
+            "range": "0.4",
+            "unit": "cores",
+            "extra": "mean=0.91 stddev=0.4 cv=43.3% min=0.37 max=1.35 n=5"
+          },
+          {
+            "name": "Wide Deployments Scale Out - Controller CPU (median, n=5)",
+            "value": 1.22,
+            "range": "0.08",
+            "unit": "cores",
+            "extra": "mean=1.2 stddev=0.08 cv=6.3% min=1.1 max=1.29 n=5"
+          }
+        ]
+      }
+    ]
+  }
+}

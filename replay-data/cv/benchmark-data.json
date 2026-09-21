@@ -1,0 +1,416 @@
+{
+  "lastUpdate": 1790017250684,
+  "repoUrl": "https://github.com/nathangeology/karpenter-core",
+  "entries": {
+    "replay-cv": [
+      {
+        "commit": {
+          "author": {
+            "email": "jonesflp@amazon.com",
+            "name": "Nathaniel Jones",
+            "username": "nathangeology"
+          },
+          "committer": {
+            "email": "jonesflp@amazon.com",
+            "name": "Nathaniel Jones",
+            "username": "nathangeology"
+          },
+          "distinct": true,
+          "id": "debf0aa218711df0754aa8198de716b249821a13",
+          "message": "experiment(perf): gate replay, seed phase\n\nNot for upstream. Real aggregator output from both experiment runs, committed\nso the pinned benchmark-action can be driven seed-then-compare across two\ncommits. This commit carries no replay-data/, so every tier takes the seed\npath.",
+          "timestamp": "2026-09-21T12:00:37-07:00",
+          "tree_id": "6ad8849c583e4ae82b7888f10ca1b2202eb69dcb",
+          "url": "https://github.com/nathangeology/karpenter-core/commit/debf0aa218711df0754aa8198de716b249821a13"
+        },
+        "date": 1790017250684,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "Consolidation - CPU Utilization (CV%, n=5)",
+            "value": 0.7,
+            "unit": "cv-percent",
+            "extra": "median=0.96 stddev=0.01 n=5"
+          },
+          {
+            "name": "Consolidation - Consolidation Rounds (CV%, n=5)",
+            "value": 58.1,
+            "unit": "cv-percent",
+            "extra": "median=11 stddev=4.88 n=5"
+          },
+          {
+            "name": "Consolidation - Controller CPU (CV%, n=5)",
+            "value": 14,
+            "unit": "cv-percent",
+            "extra": "median=0.66 stddev=0.09 n=5"
+          },
+          {
+            "name": "Consolidation - Controller Peak Memory (CV%, n=5)",
+            "value": 4.5,
+            "unit": "cv-percent",
+            "extra": "median=291.29 stddev=12.93 n=5"
+          },
+          {
+            "name": "Consolidation - Duration (CV%, n=5)",
+            "value": 36.5,
+            "unit": "cv-percent",
+            "extra": "median=1220.41 stddev=347.57 n=5"
+          },
+          {
+            "name": "Consolidation - Efficiency Score (CV%, n=5)",
+            "value": 0.7,
+            "unit": "cv-percent",
+            "extra": "median=94.72 stddev=0.67 n=5"
+          },
+          {
+            "name": "Consolidation - Final Nodes (CV%, n=5)",
+            "value": 6.9,
+            "unit": "cv-percent",
+            "extra": "median=127 stddev=8.96 n=5"
+          },
+          {
+            "name": "Consolidation - Memory Utilization (CV%, n=5)",
+            "value": 1.9,
+            "unit": "cv-percent",
+            "extra": "median=0.83 stddev=0.02 n=5"
+          },
+          {
+            "name": "Drift Execution - CPU Utilization (CV%, n=5)",
+            "value": 0.1,
+            "unit": "cv-percent",
+            "extra": "median=0.63 stddev=0 n=5"
+          },
+          {
+            "name": "Drift Execution - Consolidation Rounds (CV%, n=5)",
+            "value": 5.1,
+            "unit": "cv-percent",
+            "extra": "median=10 stddev=0.49 n=5"
+          },
+          {
+            "name": "Drift Execution - Controller CPU (CV%, n=5)",
+            "value": 0.9,
+            "unit": "cv-percent",
+            "extra": "median=1.54 stddev=0.01 n=5"
+          },
+          {
+            "name": "Drift Execution - Controller Peak Memory (CV%, n=5)",
+            "value": 2.3,
+            "unit": "cv-percent",
+            "extra": "median=468.04 stddev=10.59 n=5"
+          },
+          {
+            "name": "Drift Execution - Duration (CV%, n=5)",
+            "value": 6,
+            "unit": "cv-percent",
+            "extra": "median=540.82 stddev=32.12 n=5"
+          },
+          {
+            "name": "Drift Execution - Efficiency Score (CV%, n=5)",
+            "value": 0.1,
+            "unit": "cv-percent",
+            "extra": "median=64.78 stddev=0.04 n=5"
+          },
+          {
+            "name": "Drift Execution - Final Nodes (CV%, n=5)",
+            "value": 0.1,
+            "unit": "cv-percent",
+            "extra": "median=300 stddev=0.4 n=5"
+          },
+          {
+            "name": "Drift Execution - Memory Utilization (CV%, n=5)",
+            "value": 0.1,
+            "unit": "cv-percent",
+            "extra": "median=0.8 stddev=0 n=5"
+          },
+          {
+            "name": "Drift Initial Deployment - CPU Utilization (CV%, n=5)",
+            "value": 0.1,
+            "unit": "cv-percent",
+            "extra": "median=0.63 stddev=0 n=5"
+          },
+          {
+            "name": "Drift Initial Deployment - Consolidation Rounds (CV%, n=5)",
+            "value": 0,
+            "unit": "cv-percent",
+            "extra": "median=1 stddev=0 n=5"
+          },
+          {
+            "name": "Drift Initial Deployment - Controller CPU (CV%, n=5)",
+            "value": 16.4,
+            "unit": "cv-percent",
+            "extra": "median=0.76 stddev=0.13 n=5"
+          },
+          {
+            "name": "Drift Initial Deployment - Controller Peak Memory (CV%, n=5)",
+            "value": 5.3,
+            "unit": "cv-percent",
+            "extra": "median=384.65 stddev=19.78 n=5"
+          },
+          {
+            "name": "Drift Initial Deployment - Duration (CV%, n=5)",
+            "value": 8.4,
+            "unit": "cv-percent",
+            "extra": "median=86.3 stddev=7.49 n=5"
+          },
+          {
+            "name": "Drift Initial Deployment - Efficiency Score (CV%, n=5)",
+            "value": 0.1,
+            "unit": "cv-percent",
+            "extra": "median=64.78 stddev=0.05 n=5"
+          },
+          {
+            "name": "Drift Initial Deployment - Final Nodes (CV%, n=5)",
+            "value": 0.3,
+            "unit": "cv-percent",
+            "extra": "median=300 stddev=0.8 n=5"
+          },
+          {
+            "name": "Drift Initial Deployment - Memory Utilization (CV%, n=5)",
+            "value": 0.1,
+            "unit": "cv-percent",
+            "extra": "median=0.8 stddev=0 n=5"
+          },
+          {
+            "name": "Hostname Spread Consolidation - CPU Utilization (CV%, n=5)",
+            "value": 0.1,
+            "unit": "cv-percent",
+            "extra": "median=0.63 stddev=0 n=5"
+          },
+          {
+            "name": "Hostname Spread Consolidation - Consolidation Rounds (CV%, n=5)",
+            "value": 41.3,
+            "unit": "cv-percent",
+            "extra": "median=6 stddev=2.73 n=5"
+          },
+          {
+            "name": "Hostname Spread Consolidation - Controller CPU (CV%, n=5)",
+            "value": 36.5,
+            "unit": "cv-percent",
+            "extra": "median=0.75 stddev=0.32 n=5"
+          },
+          {
+            "name": "Hostname Spread Consolidation - Controller Peak Memory (CV%, n=5)",
+            "value": 6.9,
+            "unit": "cv-percent",
+            "extra": "median=551.26 stddev=38.03 n=5"
+          },
+          {
+            "name": "Hostname Spread Consolidation - Duration (CV%, n=5)",
+            "value": 20.3,
+            "unit": "cv-percent",
+            "extra": "median=741.59 stddev=156.49 n=5"
+          },
+          {
+            "name": "Hostname Spread Consolidation - Efficiency Score (CV%, n=5)",
+            "value": 0.1,
+            "unit": "cv-percent",
+            "extra": "median=64.73 stddev=0.04 n=5"
+          },
+          {
+            "name": "Hostname Spread Consolidation - Final Nodes (CV%, n=5)",
+            "value": 0.4,
+            "unit": "cv-percent",
+            "extra": "median=350 stddev=1.55 n=5"
+          },
+          {
+            "name": "Hostname Spread Consolidation - Memory Utilization (CV%, n=5)",
+            "value": 0.1,
+            "unit": "cv-percent",
+            "extra": "median=0.8 stddev=0 n=5"
+          },
+          {
+            "name": "Hostname Spread Scale Out - CPU Utilization (CV%, n=5)",
+            "value": 0.9,
+            "unit": "cv-percent",
+            "extra": "median=0.63 stddev=0.01 n=5"
+          },
+          {
+            "name": "Hostname Spread Scale Out - Consolidation Rounds (CV%, n=5)",
+            "value": 0,
+            "unit": "cv-percent",
+            "extra": "median=1 stddev=0 n=5"
+          },
+          {
+            "name": "Hostname Spread Scale Out - Controller CPU (CV%, n=5)",
+            "value": 7.5,
+            "unit": "cv-percent",
+            "extra": "median=1.51 stddev=0.11 n=5"
+          },
+          {
+            "name": "Hostname Spread Scale Out - Controller Peak Memory (CV%, n=5)",
+            "value": 6.6,
+            "unit": "cv-percent",
+            "extra": "median=617.07 stddev=40.51 n=5"
+          },
+          {
+            "name": "Hostname Spread Scale Out - Duration (CV%, n=5)",
+            "value": 4,
+            "unit": "cv-percent",
+            "extra": "median=129.75 stddev=5.3 n=5"
+          },
+          {
+            "name": "Hostname Spread Scale Out - Efficiency Score (CV%, n=5)",
+            "value": 0.8,
+            "unit": "cv-percent",
+            "extra": "median=64.75 stddev=0.51 n=5"
+          },
+          {
+            "name": "Hostname Spread Scale Out - Final Nodes (CV%, n=5)",
+            "value": 3.5,
+            "unit": "cv-percent",
+            "extra": "median=500 stddev=17.9 n=5"
+          },
+          {
+            "name": "Hostname Spread Scale Out - Memory Utilization (CV%, n=5)",
+            "value": 0.2,
+            "unit": "cv-percent",
+            "extra": "median=0.8 stddev=0 n=5"
+          },
+          {
+            "name": "Scale Out - CPU Utilization (CV%, n=5)",
+            "value": 2.2,
+            "unit": "cv-percent",
+            "extra": "median=0.92 stddev=0.02 n=5"
+          },
+          {
+            "name": "Scale Out - Consolidation Rounds (CV%, n=5)",
+            "value": 0,
+            "unit": "cv-percent",
+            "extra": "median=1 stddev=0 n=5"
+          },
+          {
+            "name": "Scale Out - Controller CPU (CV%, n=5)",
+            "value": 6.5,
+            "unit": "cv-percent",
+            "extra": "median=0.72 stddev=0.05 n=5"
+          },
+          {
+            "name": "Scale Out - Controller Peak Memory (CV%, n=5)",
+            "value": 11,
+            "unit": "cv-percent",
+            "extra": "median=276.26 stddev=29.3 n=5"
+          },
+          {
+            "name": "Scale Out - Duration (CV%, n=5)",
+            "value": 1.2,
+            "unit": "cv-percent",
+            "extra": "median=78.93 stddev=0.93 n=5"
+          },
+          {
+            "name": "Scale Out - Efficiency Score (CV%, n=5)",
+            "value": 2.1,
+            "unit": "cv-percent",
+            "extra": "median=90.96 stddev=1.9 n=5"
+          },
+          {
+            "name": "Scale Out - Final Nodes (CV%, n=5)",
+            "value": 2.3,
+            "unit": "cv-percent",
+            "extra": "median=153 stddev=3.66 n=5"
+          },
+          {
+            "name": "Scale Out - Memory Utilization (CV%, n=5)",
+            "value": 1.3,
+            "unit": "cv-percent",
+            "extra": "median=0.84 stddev=0.01 n=5"
+          },
+          {
+            "name": "Wide Deployments Consolidation - CPU Utilization (CV%, n=5)",
+            "value": 6.7,
+            "unit": "cv-percent",
+            "extra": "median=0.81 stddev=0.05 n=5"
+          },
+          {
+            "name": "Wide Deployments Consolidation - Consolidation Rounds (CV%, n=5)",
+            "value": 106.2,
+            "unit": "cv-percent",
+            "extra": "median=6 stddev=6.58 n=5"
+          },
+          {
+            "name": "Wide Deployments Consolidation - Controller CPU (CV%, n=5)",
+            "value": 43.3,
+            "unit": "cv-percent",
+            "extra": "median=1.15 stddev=0.4 n=5"
+          },
+          {
+            "name": "Wide Deployments Consolidation - Controller Peak Memory (CV%, n=5)",
+            "value": 2.2,
+            "unit": "cv-percent",
+            "extra": "median=341.79 stddev=7.67 n=5"
+          },
+          {
+            "name": "Wide Deployments Consolidation - Duration (CV%, n=5)",
+            "value": 73.8,
+            "unit": "cv-percent",
+            "extra": "median=831.62 stddev=620.29 n=5"
+          },
+          {
+            "name": "Wide Deployments Consolidation - Efficiency Score (CV%, n=5)",
+            "value": 6.5,
+            "unit": "cv-percent",
+            "extra": "median=80.48 stddev=5.08 n=5"
+          },
+          {
+            "name": "Wide Deployments Consolidation - Final Nodes (CV%, n=5)",
+            "value": 4.8,
+            "unit": "cv-percent",
+            "extra": "median=167 stddev=8.01 n=5"
+          },
+          {
+            "name": "Wide Deployments Consolidation - Memory Utilization (CV%, n=5)",
+            "value": 4.6,
+            "unit": "cv-percent",
+            "extra": "median=0.8 stddev=0.04 n=5"
+          },
+          {
+            "name": "Wide Deployments Scale Out - CPU Utilization (CV%, n=5)",
+            "value": 1.2,
+            "unit": "cv-percent",
+            "extra": "median=0.79 stddev=0.01 n=5"
+          },
+          {
+            "name": "Wide Deployments Scale Out - Consolidation Rounds (CV%, n=5)",
+            "value": 0,
+            "unit": "cv-percent",
+            "extra": "median=1 stddev=0 n=5"
+          },
+          {
+            "name": "Wide Deployments Scale Out - Controller CPU (CV%, n=5)",
+            "value": 6.3,
+            "unit": "cv-percent",
+            "extra": "median=1.22 stddev=0.08 n=5"
+          },
+          {
+            "name": "Wide Deployments Scale Out - Controller Peak Memory (CV%, n=5)",
+            "value": 5,
+            "unit": "cv-percent",
+            "extra": "median=342.8 stddev=17.76 n=5"
+          },
+          {
+            "name": "Wide Deployments Scale Out - Duration (CV%, n=5)",
+            "value": 2.6,
+            "unit": "cv-percent",
+            "extra": "median=83.03 stddev=2.13 n=5"
+          },
+          {
+            "name": "Wide Deployments Scale Out - Efficiency Score (CV%, n=5)",
+            "value": 1.2,
+            "unit": "cv-percent",
+            "extra": "median=78.58 stddev=0.92 n=5"
+          },
+          {
+            "name": "Wide Deployments Scale Out - Final Nodes (CV%, n=5)",
+            "value": 3.4,
+            "unit": "cv-percent",
+            "extra": "median=216 stddev=7.23 n=5"
+          },
+          {
+            "name": "Wide Deployments Scale Out - Memory Utilization (CV%, n=5)",
+            "value": 1.6,
+            "unit": "cv-percent",
+            "extra": "median=0.79 stddev=0.01 n=5"
+          }
+        ]
+      }
+    ]
+  }
+}
