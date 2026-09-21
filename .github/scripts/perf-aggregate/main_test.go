@@ -188,6 +188,110 @@ var _ = Describe("Perf Aggregate", func() {
 		})
 	})
 
+	Describe("gate key names", func() {
+		var tmp string
+
+		BeforeEach(func() {
+			var err error
+			tmp, err = os.MkdirTemp("", "perf-aggregate-keys-*")
+			Expect(err).ToNot(HaveOccurred())
+			seedSyntheticIterations(tmp, 3)
+			Expect(run(tmp, 3, os.Stdout)).To(Succeed())
+		})
+
+		AfterEach(func() {
+			Expect(os.RemoveAll(tmp)).To(Succeed())
+		})
+
+		It("omits the iteration count so changing repeat does not void the stored baseline", func() {
+			// benchmark-action matches history by exact key name. An n in the
+			// name means a repeat-count change silently drops every baseline.
+			for _, f := range []string{
+				"benchmark-results-smaller-tight.json",
+				"benchmark-results-smaller-loose.json",
+				"benchmark-results-bigger.json",
+				"benchmark-results-cv.json",
+			} {
+				entries := loadEntries(filepath.Join(tmp, f))
+				Expect(entries).ToNot(BeEmpty(), "%s was empty", f)
+				for _, e := range entries {
+					Expect(e.Name).ToNot(ContainSubstring("n="), "%s key embeds the iteration count: %s", f, e.Name)
+				}
+			}
+		})
+
+		It("keeps the iteration count in Extra, which benchmark-action does not match on", func() {
+			for _, e := range loadEntries(filepath.Join(tmp, "benchmark-results-smaller-tight.json")) {
+				Expect(e.Extra).To(ContainSubstring("n=3"))
+			}
+		})
+	})
+
+	Describe("checkBaseline", func() {
+		var tmp, cacheDir string
+		const prefix = "Karpenter Performance (Test Suite)"
+
+		BeforeEach(func() {
+			var err error
+			tmp, err = os.MkdirTemp("", "perf-aggregate-baseline-*")
+			Expect(err).ToNot(HaveOccurred())
+			cacheDir = filepath.Join(tmp, "cache")
+			seedSyntheticIterations(tmp, 3)
+			Expect(run(tmp, 3, os.Stdout)).To(Succeed())
+		})
+
+		AfterEach(func() {
+			Expect(os.RemoveAll(tmp)).To(Succeed())
+		})
+
+		cfg := func(root, cache string) baselineConfig {
+			return baselineConfig{outputDir: root, baselineDir: cache, namePrefix: prefix, runID: "42"}
+		}
+
+		It("reports a seed and records state when no baseline exists at all", func() {
+			var buf strings.Builder
+			Expect(checkBaseline(cfg(tmp, cacheDir), &buf)).To(Succeed())
+			Expect(buf.String()).To(ContainSubstring("Performance baseline seeded"))
+			Expect(buf.String()).To(ContainSubstring("0 compared"))
+			var state baselineState
+			loadJSON(filepath.Join(cacheDir, "baseline-state.json"), &state)
+			Expect(state.FirstSeedRun).To(Equal("42"))
+			Expect(state.GatedKeys["smaller-tight"]).ToNot(BeEmpty())
+		})
+
+		It("fails when a key the last green run gated on has lost its baseline", func() {
+			// First run seeds and records the key set. The second run finds no
+			// history file, which is the silent-pass case this guards.
+			Expect(checkBaseline(cfg(tmp, cacheDir), os.Stdout)).To(Succeed())
+			var buf strings.Builder
+			err := checkBaseline(cfg(tmp, cacheDir), &buf)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("baseline missing"))
+			Expect(buf.String()).To(ContainSubstring("Performance baseline missing"))
+		})
+
+		It("reports keys as compared when the stored history carries them", func() {
+			Expect(checkBaseline(cfg(tmp, cacheDir), os.Stdout)).To(Succeed())
+			seedBaselineHistory(tmp, cacheDir, prefix)
+			var buf strings.Builder
+			Expect(checkBaseline(cfg(tmp, cacheDir), &buf)).To(Succeed())
+			Expect(buf.String()).To(ContainSubstring("0 seeded, 0 missing"))
+			Expect(buf.String()).ToNot(ContainSubstring("Performance baseline seeded"))
+		})
+
+		It("requires BENCH_NAME_PREFIX so a missing chart name cannot read as an empty baseline", func() {
+			c := cfg(tmp, cacheDir)
+			c.namePrefix = ""
+			Expect(checkBaseline(c, os.Stdout)).To(MatchError(ContainSubstring("BENCH_NAME_PREFIX is required")))
+		})
+
+		It("refuses to treat a corrupt history file as an absent one", func() {
+			Expect(os.MkdirAll(filepath.Join(cacheDir, "smaller-tight"), 0o755)).To(Succeed())
+			Expect(os.WriteFile(filepath.Join(cacheDir, "smaller-tight", "benchmark-data.json"), []byte("{not json"), 0o600)).To(Succeed())
+			Expect(checkBaseline(cfg(tmp, cacheDir), os.Stdout)).To(MatchError(ContainSubstring("parsing")))
+		})
+	})
+
 	Describe("prettifyTestName", func() {
 		DescribeTable("converts snake_case_performance_report.json filenames to Title Case",
 			func(in, want string) {
@@ -224,6 +328,28 @@ func seedSyntheticIterations(root string, iters int) {
 			"karpenter_p95_cpu_cores": float64(i) * 0.1,
 			"total_nodes":             float64(20 + i),
 		})
+	}
+}
+
+// seedBaselineHistory writes, for every gate tier, a benchmark-action history
+// file whose latest entry carries exactly the keys the current run emitted.
+// That is the state a healthy second run restores from cache.
+func seedBaselineHistory(outputDir, cacheDir, namePrefix string) {
+	for _, t := range gateTiers {
+		names, err := readEntryNames(filepath.Join(outputDir, t.resultsFile))
+		Expect(err).ToNot(HaveOccurred())
+		benches := make([]map[string]any, 0, len(names))
+		for _, n := range names {
+			benches = append(benches, map[string]any{"name": n, "value": 1.0, "unit": "x"})
+		}
+		hist := map[string]any{"entries": map[string]any{
+			namePrefix + t.nameSuffix: []map[string]any{{"benches": benches}},
+		}}
+		dir := filepath.Join(cacheDir, t.cacheSubdir)
+		Expect(os.MkdirAll(dir, 0o755)).To(Succeed())
+		b, err := json.MarshalIndent(hist, "", "  ")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(os.WriteFile(filepath.Join(dir, "benchmark-data.json"), b, 0o600)).To(Succeed())
 	}
 }
 

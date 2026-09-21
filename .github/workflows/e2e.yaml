@@ -88,24 +88,43 @@ jobs:
         export OUTPUT_DIR
         echo "OUTPUT_DIR=$OUTPUT_DIR" >> "$GITHUB_ENV"
         bash .github/scripts/run-perf-iters.sh
-    - name: Aggregate and compare against baseline
-      if: always() && env.OUTPUT_DIR != '' && inputs.repeat > 1
-      env:
-        ITERATIONS: ${{ inputs.repeat }}
-      shell: bash
-      run: |
-        go run ./.github/scripts/perf-aggregate
     # One cache blob for the four benchmark-action Compare steps below.
     # Each tier writes its baseline file under ./cache/<tier>/benchmark-data.json;
     # actions/cache save-post persists the whole ./cache tree.
-    # Cache key changed from four per-tier keys; first run on a given branch
-    # after this change will not restore, benchmark-action seeds a fresh baseline.
+    #
+    # The key carries github.run_id so every run writes a new entry. Cache
+    # entries are immutable, so a key that is constant across runs restores
+    # run 1's blob forever and the baseline never advances past its first
+    # sample. restore-keys walks back to the most recent entry for this test,
+    # which is the baseline the Compare steps below need. The `--run-` token
+    # keeps one test's prefix from matching a longer test name, for example
+    # "Host Name Spreading" against "Host Name Spreading XL".
+    #
+    # actions/cache saves in a post step gated on success(), so only a run
+    # whose gate came back green advances the baseline. A run that alerts does
+    # not overwrite the comparison point it failed against.
     - name: Download previous benchmark data (all tiers)
       if: always() && env.OUTPUT_DIR != '' && inputs.repeat > 1
       uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
       with:
         path: ./cache
-        key: ${{ runner.os }}-perf-benchmark-${{ inputs.test_name || inputs.suite }}
+        key: ${{ runner.os }}-perf-benchmark-${{ inputs.test_name || inputs.suite }}--run-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: |
+          ${{ runner.os }}-perf-benchmark-${{ inputs.test_name || inputs.suite }}--run-
+    # Runs after the cache restore so it can audit the baseline it will be
+    # compared against. BASELINE_DIR makes the aggregator check that every
+    # gated key has stored history: keys with none are reported as seeded, and
+    # keys the last green run gated on that have lost their history fail the
+    # step. benchmark-action skips unmatched keys silently, so without this a
+    # run with no baseline reports a green gate having compared nothing.
+    - name: Aggregate and compare against baseline
+      if: always() && env.OUTPUT_DIR != '' && inputs.repeat > 1
+      env:
+        ITERATIONS: ${{ inputs.repeat }}
+        BASELINE_DIR: ./cache
+      shell: bash
+      run: |
+        go run ./.github/scripts/perf-aggregate
     # The batch median regression alerts run below with fail-on-alert: true.
     # An additional CV entry is emitted per metric so a reviewer can see when
     # a batch's within-batch variance grows beyond its historical envelope.
@@ -130,11 +149,18 @@ jobs:
         tool: customSmallerIsBetter
         output-file-path: ${{ env.OUTPUT_DIR }}/benchmark-results-smaller-tight.json
         external-data-json-path: ./cache/smaller-tight/benchmark-data.json
-        # Tight tier: Duration, Controller Peak Memory, Final Nodes. Cross-run
-        # batch-median CV for these metrics stayed under 10% across the
-        # 15-run sample (see the CV comment below). 150% is ~3 batch-median
-        # sigmas above the noise floor for the noisiest tight-tier metric, so
-        # analytical FP < 1% per (test, metric).
+        # Tight tier: Duration, Controller Peak Memory, Final Nodes.
+        # Threshold unchanged at 150%.
+        #
+        # The sub-10% cross-run CV this tier was placed on is not supported for
+        # Duration. Measured across 5 upstream runs, Duration CV is median 15%
+        # and max 54%, against median 5% for Peak Memory and 2% for Final
+        # Nodes. A single measured pair of runs on identical-except-for-diff
+        # code moved Consolidation Duration by 6.2x, which would have fired
+        # this tier. Memory and Nodes belong here; Duration is the open
+        # question and needs either its own threshold or a batch protocol that
+        # does not leave it this noisy. Not changed here, so the tier's
+        # behaviour is untouched while the CPU threshold is corrected.
         alert-threshold: '150%'
         fail-on-alert: true
         github-token: ${{ env.BENCH_TOKEN }}
@@ -149,14 +175,34 @@ jobs:
         tool: customSmallerIsBetter
         output-file-path: ${{ env.OUTPUT_DIR }}/benchmark-results-smaller-loose.json
         external-data-json-path: ./cache/smaller-loose/benchmark-data.json
-        # Loose tier: Controller CPU (per-test P90 CV 38%, max 44%). A flat
-        # 150% here fired analytically on ~5-27% of identical-code batches;
-        # 250% pushes analytical per-key FP under 1%. Still catches the
-        # PR#2671-shape 3x controller-CPU regression the customer saw
-        # (issue #2954), because ratio 3.0 > 2.5. Consolidation Rounds is
-        # excluded from both smaller-tier gate files (see main.go
-        # tierInformational), it lives only in the CV file below.
-        alert-threshold: '250%'
+        # Loose tier: Controller CPU. Threshold is 150%, restored from 250%
+        # after the 250% figure was tested against real data and failed.
+        #
+        # The 250% value rested on an assumption: that the controller-CPU
+        # regression from PR#2671 (issue #2954) would show up here at the 3x
+        # the customer reported, so any threshold under 3.0 would catch it.
+        # That was never measured. It has now been measured, by replaying the
+        # PR#2671 diff through this workflow on two branches that differ only
+        # by that diff, 5 iterations per side. The largest Controller CPU
+        # ratio it produces is 2.070 on the hostname topology-spreading
+        # consolidation key, Mann-Whitney p=0.032, bootstrap 95% CI on the
+        # ratio [1.03, 2.52]. Not 3.0. At 250% the gate did not fire on any
+        # key; at 150% it fires on that key. Widening the tier to 250% is what
+        # turned a detection into a miss. A second key, scale_out, moved 1.448
+        # at p=0.008 and is still missed at 150%, which is the per-key
+        # threshold argument rather than an argument for a lower flat value.
+        #
+        # Known limitation, not addressed here. HELM_OPTS caps the controller
+        # at 2 cores, so the largest ratio this metric can ever report for a
+        # key is 2.0 divided by that key's baseline. Keys whose baseline
+        # already sits above 1.33 cores cannot reach 1.5x at all, so their
+        # pass carries no information. Screening those keys out of the gate,
+        # and adding a cumulative CPU-seconds metric that the core cap does
+        # not clip, are both follow-ups.
+        #
+        # Consolidation Rounds is excluded from both smaller-tier gate files
+        # (see main.go tierInformational); it lives only in the CV file below.
+        alert-threshold: '150%'
         fail-on-alert: true
         github-token: ${{ env.BENCH_TOKEN }}
         alert-comment-cc-users: ${{ env.BENCH_CC_USERS }}

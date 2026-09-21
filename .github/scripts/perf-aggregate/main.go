@@ -18,15 +18,22 @@ limitations under the License.
 // by the Karpenter e2e performance suite and emits benchmark-action inputs
 // plus a detailed statistical summary.
 //
-// It reads OUTPUT_DIR (required) and ITERATIONS (default 1) from the
-// environment, matching the invocation contract the workflow used for the
-// prior Python implementation.
+// Environment:
 //
-// Two benchmark-action files are emitted because github-action-benchmark
-// treats direction (smaller-is-better vs bigger-is-better) as a per-tool,
-// not per-metric, property. Utilization and efficiency metrics belong in the
-// bigger-is-better group; latency/resource cost metrics belong in the
-// smaller-is-better group.
+//	OUTPUT_DIR          required; holds iter_N/*_performance_report.json inputs
+//	                    and receives the emitted benchmark-action files
+//	ITERATIONS          expected iteration count, default 1
+//	BASELINE_DIR        optional; restored actions/cache tree. When set, the
+//	                    baseline check runs and can fail the command
+//	BENCH_NAME_PREFIX   required when BASELINE_DIR is set; the chart-name
+//	                    prefix the workflow passes to benchmark-action
+//	GITHUB_RUN_ID       recorded in the baseline state file for provenance
+//
+// Four benchmark-action files are emitted. Direction is a per-tool rather than
+// a per-metric property in github-action-benchmark, so utilization and
+// efficiency metrics need their own bigger-is-better file. The smaller-is-better
+// metrics are split again by threshold tier, and batch CV goes to its own
+// informational file.
 package main
 
 import (
@@ -36,6 +43,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -48,23 +56,24 @@ const (
 	biggerIsBetter
 )
 
-// tier controls which gating benchmark-action step consumes a metric. Static
-// tiers approximate the per-metric stddev gating @ryan-mist suggested (PR#2994
-// comment 3961447028) by routing high-CV metrics to a looser threshold and
-// low-CV metrics to a tighter threshold; per-metric CV was measured across
-// 15 push-triggered kind-perf-e2e runs on kubernetes-sigs/karpenter@main
-// between 2026-08-19 and 2026-09-02 (n=120 (test, metric) samples).
+// tier controls which gating benchmark-action step consumes a metric.
+// benchmark-action takes one alert-threshold per step, so a metric can only
+// carry its own threshold by getting its own step. The split is the mechanism
+// @ryan-mist's per-metric stddev gating ask needs (PR#2994 comment
+// 3961447028); the per-metric values it should carry are still open, because
+// setting them needs the cross-run CV of the batch median per key and that has
+// not been measured. Both gating tiers sit at 150% until it is.
 type tier int
 
 const (
-	// tierTight metrics gate at 150% (the previous flat threshold). Cross-run
-	// batch-median CV for these metrics stayed under 10% across all tests in
-	// the sampled window, so the 150% threshold is well above noise.
+	// tierTight metrics gate at 150%: Duration, Controller Peak Memory, Final
+	// Nodes.
 	tierTight tier = iota
-	// tierLoose metrics gate at a wider threshold in the yaml (currently
-	// 250%). Controller CPU is the one such metric today: its per-test P90
-	// CV was 38% (max 44%), so a batch-median comparison at 150% would fire
-	// on runner-jitter alone.
+	// tierLoose metrics gate at their own threshold in the yaml, also 150%
+	// today. Controller CPU is the one such metric. The tier is kept separate
+	// from tierTight rather than merged at the shared value so this metric can
+	// be retuned without disturbing the other three, which is the pending
+	// per-key work.
 	tierLoose
 	// tierInformational metrics skip the gating benchmark-action steps and
 	// only emit into the informational CV file. Consolidation Rounds falls
@@ -138,6 +147,20 @@ func main() {
 	if err := run(outputDir, iterations, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
+	}
+	// BASELINE_DIR is set only by the workflow, after actions/cache has had a
+	// chance to restore. Local invocations leave it unset and skip the check.
+	if baselineDir := os.Getenv("BASELINE_DIR"); baselineDir != "" {
+		err := checkBaseline(baselineConfig{
+			outputDir:   outputDir,
+			baselineDir: baselineDir,
+			namePrefix:  os.Getenv("BENCH_NAME_PREFIX"),
+			runID:       os.Getenv("GITHUB_RUN_ID"),
+		}, os.Stdout)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 	}
 }
 
@@ -245,8 +268,13 @@ func buildResults(testKeys []string, reportsByTest map[string][]map[string]any) 
 // only. CV entries share a single smaller-is-better list because lower batch
 // variance is always better.
 func (r *benchmarkResults) appendMetric(name string, m metricSpec, s stats) {
+	// The key name carries no iteration count. benchmark-action matches
+	// history by exact key name, so embedding n would void every stored
+	// baseline the moment the workflow's repeat input changed, with no signal
+	// that history had been dropped. n travels in Extra instead, which is
+	// displayed but not part of the match.
 	gate := benchmarkEntry{
-		Name:  fmt.Sprintf("%s - %s (median, n=%d)", name, m.display, s.N),
+		Name:  fmt.Sprintf("%s - %s (median)", name, m.display),
 		Unit:  m.unit,
 		Value: s.Median,
 		Range: fmt.Sprintf("%v", s.Stddev),
@@ -273,11 +301,208 @@ func (r *benchmarkResults) appendMetric(name string, m metricSpec, s stats) {
 	// pipeline — the informational answer to Ryan's PR#2994 variance
 	// question (comment 3857936029).
 	r.cv = append(r.cv, benchmarkEntry{
-		Name:  fmt.Sprintf("%s - %s (CV%%, n=%d)", name, m.display, s.N),
+		Name:  fmt.Sprintf("%s - %s (CV%%)", name, m.display),
 		Unit:  "cv-percent",
 		Value: s.CVPct,
 		Extra: fmt.Sprintf("median=%v stddev=%v n=%d", s.Median, s.Stddev, s.N),
 	})
+}
+
+// baselineStateFile is the record checkBaseline keeps inside the restored
+// baseline tree, next to the per-tier benchmark-action history files, so
+// actions/cache persists the two together. The cache action's save step only
+// runs on a green job, so this file is only ever written by a run that got all
+// the way through its compare steps.
+const baselineStateFile = "baseline-state.json"
+
+// gateTier ties one benchmark-action Compare step in
+// .github/workflows/e2e.yaml to the files it touches. cacheSubdir must match
+// that step's external-data-json-path and nameSuffix must match the suffix on
+// its name input, otherwise the baseline lookup reads the wrong history. Only
+// blocking tiers are listed: the informational CV step cannot fail a job, so a
+// missing CV baseline is not a gate defect.
+type gateTier struct {
+	resultsFile string
+	cacheSubdir string
+	nameSuffix  string
+}
+
+var gateTiers = []gateTier{
+	{"benchmark-results-smaller-tight.json", "smaller-tight", " - smaller-tight"},
+	{"benchmark-results-smaller-loose.json", "smaller-loose", " - smaller-loose"},
+	{"benchmark-results-bigger.json", "bigger", " - bigger-is-better"},
+}
+
+// baselineState records which keys the last green run gated on, per tier. It is
+// what separates "this key never had a baseline" from "this key had one and
+// lost it". The first is an unavoidable first run; the second is a gate that
+// silently stopped gating.
+type baselineState struct {
+	FirstSeedRun string              `json:"first_seed_run"`
+	LastRun      string              `json:"last_run"`
+	GatedKeys    map[string][]string `json:"gated_keys"`
+}
+
+// benchmarkHistory is the subset of benchmark-action's external-data JSON the
+// baseline check reads. Entries are keyed by chart name; the last element of
+// each slice is the entry the action compares the current run against.
+type benchmarkHistory struct {
+	Entries map[string][]struct {
+		Benches []struct {
+			Name string `json:"name"`
+		} `json:"benches"`
+	} `json:"entries"`
+}
+
+type baselineConfig struct {
+	outputDir   string
+	baselineDir string
+	namePrefix  string
+	runID       string
+}
+
+// checkBaseline fails the aggregation when a gated key that used to have a
+// baseline no longer has one.
+//
+// benchmark-action compares each emitted key against the same key in the
+// previous entry for its chart, and silently skips any key it cannot match. A
+// key with no stored history therefore produces a green compare step that
+// compared nothing, which on the wire looks identical to a real pass. This
+// separates the two cases: a key with no history that no prior run recorded is
+// reported as seeded and allowed, and a key with no history that the last green
+// run did record is an error.
+func checkBaseline(cfg baselineConfig, out io.Writer) error {
+	if cfg.namePrefix == "" {
+		return fmt.Errorf("BENCH_NAME_PREFIX is required when BASELINE_DIR is set: the chart name cannot be derived without it, so no baseline can be located")
+	}
+	statePath := filepath.Join(cfg.baselineDir, baselineStateFile)
+	prior, err := readBaselineState(statePath)
+	if err != nil {
+		return err
+	}
+	next := baselineState{FirstSeedRun: prior.FirstSeedRun, LastRun: cfg.runID, GatedKeys: map[string][]string{}}
+	if next.FirstSeedRun == "" {
+		next.FirstSeedRun = cfg.runID
+	}
+
+	var compared, seeded, missing []string
+	for _, t := range gateTiers {
+		current, err := readEntryNames(filepath.Join(cfg.outputDir, t.resultsFile))
+		if err != nil {
+			return err
+		}
+		sort.Strings(current)
+		next.GatedKeys[t.cacheSubdir] = current
+		baseline, err := readBaselineKeys(
+			filepath.Join(cfg.baselineDir, t.cacheSubdir, "benchmark-data.json"),
+			cfg.namePrefix+t.nameSuffix,
+		)
+		if err != nil {
+			return err
+		}
+		for _, key := range current {
+			label := t.cacheSubdir + " / " + key
+			switch {
+			case slices.Contains(baseline, key):
+				compared = append(compared, label)
+			case slices.Contains(prior.GatedKeys[t.cacheSubdir], key):
+				missing = append(missing, label)
+			default:
+				seeded = append(seeded, label)
+			}
+		}
+	}
+
+	fmt.Fprintf(out, "\nBaseline check against %s: %d compared, %d seeded, %d missing\n",
+		cfg.baselineDir, len(compared), len(seeded), len(missing))
+	for _, k := range seeded {
+		fmt.Fprintf(out, "  seed     %s\n", k)
+	}
+	for _, k := range missing {
+		fmt.Fprintf(out, "  MISSING  %s\n", k)
+	}
+	if len(seeded) > 0 {
+		// A workflow notice surfaces as a job annotation, so a seeded run is
+		// visible without opening the log. Seeded keys were not compared
+		// against anything, which is the one case where a green gate does not
+		// mean the run was checked.
+		fmt.Fprintf(out, "::notice title=Performance baseline seeded::%d gated key(s) had no stored baseline and were seeded by run %s. Those keys were not compared. Every later run on this cache scope must find a baseline for them.\n",
+			len(seeded), cfg.runID)
+	}
+	if len(missing) > 0 {
+		fmt.Fprintf(out, "::error title=Performance baseline missing::%d gated key(s) were gated by run %s but have no stored baseline now, so they would pass without being compared. Refusing to report a green gate.\n",
+			len(missing), prior.LastRun)
+		return fmt.Errorf("baseline missing for %d gated key(s) last gated by run %s: %s",
+			len(missing), prior.LastRun, strings.Join(missing, ", "))
+	}
+	// Only recorded on a clean check. Overwriting after a missing-baseline
+	// failure would erase the evidence of which keys used to be gated, and the
+	// next run would read the loss as a legitimate first seed.
+	if err := os.MkdirAll(cfg.baselineDir, 0o755); err != nil {
+		return err
+	}
+	return writeJSON(statePath, next)
+}
+
+// readBaselineState returns a zero state when the file is absent, which is the
+// first-run case. A malformed file is an error rather than a reset, because
+// treating it as absent would silently downgrade every key to seeded.
+func readBaselineState(path string) (baselineState, error) {
+	var s baselineState
+	b, err := os.ReadFile(path) //nolint:gosec // G304: path is scoped to the CI cache directory
+	if os.IsNotExist(err) {
+		return s, nil
+	}
+	if err != nil {
+		return s, err
+	}
+	if err := json.Unmarshal(b, &s); err != nil {
+		return s, fmt.Errorf("parsing %s: %w", path, err)
+	}
+	return s, nil
+}
+
+// readBaselineKeys returns the key names benchmark-action will compare against
+// for chartName: the bench names on the most recent stored entry. A missing
+// file is the first-run case and yields no keys.
+func readBaselineKeys(path, chartName string) ([]string, error) {
+	b, err := os.ReadFile(path) //nolint:gosec // G304: path is scoped to the CI cache directory
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var hist benchmarkHistory
+	if err := json.Unmarshal(b, &hist); err != nil {
+		return nil, fmt.Errorf("parsing %s: %w", path, err)
+	}
+	entries := hist.Entries[chartName]
+	if len(entries) == 0 {
+		return nil, nil
+	}
+	latest := entries[len(entries)-1]
+	names := make([]string, 0, len(latest.Benches))
+	for _, bench := range latest.Benches {
+		names = append(names, bench.Name)
+	}
+	return names, nil
+}
+
+func readEntryNames(path string) ([]string, error) {
+	b, err := os.ReadFile(path) //nolint:gosec // G304: path is scoped to CI-created OUTPUT_DIR
+	if err != nil {
+		return nil, err
+	}
+	var entries []benchmarkEntry
+	if err := json.Unmarshal(b, &entries); err != nil {
+		return nil, fmt.Errorf("parsing %s: %w", path, err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name)
+	}
+	return names, nil
 }
 
 // collectReports loads every iter_N/*_performance_report.json under
