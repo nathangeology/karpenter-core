@@ -50,8 +50,8 @@ func OutputPerformanceReport(report *PerformanceReport, filePrefix string) {
 	if report.MetricsSampleCount > 0 {
 		GinkgoWriter.Printf("Karpenter Memory (P95/Avg/Max): %.2f / %.2f / %.2f MB (%d samples)\n",
 			report.KarpenterP95MemoryMB, report.KarpenterAvgMemoryMB, report.KarpenterMaxMemoryMB, report.MetricsSampleCount)
-		GinkgoWriter.Printf("Karpenter CPU (P95/Avg/Max): %.4f / %.4f / %.4f cores (%d samples)\n",
-			report.KarpenterP95CPUCores, report.KarpenterAvgCPUCores, report.KarpenterMaxCPUCores, report.MetricsSampleCount)
+		GinkgoWriter.Printf("Karpenter CPU (P50/P95/Avg/Max): %.4f / %.4f / %.4f / %.4f cores (%d samples)\n",
+			report.KarpenterP50CPUCores, report.KarpenterP95CPUCores, report.KarpenterAvgCPUCores, report.KarpenterMaxCPUCores, report.MetricsSampleCount)
 	} else {
 		GinkgoWriter.Printf("Karpenter Metrics: Not available (0 samples collected)\n")
 	}
@@ -148,6 +148,7 @@ func ReportScaleOut(env *common.Environment, testName string, expectedPods int, 
 		KarpenterP95MemoryMB:    stats.P95MemoryMB,
 		KarpenterAvgMemoryMB:    stats.AvgMemoryMB,
 		KarpenterMaxMemoryMB:    stats.MaxMemoryMB,
+		KarpenterP50CPUCores:    stats.P50CPUCores,
 		KarpenterP95CPUCores:    stats.P95CPUCores,
 		KarpenterAvgCPUCores:    stats.AvgCPUCores,
 		KarpenterMaxCPUCores:    stats.MaxCPUCores,
@@ -215,6 +216,7 @@ func ReportConsolidation(env *common.Environment, testName string, initialPods, 
 		KarpenterP95MemoryMB:    stats.P95MemoryMB,
 		KarpenterAvgMemoryMB:    stats.AvgMemoryMB,
 		KarpenterMaxMemoryMB:    stats.MaxMemoryMB,
+		KarpenterP50CPUCores:    stats.P50CPUCores,
 		KarpenterP95CPUCores:    stats.P95CPUCores,
 		KarpenterAvgCPUCores:    stats.AvgCPUCores,
 		KarpenterMaxCPUCores:    stats.MaxCPUCores,
@@ -326,6 +328,7 @@ func ReportDrift(env *common.Environment, testName string, expectedPods int, tim
 		KarpenterP95MemoryMB:    stats.P95MemoryMB,
 		KarpenterAvgMemoryMB:    stats.AvgMemoryMB,
 		KarpenterMaxMemoryMB:    stats.MaxMemoryMB,
+		KarpenterP50CPUCores:    stats.P50CPUCores,
 		KarpenterP95CPUCores:    stats.P95CPUCores,
 		KarpenterAvgCPUCores:    stats.AvgCPUCores,
 		KarpenterMaxCPUCores:    stats.MaxCPUCores,

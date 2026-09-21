@@ -50,6 +50,7 @@ type PerformanceReport struct {
 	KarpenterP95MemoryMB float64 `json:"karpenter_p95_memory_mb"`
 	KarpenterAvgMemoryMB float64 `json:"karpenter_avg_memory_mb"`
 	KarpenterMaxMemoryMB float64 `json:"karpenter_max_memory_mb"`
+	KarpenterP50CPUCores float64 `json:"karpenter_p50_cpu_cores"`
 	KarpenterP95CPUCores float64 `json:"karpenter_p95_cpu_cores"`
 	KarpenterAvgCPUCores float64 `json:"karpenter_avg_cpu_cores"`
 	KarpenterMaxCPUCores float64 `json:"karpenter_max_cpu_cores"`

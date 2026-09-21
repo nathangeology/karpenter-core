@@ -41,6 +41,7 @@ type ResourceStats struct {
 	P95MemoryMB float64 // 95th percentile memory usage in MB
 	AvgMemoryMB float64 // average memory usage in MB
 	MaxMemoryMB float64 // peak memory usage in MB
+	P50CPUCores float64 // 50th percentile (sustained) CPU usage in cores
 	P95CPUCores float64 // 95th percentile CPU usage in cores
 	AvgCPUCores float64 // average CPU usage in cores
 	MaxCPUCores float64 // peak CPU usage in cores
@@ -83,8 +84,8 @@ func (mp *KarpenterMetricsPoller) Stop() ResourceStats {
 		GinkgoWriter.Printf("KarpenterMetricsPoller:   Samples: %d (errors: %d)\n", len(mp.samples), mp.errors)
 		GinkgoWriter.Printf("KarpenterMetricsPoller:   Memory - P95: %.2f MB, Avg: %.2f MB, Max: %.2f MB\n",
 			stats.P95MemoryMB, stats.AvgMemoryMB, stats.MaxMemoryMB)
-		GinkgoWriter.Printf("KarpenterMetricsPoller:   CPU    - P95: %.4f cores, Avg: %.4f cores, Max: %.4f cores\n",
-			stats.P95CPUCores, stats.AvgCPUCores, stats.MaxCPUCores)
+		GinkgoWriter.Printf("KarpenterMetricsPoller:   CPU    - P50: %.4f cores, P95: %.4f cores, Avg: %.4f cores, Max: %.4f cores\n",
+			stats.P50CPUCores, stats.P95CPUCores, stats.AvgCPUCores, stats.MaxCPUCores)
 	}
 	return stats
 }
@@ -285,6 +286,7 @@ func computeStats(samples []ResourceSample) ResourceStats {
 	}
 
 	if len(cpuValues) > 0 {
+		result.P50CPUCores, _ = stats.Percentile(cpuValues, 50)
 		result.P95CPUCores, _ = stats.Percentile(cpuValues, 95)
 		result.AvgCPUCores, _ = stats.Mean(cpuValues)
 		result.MaxCPUCores, _ = stats.Max(cpuValues)

@@ -87,6 +87,11 @@ var metrics = []metricSpec{
 	{"total_time", "Duration", "seconds", smallerIsBetter, tierTight},
 	{"karpenter_p95_memory_mb", "Controller Peak Memory", "MB", smallerIsBetter, tierTight},
 	{"karpenter_p95_cpu_cores", "Controller CPU", "cores", smallerIsBetter, tierLoose},
+	// Sustained controller CPU, emitted for visibility only. @ryan-mist's
+	// per-test threshold proposal (PR#2994 comment 4012042309) needs this
+	// statistic in the report; which CPU key gates, and at what threshold,
+	// is still open, so it stays out of both gate files for now.
+	{"karpenter_p50_cpu_cores", "Controller CPU P50", "cores", smallerIsBetter, tierInformational},
 	{"total_nodes", "Final Nodes", "nodes", smallerIsBetter, tierTight},
 	{"total_reserved_cpu_utilization", "CPU Utilization", "percent", biggerIsBetter, tierTight},
 	{"resource_efficiency_score", "Efficiency Score", "score", biggerIsBetter, tierTight},
