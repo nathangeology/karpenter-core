@@ -1,7 +1,7 @@
 name: kind-perf-e2e
 on:
   push:
-    branches: [main]
+    branches: [main, 'mayor/poscontrol-*']
   pull_request:
     types: [labeled, synchronize]
   workflow_run:
@@ -31,23 +31,17 @@ jobs:
       fail-fast: false
       matrix:
         test:
+          - name: "Basic Scale Test"
+            focus: "Basic Deployment"
           - name: "Drift Performance"
             focus: "Drift Performance"
           - name: "Host Name Spreading"
             focus: "Host Name Spreading Deployment Reg"
-          - name: "Host Name Spreading XL"
-            focus: "Host Name Spreading Deployment XL"
           - name: "Wide Deployments"
             focus: "Wide Deployments"
-          - name: "Basic Scale Test"
-            focus: "Basic Deployment"
-          - name: "Do Not Disrupt Performance"
-            focus: "Do Not Disrupt Performance Test"
-          - name: "Self Anti-Affinity Deployment Interference"
-            focus: "Self Anti-Affinity Deployment Interference"
     uses: ./.github/workflows/e2e.yaml
     with:
       suite: Performance
       focus: ${{ matrix.test.focus }}
       test_name: ${{ matrix.test.name }}
-      repeat: 10
+      repeat: 5

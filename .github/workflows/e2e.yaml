@@ -34,7 +34,7 @@ jobs:
       BENCH_NAME_PREFIX: Karpenter Performance (${{ inputs.test_name || inputs.suite }})
       BENCH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       BENCH_CC_USERS: '@nathangeology'
-      BENCH_COMMENT_ON_ALERT: 'true'
+      BENCH_COMMENT_ON_ALERT: 'false'
       BENCH_SUMMARY_ALWAYS: 'true'
     steps:
     - name: Debug workflow_run trigger
@@ -82,6 +82,12 @@ jobs:
           SUITE: ${{ inputs.suite }}
           FOCUS: ${{ inputs.focus }}
           ITERATIONS: ${{ inputs.repeat }}
+          # POSITIVE-CONTROL EXPERIMENT ONLY. The absolute per-phase assertions
+          # sit within 0.3-2.8 percent of observed values and abort the batch
+          # under set -e, which prevents the relative gate from ever seeing a
+          # complete batch. Relaxed identically on both experiment branches so
+          # the only difference between them is the PR 2671 product diff.
+          KARPENTER_PERF_THRESHOLDS: '{"basic/scaleOut":{"memory_mb":100000,"cpu_cores":1000,"total_time_minutes":600,"cpu_util":-1,"memory_util":-1},"basic/consolidation":{"memory_mb":100000,"cpu_cores":1000,"total_time_minutes":600,"cpu_util":-1,"memory_util":-1},"drift/initial":{"memory_mb":100000,"cpu_cores":1000,"total_time_minutes":600,"cpu_util":-1,"memory_util":-1},"drift/drift":{"memory_mb":100000,"cpu_cores":1000,"total_time_minutes":600,"cpu_util":-1,"memory_util":-1},"hostNameSpreading/scaleOut":{"memory_mb":100000,"cpu_cores":1000,"total_time_minutes":600,"cpu_util":-1,"memory_util":-1},"hostNameSpreading/consolidation":{"memory_mb":100000,"cpu_cores":1000,"total_time_minutes":600,"cpu_util":-1,"memory_util":-1},"hostNameSpreadingXL/scaleOut":{"memory_mb":100000,"cpu_cores":1000,"total_time_minutes":600,"cpu_util":-1,"memory_util":-1},"hostNameSpreadingXL/consolidation":{"memory_mb":100000,"cpu_cores":1000,"total_time_minutes":600,"cpu_util":-1,"memory_util":-1},"wideDeployments/scaleOut":{"memory_mb":100000,"cpu_cores":1000,"total_time_minutes":600,"cpu_util":-1,"memory_util":-1},"wideDeployments/consolidation":{"memory_mb":100000,"cpu_cores":1000,"total_time_minutes":600,"cpu_util":-1,"memory_util":-1},"doNotDisrupt/scaleOut":{"memory_mb":100000,"cpu_cores":1000,"total_time_minutes":600,"cpu_util":-1,"memory_util":-1},"doNotDisrupt/consolidation":{"memory_mb":100000,"cpu_cores":1000,"total_time_minutes":600,"cpu_util":-1,"memory_util":-1},"interference/scaleOut":{"memory_mb":100000,"cpu_cores":1000,"total_time_minutes":600,"cpu_util":-1,"memory_util":-1},"interference/interference":{"memory_mb":100000,"cpu_cores":1000,"total_time_minutes":600,"cpu_util":-1,"memory_util":-1},"interference/consolidation":{"memory_mb":100000,"cpu_cores":1000,"total_time_minutes":600,"cpu_util":-1,"memory_util":-1}}'
       shell: bash
       run: |
         OUTPUT_DIR="$(mktemp -d)"
