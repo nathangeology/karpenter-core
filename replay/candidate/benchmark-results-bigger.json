@@ -1,0 +1,170 @@
+[
+  {
+    "name": "Consolidation - CPU Utilization (median, n=5)",
+    "unit": "percent",
+    "value": 0.96,
+    "range": "0.02",
+    "extra": "mean=0.96 stddev=0.02 cv=1.8% min=0.94 max=0.98 n=5"
+  },
+  {
+    "name": "Consolidation - Efficiency Score (median, n=5)",
+    "unit": "score",
+    "value": 95.03,
+    "range": "1.55",
+    "extra": "mean=95.15 stddev=1.55 cv=1.6% min=92.76 max=96.85 n=5"
+  },
+  {
+    "name": "Consolidation - Memory Utilization (median, n=5)",
+    "unit": "percent",
+    "value": 0.86,
+    "range": "0",
+    "extra": "mean=0.86 stddev=0 cv=0.4% min=0.85 max=0.86 n=5"
+  },
+  {
+    "name": "Drift Execution - CPU Utilization (median, n=5)",
+    "unit": "percent",
+    "value": 0.63,
+    "range": "0",
+    "extra": "mean=0.63 stddev=0 cv=0.1% min=0.63 max=0.63 n=5"
+  },
+  {
+    "name": "Drift Execution - Efficiency Score (median, n=5)",
+    "unit": "score",
+    "value": 64.78,
+    "range": "0.05",
+    "extra": "mean=64.75 stddev=0.05 cv=0.1% min=64.65 max=64.78 n=5"
+  },
+  {
+    "name": "Drift Execution - Memory Utilization (median, n=5)",
+    "unit": "percent",
+    "value": 0.8,
+    "range": "0",
+    "extra": "mean=0.8 stddev=0 cv=0.1% min=0.8 max=0.81 n=5"
+  },
+  {
+    "name": "Drift Initial Deployment - CPU Utilization (median, n=5)",
+    "unit": "percent",
+    "value": 0.63,
+    "range": "0.01",
+    "extra": "mean=0.63 stddev=0.01 cv=1.2% min=0.61 max=0.63 n=5"
+  },
+  {
+    "name": "Drift Initial Deployment - Efficiency Score (median, n=5)",
+    "unit": "score",
+    "value": 64.69,
+    "range": "0.68",
+    "extra": "mean=64.37 stddev=0.68 cv=1.1% min=63.01 max=64.78 n=5"
+  },
+  {
+    "name": "Drift Initial Deployment - Memory Utilization (median, n=5)",
+    "unit": "percent",
+    "value": 0.8,
+    "range": "0",
+    "extra": "mean=0.8 stddev=0 cv=0.4% min=0.8 max=0.8 n=5"
+  },
+  {
+    "name": "Hostname Spread Consolidation - CPU Utilization (median, n=5)",
+    "unit": "percent",
+    "value": 0.63,
+    "range": "0",
+    "extra": "mean=0.63 stddev=0 cv=0.2% min=0.63 max=0.63 n=5"
+  },
+  {
+    "name": "Hostname Spread Consolidation - Efficiency Score (median, n=5)",
+    "unit": "score",
+    "value": 64.76,
+    "range": "0.12",
+    "extra": "mean=64.71 stddev=0.12 cv=0.2% min=64.46 max=64.82 n=5"
+  },
+  {
+    "name": "Hostname Spread Consolidation - Memory Utilization (median, n=5)",
+    "unit": "percent",
+    "value": 0.8,
+    "range": "0",
+    "extra": "mean=0.8 stddev=0 cv=0.1% min=0.8 max=0.8 n=5"
+  },
+  {
+    "name": "Hostname Spread Scale Out - CPU Utilization (median, n=5)",
+    "unit": "percent",
+    "value": 0.63,
+    "range": "0",
+    "extra": "mean=0.63 stddev=0 cv=0.3% min=0.62 max=0.63 n=5"
+  },
+  {
+    "name": "Hostname Spread Scale Out - Efficiency Score (median, n=5)",
+    "unit": "score",
+    "value": 64.59,
+    "range": "0.19",
+    "extra": "mean=64.57 stddev=0.19 cv=0.3% min=64.23 max=64.78 n=5"
+  },
+  {
+    "name": "Hostname Spread Scale Out - Memory Utilization (median, n=5)",
+    "unit": "percent",
+    "value": 0.8,
+    "range": "0",
+    "extra": "mean=0.8 stddev=0 cv=0.1% min=0.8 max=0.8 n=5"
+  },
+  {
+    "name": "Scale Out - CPU Utilization (median, n=5)",
+    "unit": "percent",
+    "value": 0.93,
+    "range": "0.01",
+    "extra": "mean=0.93 stddev=0.01 cv=1.2% min=0.91 max=0.95 n=5"
+  },
+  {
+    "name": "Scale Out - Efficiency Score (median, n=5)",
+    "unit": "score",
+    "value": 91.97,
+    "range": "0.96",
+    "extra": "mean=92.1 stddev=0.96 cv=1% min=90.77 max=93.69 n=5"
+  },
+  {
+    "name": "Scale Out - Memory Utilization (median, n=5)",
+    "unit": "percent",
+    "value": 0.85,
+    "range": "0.01",
+    "extra": "mean=0.85 stddev=0.01 cv=1.3% min=0.84 max=0.87 n=5"
+  },
+  {
+    "name": "Wide Deployments Consolidation - CPU Utilization (median, n=5)",
+    "unit": "percent",
+    "value": 0.8,
+    "range": "0.04",
+    "extra": "mean=0.79 stddev=0.04 cv=5% min=0.73 max=0.84 n=5"
+  },
+  {
+    "name": "Wide Deployments Consolidation - Efficiency Score (median, n=5)",
+    "unit": "score",
+    "value": 80.34,
+    "range": "3.57",
+    "extra": "mean=78.97 stddev=3.57 cv=4.5% min=73.44 max=83.68 n=5"
+  },
+  {
+    "name": "Wide Deployments Consolidation - Memory Utilization (median, n=5)",
+    "unit": "percent",
+    "value": 0.79,
+    "range": "0.01",
+    "extra": "mean=0.79 stddev=0.01 cv=0.8% min=0.78 max=0.8 n=5"
+  },
+  {
+    "name": "Wide Deployments Scale Out - CPU Utilization (median, n=5)",
+    "unit": "percent",
+    "value": 0.77,
+    "range": "0.02",
+    "extra": "mean=0.78 stddev=0.02 cv=2.5% min=0.76 max=0.81 n=5"
+  },
+  {
+    "name": "Wide Deployments Scale Out - Efficiency Score (median, n=5)",
+    "unit": "score",
+    "value": 76.78,
+    "range": "1.89",
+    "extra": "mean=77.9 stddev=1.89 cv=2.4% min=76.11 max=81.18 n=5"
+  },
+  {
+    "name": "Wide Deployments Scale Out - Memory Utilization (median, n=5)",
+    "unit": "percent",
+    "value": 0.8,
+    "range": "0.02",
+    "extra": "mean=0.79 stddev=0.02 cv=2.6% min=0.76 max=0.82 n=5"
+  }
+]

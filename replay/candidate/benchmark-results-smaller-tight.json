@@ -1,0 +1,170 @@
+[
+  {
+    "name": "Consolidation - Controller Peak Memory (median, n=5)",
+    "unit": "MB",
+    "value": 282.06,
+    "range": "11.63",
+    "extra": "mean=279.65 stddev=11.63 cv=4.2% min=258.4 max=290.05 n=5"
+  },
+  {
+    "name": "Consolidation - Duration (median, n=5)",
+    "unit": "seconds",
+    "value": 195.78,
+    "range": "282.99",
+    "extra": "mean=381.72 stddev=282.99 cv=74.1% min=195.44 max=926.03 n=5"
+  },
+  {
+    "name": "Consolidation - Final Nodes (median, n=5)",
+    "unit": "nodes",
+    "value": 104,
+    "range": "8.45",
+    "extra": "mean=107.8 stddev=8.45 cv=7.8% min=101 max=124 n=5"
+  },
+  {
+    "name": "Drift Execution - Controller Peak Memory (median, n=5)",
+    "unit": "MB",
+    "value": 477.53,
+    "range": "9.96",
+    "extra": "mean=471.12 stddev=9.96 cv=2.1% min=455.09 max=480.07 n=5"
+  },
+  {
+    "name": "Drift Execution - Duration (median, n=5)",
+    "unit": "seconds",
+    "value": 585.51,
+    "range": "27.83",
+    "extra": "mean=579.66 stddev=27.83 cv=4.8% min=540.64 max=615.74 n=5"
+  },
+  {
+    "name": "Drift Execution - Final Nodes (median, n=5)",
+    "unit": "nodes",
+    "value": 300,
+    "range": "0",
+    "extra": "mean=300 stddev=0 cv=0% min=300 max=300 n=5"
+  },
+  {
+    "name": "Drift Initial Deployment - Controller Peak Memory (median, n=5)",
+    "unit": "MB",
+    "value": 374.83,
+    "range": "17.64",
+    "extra": "mean=382.58 stddev=17.64 cv=4.6% min=364.75 max=409.4 n=5"
+  },
+  {
+    "name": "Drift Initial Deployment - Duration (median, n=5)",
+    "unit": "seconds",
+    "value": 88.02,
+    "range": "10.1",
+    "extra": "mean=90.41 stddev=10.1 cv=11.2% min=79.34 max=109.42 n=5"
+  },
+  {
+    "name": "Drift Initial Deployment - Final Nodes (median, n=5)",
+    "unit": "nodes",
+    "value": 300,
+    "range": "16",
+    "extra": "mean=308 stddev=16 cv=5.2% min=300 max=340 n=5"
+  },
+  {
+    "name": "Hostname Spread Consolidation - Controller Peak Memory (median, n=5)",
+    "unit": "MB",
+    "value": 580.51,
+    "range": "59.12",
+    "extra": "mean=573.28 stddev=59.12 cv=10.3% min=496.44 max=663.36 n=5"
+  },
+  {
+    "name": "Hostname Spread Consolidation - Duration (median, n=5)",
+    "unit": "seconds",
+    "value": 761.38,
+    "range": "191.26",
+    "extra": "mean=744.1 stddev=191.26 cv=25.7% min=395.68 max=956.42 n=5"
+  },
+  {
+    "name": "Hostname Spread Consolidation - Final Nodes (median, n=5)",
+    "unit": "nodes",
+    "value": 351,
+    "range": "4.56",
+    "extra": "mean=353 stddev=4.56 cv=1.3% min=350 max=362 n=5"
+  },
+  {
+    "name": "Hostname Spread Scale Out - Controller Peak Memory (median, n=5)",
+    "unit": "MB",
+    "value": 638.5,
+    "range": "36.66",
+    "extra": "mean=633.57 stddev=36.66 cv=5.8% min=581.45 max=692.65 n=5"
+  },
+  {
+    "name": "Hostname Spread Scale Out - Duration (median, n=5)",
+    "unit": "seconds",
+    "value": 165.8,
+    "range": "15.6",
+    "extra": "mean=174.21 stddev=15.6 cv=9% min=160.14 max=203.76 n=5"
+  },
+  {
+    "name": "Hostname Spread Scale Out - Final Nodes (median, n=5)",
+    "unit": "nodes",
+    "value": 501,
+    "range": "6.54",
+    "extra": "mean=504 stddev=6.54 cv=1.3% min=500 max=517 n=5"
+  },
+  {
+    "name": "Scale Out - Controller Peak Memory (median, n=5)",
+    "unit": "MB",
+    "value": 271.44,
+    "range": "22.16",
+    "extra": "mean=267.9 stddev=22.16 cv=8.3% min=235.73 max=298.47 n=5"
+  },
+  {
+    "name": "Scale Out - Duration (median, n=5)",
+    "unit": "seconds",
+    "value": 78.12,
+    "range": "1.62",
+    "extra": "mean=78.44 stddev=1.62 cv=2.1% min=76.69 max=81.1 n=5"
+  },
+  {
+    "name": "Scale Out - Final Nodes (median, n=5)",
+    "unit": "nodes",
+    "value": 152,
+    "range": "2.23",
+    "extra": "mean=151.8 stddev=2.23 cv=1.5% min=148 max=154 n=5"
+  },
+  {
+    "name": "Wide Deployments Consolidation - Controller Peak Memory (median, n=5)",
+    "unit": "MB",
+    "value": 346.9,
+    "range": "16.15",
+    "extra": "mean=339.28 stddev=16.15 cv=4.8% min=307.39 max=351.34 n=5"
+  },
+  {
+    "name": "Wide Deployments Consolidation - Duration (median, n=5)",
+    "unit": "seconds",
+    "value": 774.94,
+    "range": "504.61",
+    "extra": "mean=828.63 stddev=504.61 cv=60.9% min=198.73 max=1715.32 n=5"
+  },
+  {
+    "name": "Wide Deployments Consolidation - Final Nodes (median, n=5)",
+    "unit": "nodes",
+    "value": 157,
+    "range": "3.19",
+    "extra": "mean=158.2 stddev=3.19 cv=2% min=155 max=164 n=5"
+  },
+  {
+    "name": "Wide Deployments Scale Out - Controller Peak Memory (median, n=5)",
+    "unit": "MB",
+    "value": 336.77,
+    "range": "20.52",
+    "extra": "mean=332.89 stddev=20.52 cv=6.2% min=296.29 max=359.8 n=5"
+  },
+  {
+    "name": "Wide Deployments Scale Out - Duration (median, n=5)",
+    "unit": "seconds",
+    "value": 83.41,
+    "range": "1.91",
+    "extra": "mean=82.55 stddev=1.91 cv=2.3% min=79.82 max=84.99 n=5"
+  },
+  {
+    "name": "Wide Deployments Scale Out - Final Nodes (median, n=5)",
+    "unit": "nodes",
+    "value": 211,
+    "range": "10.68",
+    "extra": "mean=212.2 stddev=10.68 cv=5% min=201 max=232 n=5"
+  }
+]

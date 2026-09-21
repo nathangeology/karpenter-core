@@ -1,0 +1,105 @@
+# Positive-control gate replay. Not for upstream.
+#
+# Drives the same pinned benchmark-action the PR 2994 gate uses, across two
+# commits on this branch, to reproduce the two-consecutive-runs semantics the
+# shipped gate depends on:
+#
+#   commit A (replay-data/ absent)  -> seed from the BASELINE batch
+#   commit B (replay-data/ present) -> compare the REGRESSED batch against it
+#
+# Two commits are required, not two steps in one job. addBenchmarkEntry picks
+# prevBench as the last stored entry whose commit id DIFFERS from the current
+# one, so a seed and a compare at the same SHA can never alert.
+#
+# actions/cache is deliberately not used. Its key in e2e.yaml is static and
+# Actions cache entries are immutable, so a seeded baseline freezes at run 1,
+# and cache scope does not cross sibling branches either.
+#
+# A failing replay job means the gate FIRED on that tier.
+name: poscontrol-gate-replay
+on:
+  push:
+    branches: ['mayor/gate-replay']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        tier:
+          - name: smaller-tight
+            tool: customSmallerIsBetter
+            threshold: '150%'
+          - name: smaller-loose
+            tool: customSmallerIsBetter
+            threshold: '250%'
+          - name: bigger
+            tool: customBiggerIsBetter
+            threshold: '150%'
+          - name: cv
+            tool: customSmallerIsBetter
+            threshold: '200%'
+    name: replay-${{ matrix.tier.name }}
+    steps:
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+    - name: Determine phase
+      id: phase
+      shell: bash
+      run: |
+        if [ -f "replay-data/${{ matrix.tier.name }}/benchmark-data.json" ]; then
+          echo "phase=compare" >> "$GITHUB_OUTPUT"
+        else
+          echo "phase=seed" >> "$GITHUB_OUTPUT"
+        fi
+        echo "tier=${{ matrix.tier.name }} threshold=${{ matrix.tier.threshold }}"
+    - name: Seed from baseline batch
+      if: steps.phase.outputs.phase == 'seed'
+      uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba # v1.22.1
+      with:
+        name: replay-${{ matrix.tier.name }}
+        tool: ${{ matrix.tier.tool }}
+        output-file-path: replay/baseline/benchmark-results-${{ matrix.tier.name }}.json
+        external-data-json-path: ./replay-data/${{ matrix.tier.name }}/benchmark-data.json
+        alert-threshold: ${{ matrix.tier.threshold }}
+        fail-on-alert: true
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        comment-on-alert: false
+        summary-always: true
+    - name: Compare regressed batch against seeded baseline
+      if: steps.phase.outputs.phase == 'compare'
+      id: compare
+      continue-on-error: true
+      uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba # v1.22.1
+      with:
+        name: replay-${{ matrix.tier.name }}
+        tool: ${{ matrix.tier.tool }}
+        output-file-path: replay/candidate/benchmark-results-${{ matrix.tier.name }}.json
+        external-data-json-path: ./replay-data/${{ matrix.tier.name }}/benchmark-data.json
+        alert-threshold: ${{ matrix.tier.threshold }}
+        fail-on-alert: true
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        comment-on-alert: false
+        summary-always: true
+    - name: Verdict
+      shell: bash
+      run: |
+        echo "phase=${{ steps.phase.outputs.phase }} tier=${{ matrix.tier.name }} threshold=${{ matrix.tier.threshold }}"
+        if [ "${{ steps.phase.outputs.phase }}" = "seed" ]; then
+          echo "SEED phase: no previous entry existed, so no alert was possible."
+          exit 0
+        fi
+        if [ "${{ steps.compare.outcome }}" = "failure" ]; then
+          echo "GATE FIRED on tier ${{ matrix.tier.name }}"
+        else
+          echo "GATE DID NOT FIRE on tier ${{ matrix.tier.name }}"
+        fi
+    - name: Upload merged benchmark data
+      if: always()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: replay-${{ steps.phase.outputs.phase }}-${{ matrix.tier.name }}
+        path: ./replay-data/**/benchmark-data.json
+        if-no-files-found: warn
