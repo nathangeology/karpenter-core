@@ -379,6 +379,27 @@ var _ = Describe("Perf Aggregate", func() {
 			Expect(buf.String()).To(ContainSubstring("Performance baseline state missing"))
 		})
 
+		// The first run after the state moved out of the baseline tree finds the
+		// new location empty and the old one populated. Failing that run would
+		// fail every existing cache scope once; discarding the old state would
+		// throw away the audit history.
+		It("carries the state forward from the pre-split location", func() {
+			legacy := cfg(tmp, cacheDir)
+			Expect(checkBaseline(legacy, os.Stdout)).To(Succeed())
+			Expect(filepath.Join(cacheDir, "baseline-state.json")).To(BeAnExistingFile())
+
+			split := cfg(tmp, cacheDir)
+			split.stateDir = filepath.Join(tmp, "baseline-state")
+			split.cacheHit = "Linux-perf-benchmark-Drift Performance--run-8999-1"
+			var buf strings.Builder
+			err := checkBaseline(split, &buf)
+			// The old state says these keys were gated and the history is still
+			// absent, so this is the MISSING case rather than the eviction case.
+			Expect(err).To(MatchError(ContainSubstring("baseline missing")))
+			Expect(buf.String()).To(ContainSubstring("Carrying the baseline audit state forward"))
+			Expect(err.Error()).ToNot(ContainSubstring("cannot tell a first run from an eviction"))
+		})
+
 		It("allows a matched cache once the state file is present", func() {
 			c := cfg(tmp, cacheDir)
 			c.stateDir = filepath.Join(tmp, "baseline-state")

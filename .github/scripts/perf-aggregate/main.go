@@ -451,10 +451,27 @@ func checkBaseline(cfg baselineConfig, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	// A restored history entry with no state file is eviction, not a first run.
-	// Without this the two cases are indistinguishable and the second one
-	// green-seeds every key. cacheHit is the cache-matched-key output, so it is
-	// non-empty exactly when a prior run's entry was found.
+	// Migration. Runs before the state moved out of the baseline tree wrote it
+	// to baselineDir, so the first run after that change finds the new location
+	// empty and the old one populated. Read the old location rather than treating
+	// it as a first run, which would discard the audit history, and rather than
+	// treating it as an eviction, which would fail the first run on every
+	// existing cache scope.
+	if prior.LastRun == "" && stateDir != cfg.baselineDir {
+		legacyPath := filepath.Join(cfg.baselineDir, baselineStateFile)
+		legacy, lerr := readBaselineState(legacyPath)
+		if lerr != nil {
+			return lerr
+		}
+		if legacy.LastRun != "" {
+			fmt.Fprintf(out, "Carrying the baseline audit state forward from %s to %s\n", legacyPath, statePath)
+			prior = legacy
+		}
+	}
+	// A restored history entry with no state file in either location is eviction,
+	// not a first run. Without this the two cases are indistinguishable and the
+	// second one green-seeds every key. cacheHit is the cache-matched-key output,
+	// so it is non-empty exactly when a prior run's entry was found.
 	if cfg.cacheHit != "" && prior.LastRun == "" {
 		fmt.Fprintf(out, "::error title=Performance baseline state missing::actions/cache restored %s but %s is absent, so the record of which keys were gated is gone. Refusing to seed over a populated baseline scope.\n",
 			cfg.cacheHit, statePath)
