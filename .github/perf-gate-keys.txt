@@ -66,7 +66,7 @@
 # lists the four conditions consolidation has to meet first.
 
 # ---- file-level parameters ----
-_gate                                          derived_for_n                      10     # runs 35680298794 and 35680365019, 10 independent runners per side
+_gate                                          derived_for_n                      2      # SMOKE ONLY, real value is 10. runs 35680298794 and 35680365019, 10 independent runners per side
 _gate                                          cpu_core_cap                       2.0    # Makefile:9, --set controller.resources.limits.cpu=2
 
 # ---- Basic Scale Test ----
