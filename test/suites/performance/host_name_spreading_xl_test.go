@@ -105,8 +105,9 @@ var _ = Describe("Performance", Label(debug.NoWatch), func() {
 					"Average CPU utilization should be greater than 38%")
 				Expect(consolidationReport.TotalReservedMemoryUtil).To(BeNumerically(">", MemoryUtilThreshold("hostNameSpreadingXL/consolidation", 0.40)),
 					"Average memory utilization should be greater than 40%")
-				Expect(consolidationReport.KarpenterP95MemoryMB).To(BeNumerically("<", MemoryThreshold("hostNameSpreadingXL/consolidation", 1200)),
-					"Karpenter controller P95 memory should be less than 1200 MB during consolidation")
+				Expect(MemoryGrowth(scaleOutReport, consolidationReport)).To(BeNumerically("<", MemoryGrowthThreshold("hostNameSpreadingXL/consolidation", 95)),
+					"Karpenter controller P95 memory grew from %.1f MB in the scale-out phase to %.1f MB here, over the 95 MB cap on phase-to-phase growth",
+					scaleOutReport.KarpenterP95MemoryMB, consolidationReport.KarpenterP95MemoryMB)
 				Expect(consolidationReport.KarpenterAvgCPUCores).To(BeNumerically("<", CPUThreshold("hostNameSpreadingXL/consolidation", 1.70)),
 					"Karpenter controller avg CPU should be less than 1.70 cores during consolidation")
 			})

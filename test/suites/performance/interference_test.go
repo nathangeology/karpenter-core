@@ -93,7 +93,8 @@ var _ = Describe("Performance", Label(debug.NoWatch), func() {
 			By("Validating scale out performance")
 			Expect(interferenceReport.TestType).To(Equal("scale-out"), "Should be detected as scale out test")
 
-			// Consolidation assertions
+			// Phase 2 assertions. This phase is a second scale-out, 500 pods to 750,
+			// not a consolidation, despite the key's neighbors.
 			gates.Check("interference/interference", func() {
 				Expect(interferenceReport.TotalPods).To(Equal(750), "Should have 750 total pods after scale-in")
 				Expect(interferenceReport.TotalTime).To(BeNumerically("<", TotalTimeThreshold("interference/interference", 10*time.Minute)),
@@ -102,8 +103,9 @@ var _ = Describe("Performance", Label(debug.NoWatch), func() {
 					"Average CPU utilization should be greater than 38%")
 				Expect(interferenceReport.TotalReservedMemoryUtil).To(BeNumerically(">", MemoryUtilThreshold("interference/interference", 0.40)),
 					"Average memory utilization should be greater than 40%")
-				Expect(interferenceReport.KarpenterP95MemoryMB).To(BeNumerically("<", MemoryThreshold("interference/interference", 1205)),
-					"Karpenter controller P95 memory should be less than 1205 MB during interference")
+				Expect(MemoryGrowth(scaleOutReport, interferenceReport)).To(BeNumerically("<", MemoryGrowthThreshold("interference/interference", 555)),
+					"Karpenter controller P95 memory grew from %.1f MB in the scale-out phase to %.1f MB here, over the 555 MB cap on phase-to-phase growth",
+					scaleOutReport.KarpenterP95MemoryMB, interferenceReport.KarpenterP95MemoryMB)
 				Expect(interferenceReport.KarpenterAvgCPUCores).To(BeNumerically("<", CPUThreshold("interference/interference", 1.30)),
 					"Karpenter controller avg CPU should be less than 1.30 cores during interference")
 			})
@@ -142,8 +144,9 @@ var _ = Describe("Performance", Label(debug.NoWatch), func() {
 					"Average CPU utilization should remain greater than 38% after consolidation")
 				Expect(consolidationReport.TotalReservedMemoryUtil).To(BeNumerically(">", MemoryUtilThreshold("interference/consolidation", 0.40)),
 					"Average memory utilization should remain greater than 40% after consolidation")
-				Expect(consolidationReport.KarpenterP95MemoryMB).To(BeNumerically("<", MemoryThreshold("interference/consolidation", 820)),
-					"Karpenter controller P95 memory should be less than 820 MB during consolidation")
+				Expect(MemoryGrowth(interferenceReport, consolidationReport)).To(BeNumerically("<", MemoryGrowthThreshold("interference/consolidation", 45)),
+					"Karpenter controller P95 memory grew from %.1f MB in the interference scale-out phase to %.1f MB here, over the 45 MB cap on phase-to-phase growth",
+					interferenceReport.KarpenterP95MemoryMB, consolidationReport.KarpenterP95MemoryMB)
 				Expect(consolidationReport.KarpenterAvgCPUCores).To(BeNumerically("<", CPUThreshold("interference/consolidation", 0.80)),
 					"Karpenter controller avg CPU should be less than 0.80 cores during consolidation")
 			})

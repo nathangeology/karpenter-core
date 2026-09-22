@@ -17,6 +17,7 @@ limitations under the License.
 package performance
 
 import (
+	"math"
 	"os"
 	"strings"
 	"testing"
@@ -266,3 +267,42 @@ func TestUnitReadyIsReportOnly(t *testing.T) {
 		t.Errorf("Ready(nil) = %v %q", ok, why)
 	}
 }
+
+func TestUnitMemoryGrowth(t *testing.T) {
+	prior := &PerformanceReport{KarpenterP95MemoryMB: 236.0}
+	current := &PerformanceReport{KarpenterP95MemoryMB: 255.4}
+	if got := MemoryGrowth(prior, current); math.Abs(got-19.4) > 1e-9 {
+		t.Errorf("MemoryGrowth = %v, want 19.4", got)
+	}
+	// Four of the eight gated phases have a negative median growth, so the sign
+	// has to survive. A magnitude would gate a shrinking controller.
+	shrunk := &PerformanceReport{KarpenterP95MemoryMB: 1014.0}
+	big := &PerformanceReport{KarpenterP95MemoryMB: 1191.0}
+	if got := MemoryGrowth(big, shrunk); got >= 0 {
+		t.Errorf("MemoryGrowth = %v, want negative for a phase whose RSS fell", got)
+	}
+}
+
+func TestUnitMemoryGrowthThresholdOverride(t *testing.T) {
+	// loadOverrides parses once per process, so the table cannot be swapped
+	// between subtests. Drive the accessor against a pre-populated table.
+	overridesOnce.Do(func() {})
+	overrides = map[string]thresholdOverride{
+		"basic/consolidation": {MemoryGrowthMB: ptr(120.0)},
+		"drift/drift":         {MemoryMB: ptr(999.0)},
+	}
+	t.Cleanup(func() { overrides = nil })
+
+	if got := MemoryGrowthThreshold("basic/consolidation", 75); got != 120 {
+		t.Errorf("override ignored: got %v, want 120", got)
+	}
+	// An override for the absolute bound must not move the growth bound.
+	if got := MemoryGrowthThreshold("drift/drift", 190); got != 190 {
+		t.Errorf("memory_mb leaked into the growth bound: got %v, want 190", got)
+	}
+	if got := MemoryGrowthThreshold("hostNameSpreading/consolidation", 65); got != 65 {
+		t.Errorf("unset key did not fall back to the base: got %v, want 65", got)
+	}
+}
+
+func ptr[T any](v T) *T { return &v }

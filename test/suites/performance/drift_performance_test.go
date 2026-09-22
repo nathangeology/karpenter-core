@@ -102,8 +102,9 @@ var _ = Describe("Performance", Label(debug.NoWatch), func() {
 				Expect(driftReport.PodsNetChange).To(Equal(0), "Pods should not change during drift")
 				Expect(driftReport.TotalTime).To(BeNumerically("<", TotalTimeThreshold("drift/drift", 50*time.Minute)),
 					"Drift should complete within 50 minutes")
-				Expect(driftReport.KarpenterP95MemoryMB).To(BeNumerically("<", MemoryThreshold("drift/drift", 470)),
-					"Karpenter controller P95 memory should be less than 470 MB during drift")
+				Expect(MemoryGrowth(initialReport, driftReport)).To(BeNumerically("<", MemoryGrowthThreshold("drift/drift", 190)),
+					"Karpenter controller P95 memory grew from %.1f MB in the initial deployment phase to %.1f MB here, over the 190 MB cap on phase-to-phase growth",
+					initialReport.KarpenterP95MemoryMB, driftReport.KarpenterP95MemoryMB)
 				Expect(driftReport.KarpenterAvgCPUCores).To(BeNumerically("<", CPUThreshold("drift/drift", 1.05)),
 					"Karpenter controller avg CPU should be less than 1.05 cores during drift")
 			})

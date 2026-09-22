@@ -119,6 +119,19 @@ func collapse(msg string) string {
 	return strings.Join(fields, " ")
 }
 
+// MemoryGrowth is the peak-memory delta across a phase boundary, in MB.
+//
+// One controller pod serves every phase of a test, and
+// process_resident_memory_bytes is a level that Go does not promptly return to
+// the OS, so a later phase's P95 RSS is bounded below by roughly the earlier
+// phase's ending RSS. An absolute cap on a later phase therefore mostly measures
+// what the earlier phase left behind, firing on a scale-out plateau and naming
+// the consolidation phase. The first phase of each test keeps its absolute cap,
+// where the pod is fresh.
+func MemoryGrowth(prior, current *PerformanceReport) float64 {
+	return current.KarpenterP95MemoryMB - prior.KarpenterP95MemoryMB
+}
+
 // Ready reports whether the cluster a phase left is a usable subject for the next
 // phase, and says why not when it is not. It deliberately ignores whether the
 // phase's thresholds passed: a breached memory cap says the controller was fat,

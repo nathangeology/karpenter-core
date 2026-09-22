@@ -87,8 +87,9 @@ var _ = Describe("Performance", Label(debug.NoWatch), func() {
 				Expect(consolidationReport.PodsNetChange).To(Equal(-300), "Should have net reduction of 300 pods")
 				Expect(consolidationReport.TotalTime).To(BeNumerically("<", TotalTimeThreshold("basic/consolidation", 20*time.Minute)),
 					"Consolidation should complete within 20 minutes")
-				Expect(consolidationReport.KarpenterP95MemoryMB).To(BeNumerically("<", MemoryThreshold("basic/consolidation", 260)),
-					"Karpenter controller P95 memory should be less than 260 MB during consolidation")
+				Expect(MemoryGrowth(scaleOutReport, consolidationReport)).To(BeNumerically("<", MemoryGrowthThreshold("basic/consolidation", 75)),
+					"Karpenter controller P95 memory grew from %.1f MB in the scale-out phase to %.1f MB here, over the 75 MB cap on phase-to-phase growth",
+					scaleOutReport.KarpenterP95MemoryMB, consolidationReport.KarpenterP95MemoryMB)
 				Expect(consolidationReport.KarpenterAvgCPUCores).To(BeNumerically("<", CPUThreshold("basic/consolidation", 0.25)),
 					"Karpenter controller avg CPU should be less than 0.25 cores during consolidation")
 			})

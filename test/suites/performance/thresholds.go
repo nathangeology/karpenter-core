@@ -36,6 +36,7 @@ import (
 // field means "no override for this metric; use the inline base default".
 type thresholdOverride struct {
 	MemoryMB         *float64 `json:"memory_mb,omitempty"`          // peak memory upper bound, MB
+	MemoryGrowthMB   *float64 `json:"memory_growth_mb,omitempty"`   // peak memory growth over the prior phase upper bound, MB
 	CPUCores         *float64 `json:"cpu_cores,omitempty"`          // avg CPU upper bound, cores
 	TotalTimeMinutes *float64 `json:"total_time_minutes,omitempty"` // total time upper bound, minutes
 	CPUUtil          *float64 `json:"cpu_util,omitempty"`           // reserved CPU utilization lower bound, fraction
@@ -82,6 +83,16 @@ func override(key string) (thresholdOverride, bool) {
 func MemoryThreshold(key string, base float64) float64 {
 	if o, ok := override(key); ok && o.MemoryMB != nil {
 		return *o.MemoryMB
+	}
+	return base
+}
+
+// MemoryGrowthThreshold is the upper bound on a phase's peak-memory growth over
+// the phase before it, in MB. It replaces the absolute bound on every phase that
+// is not the first of its test; see MemoryGrowth for why.
+func MemoryGrowthThreshold(key string, base float64) float64 {
+	if o, ok := override(key); ok && o.MemoryGrowthMB != nil {
+		return *o.MemoryGrowthMB
 	}
 	return base
 }
