@@ -30,6 +30,7 @@ import (
 	opmetrics "github.com/awslabs/operatorpkg/metrics"
 	"github.com/awslabs/operatorpkg/option"
 	"github.com/awslabs/operatorpkg/serrors"
+	"github.com/go-logr/logr"
 	"github.com/go-logr/zapr"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/samber/lo"
@@ -156,6 +157,8 @@ func NewOperator(o ...option.Function[Options]) (context.Context, *Operator) {
 	log.SetLogger(logger)
 	klog.SetLogger(logger)
 
+	logUnrecognizedFeatureGates(ctx, logger)
+
 	// Client Config
 	config := ctrl.GetConfigOrDie()
 	// Copy the leader config for lower QPS/Burst
@@ -266,6 +269,16 @@ func NewOperator(o ...option.Function[Options]) (context.Context, *Operator) {
 		Clock:               clock.RealClock{},
 		InstanceTypeStore:   instanceTypeStore,
 		PredictionStore:     predictionStore,
+	}
+}
+
+// logUnrecognizedFeatureGates reports the FEATURE_GATES keys this build does not define. The parser tolerates them, so
+// that gates removed after graduation and gates owned by a provider fork do not fail startup, which leaves a mistyped
+// gate otherwise silent. Called from NewOperator once the logger exists, as a function rather than inline to keep
+// NewOperator under the gocyclo limit.
+func logUnrecognizedFeatureGates(ctx context.Context, logger logr.Logger) {
+	if unrecognized := options.FromContext(ctx).FeatureGates.Unrecognized(); len(unrecognized) > 0 {
+		logger.Info("ignoring unrecognized feature gates", "unrecognized", unrecognized, "known", options.KnownFeatureGates())
 	}
 }
 
