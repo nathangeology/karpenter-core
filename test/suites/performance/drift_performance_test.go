@@ -32,6 +32,8 @@ import (
 var _ = Describe("Performance", Label(debug.NoWatch), func() {
 	Context("Drift Performance", func() {
 		It("should efficiently handle drift replacement of pods with topology constraints", func() {
+			gates := DeferGates()
+
 			By("Setting up NodePool and NodeClass for the test")
 			env.ExpectCreated(nodePool, nodeClass)
 
@@ -55,15 +57,23 @@ var _ = Describe("Performance", Label(debug.NoWatch), func() {
 
 			By("Validating initial deployment")
 			Expect(initialReport.TestType).To(Equal("scale-out"), "Should be detected as scale-out test")
-			Expect(initialReport.TotalPods).To(Equal(600), "Should have 600 total pods")
 
 			// Performance assertions for initial deployment
-			Expect(initialReport.TotalTime).To(BeNumerically("<", TotalTimeThreshold("drift/initial", 5*time.Minute)),
-				"Initial deployment should complete within 5 minutes")
-			Expect(initialReport.KarpenterP95MemoryMB).To(BeNumerically("<", MemoryThreshold("drift/initial", 425)),
-				"Karpenter controller P95 memory should be less than 425 MB during scale-out")
-			Expect(initialReport.KarpenterAvgCPUCores).To(BeNumerically("<", CPUThreshold("drift/initial", 0.70)),
-				"Karpenter controller avg CPU should be less than 0.70 cores during scale-out")
+			gates.Check("drift/initial", func() {
+				Expect(initialReport.TotalPods).To(Equal(600), "Should have 600 total pods")
+				Expect(initialReport.TotalTime).To(BeNumerically("<", TotalTimeThreshold("drift/initial", 5*time.Minute)),
+					"Initial deployment should complete within 5 minutes")
+				Expect(initialReport.KarpenterP95MemoryMB).To(BeNumerically("<", MemoryThreshold("drift/initial", 425)),
+					"Karpenter controller P95 memory should be less than 425 MB during scale-out")
+				Expect(initialReport.KarpenterAvgCPUCores).To(BeNumerically("<", CPUThreshold("drift/initial", 0.70)),
+					"Karpenter controller avg CPU should be less than 0.70 cores during scale-out")
+			})
+
+			// Drift replaces nodes, which budgets gate and consolidationPolicy does
+			// not, so this is the disrupt predicate rather than the consolidate one.
+			if ok, why := ReadyToDisrupt(initialReport, 600, nodePool); !ok {
+				Fail(fmt.Sprintf("drift/initial left no measurable subject for the drift phase: %s", why))
+			}
 
 			// Allow system to stabilize before triggering drift
 			By("Allowing system to stabilize before triggering drift")
@@ -85,24 +95,29 @@ var _ = Describe("Performance", Label(debug.NoWatch), func() {
 
 			By("Validating drift execution")
 			Expect(driftReport.TestType).To(Equal("drift"), "Should be detected as drift test")
-			Expect(driftReport.TotalPods).To(Equal(600), "Should maintain 600 pods during drift")
-			Expect(driftReport.PodsNetChange).To(Equal(0), "Pods should not change during drift")
 
 			// Drift performance assertions
-			Expect(driftReport.TotalTime).To(BeNumerically("<", TotalTimeThreshold("drift/drift", 50*time.Minute)),
-				"Drift should complete within 50 minutes")
-			Expect(driftReport.KarpenterP95MemoryMB).To(BeNumerically("<", MemoryThreshold("drift/drift", 470)),
-				"Karpenter controller P95 memory should be less than 470 MB during drift")
-			Expect(driftReport.KarpenterAvgCPUCores).To(BeNumerically("<", CPUThreshold("drift/drift", 1.05)),
-				"Karpenter controller avg CPU should be less than 1.05 cores during drift")
+			gates.Check("drift/drift", func() {
+				Expect(driftReport.TotalPods).To(Equal(600), "Should maintain 600 pods during drift")
+				Expect(driftReport.PodsNetChange).To(Equal(0), "Pods should not change during drift")
+				Expect(driftReport.TotalTime).To(BeNumerically("<", TotalTimeThreshold("drift/drift", 50*time.Minute)),
+					"Drift should complete within 50 minutes")
+				Expect(driftReport.KarpenterP95MemoryMB).To(BeNumerically("<", MemoryThreshold("drift/drift", 470)),
+					"Karpenter controller P95 memory should be less than 470 MB during drift")
+				Expect(driftReport.KarpenterAvgCPUCores).To(BeNumerically("<", CPUThreshold("drift/drift", 1.05)),
+					"Karpenter controller avg CPU should be less than 1.05 cores during drift")
+			})
 
 			// ========== PHASE 3: POST-DRIFT VALIDATION ==========
+			// Not deferred. A pod count that never recovers is a correctness failure
+			// and the Eventually cannot be captured without letting the check pass.
 			By("Validating post-drift cluster state")
 
 			// Verify all pods are still healthy after drift
 			allPodsSelector := labels.SelectorFromSet(map[string]string{test.DiscoveryLabel: "unspecified"})
 			env.EventuallyExpectHealthyPodCount(allPodsSelector, 600)
 
+			gates.Report()
 		})
 	})
 })

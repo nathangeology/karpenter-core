@@ -17,6 +17,7 @@ limitations under the License.
 package performance
 
 import (
+	"fmt"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -30,6 +31,8 @@ import (
 var _ = Describe("Performance", Label(debug.NoWatch), func() {
 	Context("Self Anti-Affinity Deployment Interference", func() {
 		It("should efficiently scale two deployments with self anti-affinity", func() {
+			gates := DeferGates()
+
 			By("Setting up NodePool and NodeClass for the test")
 			env.ExpectCreated(nodePool, nodeClass)
 
@@ -52,19 +55,27 @@ var _ = Describe("Performance", Label(debug.NoWatch), func() {
 
 			By("Validating scale-out performance with self anti-affinity")
 			Expect(scaleOutReport.TestType).To(Equal("scale-out"), "Should be detected as scale-out test")
-			Expect(scaleOutReport.TotalPods).To(Equal(500), "Should have 500 total pods")
 
 			// Performance assertions - self anti-affinity requires one pod per node
-			Expect(scaleOutReport.TotalTime).To(BeNumerically("<", TotalTimeThreshold("interference/scaleOut", 5*time.Minute)),
-				"Total scale-out time should be less than 5 minutes")
-			Expect(scaleOutReport.TotalReservedCPUUtil).To(BeNumerically(">", CPUUtilThreshold("interference/scaleOut", 0.38)),
-				"Average CPU utilization should be greater than 38%")
-			Expect(scaleOutReport.TotalReservedMemoryUtil).To(BeNumerically(">", MemoryUtilThreshold("interference/scaleOut", 0.40)),
-				"Average memory utilization should be greater than 40%")
-			Expect(scaleOutReport.KarpenterP95MemoryMB).To(BeNumerically("<", MemoryThreshold("interference/scaleOut", 620)),
-				"Karpenter controller P95 memory should be less than 620 MB during scale-out")
-			Expect(scaleOutReport.KarpenterAvgCPUCores).To(BeNumerically("<", CPUThreshold("interference/scaleOut", 0.90)),
-				"Karpenter controller avg CPU should be less than 0.90 cores during scale-out")
+			gates.Check("interference/scaleOut", func() {
+				Expect(scaleOutReport.TotalPods).To(Equal(500), "Should have 500 total pods")
+				Expect(scaleOutReport.TotalTime).To(BeNumerically("<", TotalTimeThreshold("interference/scaleOut", 5*time.Minute)),
+					"Total scale-out time should be less than 5 minutes")
+				Expect(scaleOutReport.TotalReservedCPUUtil).To(BeNumerically(">", CPUUtilThreshold("interference/scaleOut", 0.38)),
+					"Average CPU utilization should be greater than 38%")
+				Expect(scaleOutReport.TotalReservedMemoryUtil).To(BeNumerically(">", MemoryUtilThreshold("interference/scaleOut", 0.40)),
+					"Average memory utilization should be greater than 40%")
+				Expect(scaleOutReport.KarpenterP95MemoryMB).To(BeNumerically("<", MemoryThreshold("interference/scaleOut", 620)),
+					"Karpenter controller P95 memory should be less than 620 MB during scale-out")
+				Expect(scaleOutReport.KarpenterAvgCPUCores).To(BeNumerically("<", CPUThreshold("interference/scaleOut", 0.90)),
+					"Karpenter controller avg CPU should be less than 0.90 cores during scale-out")
+			})
+
+			// Phase 2 is a second scale-out, not a consolidation, so it needs a
+			// schedulable cluster and no disruption setting.
+			if ok, why := Ready(scaleOutReport, 500); !ok {
+				Fail(fmt.Sprintf("interference/scaleOut left no measurable subject for the interference phase: %s", why))
+			}
 
 			// ========== PHASE 2: Interference Scale Out TEST ==========
 			By("Net scaling out interference test")
@@ -81,19 +92,25 @@ var _ = Describe("Performance", Label(debug.NoWatch), func() {
 
 			By("Validating scale out performance")
 			Expect(interferenceReport.TestType).To(Equal("scale-out"), "Should be detected as scale out test")
-			Expect(interferenceReport.TotalPods).To(Equal(750), "Should have 750 total pods after scale-in")
 
 			// Consolidation assertions
-			Expect(interferenceReport.TotalTime).To(BeNumerically("<", TotalTimeThreshold("interference/interference", 10*time.Minute)),
-				"Scaling should complete within 10 minutes")
-			Expect(interferenceReport.TotalReservedCPUUtil).To(BeNumerically(">", CPUUtilThreshold("interference/interference", 0.38)),
-				"Average CPU utilization should be greater than 38%")
-			Expect(interferenceReport.TotalReservedMemoryUtil).To(BeNumerically(">", MemoryUtilThreshold("interference/interference", 0.40)),
-				"Average memory utilization should be greater than 40%")
-			Expect(interferenceReport.KarpenterP95MemoryMB).To(BeNumerically("<", MemoryThreshold("interference/interference", 1205)),
-				"Karpenter controller P95 memory should be less than 1205 MB during interference")
-			Expect(interferenceReport.KarpenterAvgCPUCores).To(BeNumerically("<", CPUThreshold("interference/interference", 1.30)),
-				"Karpenter controller avg CPU should be less than 1.30 cores during interference")
+			gates.Check("interference/interference", func() {
+				Expect(interferenceReport.TotalPods).To(Equal(750), "Should have 750 total pods after scale-in")
+				Expect(interferenceReport.TotalTime).To(BeNumerically("<", TotalTimeThreshold("interference/interference", 10*time.Minute)),
+					"Scaling should complete within 10 minutes")
+				Expect(interferenceReport.TotalReservedCPUUtil).To(BeNumerically(">", CPUUtilThreshold("interference/interference", 0.38)),
+					"Average CPU utilization should be greater than 38%")
+				Expect(interferenceReport.TotalReservedMemoryUtil).To(BeNumerically(">", MemoryUtilThreshold("interference/interference", 0.40)),
+					"Average memory utilization should be greater than 40%")
+				Expect(interferenceReport.KarpenterP95MemoryMB).To(BeNumerically("<", MemoryThreshold("interference/interference", 1205)),
+					"Karpenter controller P95 memory should be less than 1205 MB during interference")
+				Expect(interferenceReport.KarpenterAvgCPUCores).To(BeNumerically("<", CPUThreshold("interference/interference", 1.30)),
+					"Karpenter controller avg CPU should be less than 1.30 cores during interference")
+			})
+
+			if ok, why := ReadyToConsolidate(interferenceReport, 750, nodePool); !ok {
+				Fail(fmt.Sprintf("interference/interference left no measurable subject for the consolidation phase: %s", why))
+			}
 
 			// ========== PHASE 3: Interference Scale In TEST ==========
 			By("Executing interference consolidation test (small_deployment scales out to 400, large_deployment scales in to 200)")
@@ -114,21 +131,24 @@ var _ = Describe("Performance", Label(debug.NoWatch), func() {
 
 			By("Validating consolidation performance during interference")
 			Expect(consolidationReport.TestType).To(Equal("consolidation"), "Should be detected as consolidation test")
-			Expect(consolidationReport.TotalPods).To(Equal(600), "Should have 600 total pods after mixed scaling")
-			Expect(consolidationReport.PodsNetChange).To(Equal(-150), "Should have net reduction of 150 pods")
 
 			// Consolidation performance assertions
-			Expect(consolidationReport.TotalTime).To(BeNumerically("<", TotalTimeThreshold("interference/consolidation", 25*time.Minute)),
-				"Mixed scaling and consolidation should complete within 25 minutes")
-			Expect(consolidationReport.TotalReservedCPUUtil).To(BeNumerically(">", CPUUtilThreshold("interference/consolidation", 0.38)),
-				"Average CPU utilization should remain greater than 38% after consolidation")
-			Expect(consolidationReport.TotalReservedMemoryUtil).To(BeNumerically(">", MemoryUtilThreshold("interference/consolidation", 0.40)),
-				"Average memory utilization should remain greater than 40% after consolidation")
-			Expect(consolidationReport.KarpenterP95MemoryMB).To(BeNumerically("<", MemoryThreshold("interference/consolidation", 820)),
-				"Karpenter controller P95 memory should be less than 820 MB during consolidation")
-			Expect(consolidationReport.KarpenterAvgCPUCores).To(BeNumerically("<", CPUThreshold("interference/consolidation", 0.80)),
-				"Karpenter controller avg CPU should be less than 0.80 cores during consolidation")
+			gates.Check("interference/consolidation", func() {
+				Expect(consolidationReport.TotalPods).To(Equal(600), "Should have 600 total pods after mixed scaling")
+				Expect(consolidationReport.PodsNetChange).To(Equal(-150), "Should have net reduction of 150 pods")
+				Expect(consolidationReport.TotalTime).To(BeNumerically("<", TotalTimeThreshold("interference/consolidation", 25*time.Minute)),
+					"Mixed scaling and consolidation should complete within 25 minutes")
+				Expect(consolidationReport.TotalReservedCPUUtil).To(BeNumerically(">", CPUUtilThreshold("interference/consolidation", 0.38)),
+					"Average CPU utilization should remain greater than 38% after consolidation")
+				Expect(consolidationReport.TotalReservedMemoryUtil).To(BeNumerically(">", MemoryUtilThreshold("interference/consolidation", 0.40)),
+					"Average memory utilization should remain greater than 40% after consolidation")
+				Expect(consolidationReport.KarpenterP95MemoryMB).To(BeNumerically("<", MemoryThreshold("interference/consolidation", 820)),
+					"Karpenter controller P95 memory should be less than 820 MB during consolidation")
+				Expect(consolidationReport.KarpenterAvgCPUCores).To(BeNumerically("<", CPUThreshold("interference/consolidation", 0.80)),
+					"Karpenter controller avg CPU should be less than 0.80 cores during consolidation")
+			})
 
+			gates.Report()
 		})
 	})
 })
