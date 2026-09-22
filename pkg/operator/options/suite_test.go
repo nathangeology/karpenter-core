@@ -55,6 +55,7 @@ var _ = Describe("Options", func() {
 		"DISABLE_CONTROLLER_WARMUP",
 		"DISABLE_LEADER_ELECTION",
 		"DISABLE_CLUSTER_STATE_OBSERVABILITY",
+		"LEADER_ELECTION_NAME",
 		"LEADER_ELECTION_NAMESPACE",
 		"MEMORY_LIMIT",
 		"LOG_LEVEL",
@@ -392,6 +393,8 @@ func expectOptionsMatch(optsA, optsB *options.Options) {
 	Expect(optsA.DisableControllerWarmup).To(Equal(optsB.DisableControllerWarmup))
 	Expect(optsA.DisableLeaderElection).To(Equal(optsB.DisableLeaderElection))
 	Expect(optsA.DisableClusterStateObservability).To(Equal(optsB.DisableClusterStateObservability))
+	Expect(optsA.LeaderElectionName).To(Equal(optsB.LeaderElectionName))
+	Expect(optsA.LeaderElectionNamespace).To(Equal(optsB.LeaderElectionNamespace))
 	Expect(optsA.MemoryLimit).To(Equal(optsB.MemoryLimit))
 	Expect(optsA.LogLevel).To(Equal(optsB.LogLevel))
 	Expect(optsA.LogOutputPaths).To(Equal(optsB.LogOutputPaths))

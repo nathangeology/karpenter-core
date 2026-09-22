@@ -78,6 +78,8 @@ func Options(overrides ...OptionsFields) *options.Options {
 		DisableControllerWarmup:          lo.FromPtrOr(opts.DisableControllerWarmup, true),
 		DisableLeaderElection:            lo.FromPtrOr(opts.DisableLeaderElection, false),
 		DisableClusterStateObservability: lo.FromPtrOr(opts.DisableClusterStateObservability, false),
+		LeaderElectionName:               lo.FromPtrOr(opts.LeaderElectionName, "karpenter-leader-election"),
+		LeaderElectionNamespace:          lo.FromPtrOr(opts.LeaderElectionNamespace, ""),
 		MemoryLimit:                      lo.FromPtrOr(opts.MemoryLimit, -1),
 		CPURequests:                      lo.FromPtrOr(opts.CPURequests, 5000), // use 5 threads to enforce parallelism
 		LogLevel:                         lo.FromPtrOr(opts.LogLevel, ""),
