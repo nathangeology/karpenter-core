@@ -30,14 +30,25 @@ on:
           workflow is 19%, and 44% on Wide Deployments, so requiring all ten
           samples leaves a batch gateable 12% of the time on a typical key and
           0.3% on Wide Deployments.
+      allow_baseline_seed:
+        type: boolean
+        required: false
+        default: false
+        description: >-
+          Permit a key declared gated by .github/perf-gate-keys.txt to be seeded
+          when the stored history has none. A run with this set is not gating
+          those keys, so it is false by default and set only when deliberately
+          establishing a new cache scope. A scope nobody has ever written to is
+          detected on its own and needs no flag; this covers the case where the
+          cache entry or the audit state survived but the chart names moved.
 jobs:
   perf-gate:
     permissions:
       issues: write
     runs-on: ubuntu-latest
     name: ${{ inputs.test_name }} gate
-    # Shared parameters for the four benchmark-action Compare steps below.
-    # Per-step configuration is limited to: name suffix, tool, output file,
+    # Shared parameters for the benchmark-action steps below. Per-step
+    # configuration is limited to: name suffix, tool, output file,
     # external-data path, alert threshold, and fail-on-alert.
     env:
       BENCH_NAME_PREFIX: Karpenter Performance (${{ inputs.test_name }})
@@ -76,9 +87,9 @@ jobs:
       with:
         pattern: performance-results-${{ inputs.test_name }}-iter-*-${{ github.run_id }}
         path: ${{ env.OUTPUT_DIR }}
-    # One cache blob for the four benchmark-action Compare steps below.
-    # Each tier writes its baseline file under ./cache/<tier>/benchmark-data.json;
-    # actions/cache save-post persists the whole ./cache tree.
+    # One cache blob for every benchmark-action step below. Each writes its
+    # baseline file under ./cache/<field slug>/benchmark-data.json; actions/cache
+    # save-post persists the whole ./cache tree.
     #
     # The key carries github.run_id so every run writes a new entry. Cache
     # entries are immutable, so a key that is constant across runs restores
@@ -120,110 +131,188 @@ jobs:
     # BASELINE_CACHE_HIT closes the remaining hole in the same check: a
     # restored history entry with no state file is an eviction, not a first run.
     - name: Aggregate and compare against baseline
+      id: aggregate
       env:
         ITERATIONS: ${{ inputs.iterations }}
         MIN_ITERATIONS: ${{ inputs.min_iterations > 0 && inputs.min_iterations || inputs.iterations }}
         BASELINE_DIR: ./cache
         BASELINE_STATE_DIR: ./baseline-state
         BASELINE_CACHE_HIT: ${{ steps.baseline-cache.outputs.cache-matched-key }}
+        # The committed registry. It decides which keys reach a Compare step and
+        # at what threshold, and it publishes both as step outputs so the numbers
+        # below live in exactly one place. A key the batch produces and the
+        # registry does not mention fails this step.
+        GATE_KEYS_FILE: .github/perf-gate-keys.txt
+        ALLOW_BASELINE_SEED: ${{ inputs.allow_baseline_seed }}
       shell: bash
       run: |
         go run ./.github/scripts/perf-aggregate
-    # The batch median regression alerts run below with fail-on-alert: true.
-    # An additional CV entry is emitted per metric so a reviewer can see when
-    # a batch's within-batch variance grows beyond its historical envelope.
-    # It runs under fail-on-alert: false so a noise spike comments but does
-    # not block the pipeline, which is the informational answer to Ryan's
-    # PR#2994 variance question. benchmark-action persists CV entries in
-    # the same cache format as the median entries; no cache-schema change
-    # is required.
+    # One Compare step per gated field. benchmark-action takes one
+    # alert-threshold per step, so a field can only carry its own threshold by
+    # getting its own step. The two shared tiers this replaced forced every
+    # field in a tier to the loosest value any of its keys needed, which is how
+    # a 1.04 key ended up gated at 1.50.
     #
-    # The smaller-is-better group is split into two tiers by observed
-    # per-metric CV so a single flat threshold does not force a choice
-    # between too-tight (FP on Controller CPU / Duration jitter) and too-loose
-    # (miss a real regression on stable metrics like Peak Memory or Final
-    # Nodes). Tiers are static approximations of @ryan-mist's stddev-based
-    # gate ask (PR#2994 comment 3961447028); a proper stddev-history gate
-    # remains a follow-up per the assessment.
-    - name: Compare smaller-is-better metrics (tight)
-      if: always()
+    # Each step is identical apart from its field. name, tool, output file and
+    # cache subdirectory all derive from the field's slug in main.go, and the
+    # threshold and the run/skip decision come from the aggregate step's
+    # outputs. Nothing below is a number a reviewer has to check against
+    # anything else.
+    #
+    # The `if` skips a field with no gated key in this test. benchmark-action on
+    # an empty array stores a history entry holding no keys, which a later run
+    # reads as a baseline that legitimately has none. It also skips every step
+    # when the aggregate step failed, because the outputs are then unset.
+    - name: Compare Duration
+      if: always() && steps.aggregate.outputs.gated_duration == 'true'
       uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba # v1.22.1
       with:
-        name: ${{ env.BENCH_NAME_PREFIX }} - smaller-tight
+        name: ${{ env.BENCH_NAME_PREFIX }} - duration
         tool: customSmallerIsBetter
-        output-file-path: ${{ env.OUTPUT_DIR }}/benchmark-results-smaller-tight.json
-        external-data-json-path: ./cache/smaller-tight/benchmark-data.json
-        # Tight tier: Duration, Controller Peak Memory, Final Nodes.
-        # Threshold unchanged at 150%.
-        #
-        # Duration's placement here is the open question. Measured across 5
-        # upstream runs its CV is median 15% and max 54%, against median 5% for
-        # Peak Memory and 2% for Final Nodes, and a split-half false-positive
-        # rate of 8.8% against 0.0% for the other two. The noise is
-        # phase-shaped rather than metric-shaped: three consolidation keys
-        # produce every one of those exceedances while five scale-out and drift
-        # keys produce none. Re-measuring against samples that are now
-        # independent is what decides whether Duration needs its own tier, a
-        # phase-scoped threshold, or neither.
-        alert-threshold: '150%'
+        output-file-path: ${{ env.OUTPUT_DIR }}/benchmark-results-duration.json
+        external-data-json-path: ./cache/duration/benchmark-data.json
+        alert-threshold: ${{ steps.aggregate.outputs.threshold_duration }}
         fail-on-alert: true
         github-token: ${{ env.BENCH_TOKEN }}
         alert-comment-cc-users: ${{ env.BENCH_CC_USERS }}
         comment-on-alert: ${{ env.BENCH_COMMENT_ON_ALERT }}
         summary-always: ${{ env.BENCH_SUMMARY_ALWAYS }}
-    - name: Compare smaller-is-better metrics (loose)
-      if: always()
+    - name: Compare Controller Peak Memory
+      if: always() && steps.aggregate.outputs.gated_peak_memory == 'true'
       uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba # v1.22.1
       with:
-        name: ${{ env.BENCH_NAME_PREFIX }} - smaller-loose
+        name: ${{ env.BENCH_NAME_PREFIX }} - peak_memory
         tool: customSmallerIsBetter
-        output-file-path: ${{ env.OUTPUT_DIR }}/benchmark-results-smaller-loose.json
-        external-data-json-path: ./cache/smaller-loose/benchmark-data.json
-        # Loose tier: Controller CPU. Threshold is 150%, restored from 250%
-        # after the 250% figure was tested against real data and failed.
-        #
-        # The 250% value rested on an assumption: that the controller-CPU
-        # regression from PR#2671 (issue #2954) would show up here at the 3x
-        # the customer reported, so any threshold under 3.0 would catch it.
-        # That was never measured. It has now been measured, by replaying the
-        # PR#2671 diff through this workflow on two branches that differ only
-        # by that diff, 5 iterations per side. The largest Controller CPU
-        # ratio it produces is 2.070 on the hostname topology-spreading
-        # consolidation key, Mann-Whitney p=0.032, bootstrap 95% CI on the
-        # ratio [1.03, 2.52]. Not 3.0. At 250% the gate did not fire on any
-        # key; at 150% it fires on that key. Widening the tier to 250% is what
-        # turned a detection into a miss. A second key, scale_out, moved 1.448
-        # at p=0.008 and is still missed at 150%, which is the per-key
-        # threshold argument rather than an argument for a lower flat value.
-        #
-        # Known limitation, not addressed here. HELM_OPTS caps the controller
-        # at 2 cores, so the largest ratio this metric can ever report for a
-        # key is 2.0 divided by that key's baseline. Keys whose baseline
-        # already sits above 1.33 cores cannot reach 1.5x at all, so their
-        # pass carries no information. Screening those keys out of the gate,
-        # and adding a cumulative CPU-seconds metric that the core cap does
-        # not clip, are both follow-ups.
-        #
-        # Consolidation Rounds is excluded from both smaller-tier gate files
-        # (see main.go tierInformational); it lives only in the CV file below.
-        alert-threshold: '150%'
+        output-file-path: ${{ env.OUTPUT_DIR }}/benchmark-results-peak_memory.json
+        external-data-json-path: ./cache/peak_memory/benchmark-data.json
+        alert-threshold: ${{ steps.aggregate.outputs.threshold_peak_memory }}
         fail-on-alert: true
         github-token: ${{ env.BENCH_TOKEN }}
         alert-comment-cc-users: ${{ env.BENCH_CC_USERS }}
         comment-on-alert: ${{ env.BENCH_COMMENT_ON_ALERT }}
         summary-always: ${{ env.BENCH_SUMMARY_ALWAYS }}
-    - name: Compare bigger-is-better metrics
-      if: always()
+    # Controller CPU is the one gated field with a ceiling. HELM_OPTS limits the
+    # controller to 2 cores (Makefile:9), so the largest ratio a key can report
+    # is 2.0 divided by its baseline. The aggregate step recomputes that per run
+    # and screens any key whose threshold sits at or above it, because such a
+    # key cannot fail however large the regression. The baseline is not stable
+    # enough to tabulate: hostname_spread_consolidation reads 1.456 cores on the
+    # fresh-runner batch, 0.752 in the positive control and 1.560 on upstream
+    # main, which moves its ceiling from 1.37 to 2.66.
+    - name: Compare Controller CPU
+      if: always() && steps.aggregate.outputs.gated_controller_cpu == 'true'
       uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba # v1.22.1
       with:
-        name: ${{ env.BENCH_NAME_PREFIX }} - bigger-is-better
-        # Utilization and efficiency-score metrics fail when they DROP,
-        # so they must not share a group with latency/resource-cost metrics.
+        name: ${{ env.BENCH_NAME_PREFIX }} - controller_cpu
+        tool: customSmallerIsBetter
+        output-file-path: ${{ env.OUTPUT_DIR }}/benchmark-results-controller_cpu.json
+        external-data-json-path: ./cache/controller_cpu/benchmark-data.json
+        alert-threshold: ${{ steps.aggregate.outputs.threshold_controller_cpu }}
+        fail-on-alert: true
+        github-token: ${{ env.BENCH_TOKEN }}
+        alert-comment-cc-users: ${{ env.BENCH_CC_USERS }}
+        comment-on-alert: ${{ env.BENCH_COMMENT_ON_ALERT }}
+        summary-always: ${{ env.BENCH_SUMMARY_ALWAYS }}
+    - name: Compare Final Nodes
+      if: always() && steps.aggregate.outputs.gated_final_nodes == 'true'
+      uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba # v1.22.1
+      with:
+        name: ${{ env.BENCH_NAME_PREFIX }} - final_nodes
+        tool: customSmallerIsBetter
+        output-file-path: ${{ env.OUTPUT_DIR }}/benchmark-results-final_nodes.json
+        external-data-json-path: ./cache/final_nodes/benchmark-data.json
+        alert-threshold: ${{ steps.aggregate.outputs.threshold_final_nodes }}
+        fail-on-alert: true
+        github-token: ${{ env.BENCH_TOKEN }}
+        alert-comment-cc-users: ${{ env.BENCH_CC_USERS }}
+        comment-on-alert: ${{ env.BENCH_COMMENT_ON_ALERT }}
+        summary-always: ${{ env.BENCH_SUMMARY_ALWAYS }}
+    # Utilization and efficiency fail when they DROP, so they take the
+    # bigger-is-better tool. Direction is a per-step property in
+    # github-action-benchmark, not a per-entry one.
+    - name: Compare CPU Utilization
+      if: always() && steps.aggregate.outputs.gated_cpu_util == 'true'
+      uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba # v1.22.1
+      with:
+        name: ${{ env.BENCH_NAME_PREFIX }} - cpu_util
         tool: customBiggerIsBetter
-        output-file-path: ${{ env.OUTPUT_DIR }}/benchmark-results-bigger.json
-        external-data-json-path: ./cache/bigger/benchmark-data.json
-        alert-threshold: '150%'
+        output-file-path: ${{ env.OUTPUT_DIR }}/benchmark-results-cpu_util.json
+        external-data-json-path: ./cache/cpu_util/benchmark-data.json
+        alert-threshold: ${{ steps.aggregate.outputs.threshold_cpu_util }}
         fail-on-alert: true
+        github-token: ${{ env.BENCH_TOKEN }}
+        alert-comment-cc-users: ${{ env.BENCH_CC_USERS }}
+        comment-on-alert: ${{ env.BENCH_COMMENT_ON_ALERT }}
+        summary-always: ${{ env.BENCH_SUMMARY_ALWAYS }}
+    # Dormant while the registry screens it. report.go:128 computes the
+    # efficiency score as avgCPUUtil*90 + avgMemUtil*10, so it is a linear
+    # combination of the two utilization fields above and carries no information
+    # they do not. Gating it would also inflate the multiplicity count that sets
+    # every other key's threshold. The step stays so that re-admitting the field
+    # is a one-line registry change rather than a workflow change.
+    - name: Compare Efficiency Score
+      if: always() && steps.aggregate.outputs.gated_efficiency_score == 'true'
+      uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba # v1.22.1
+      with:
+        name: ${{ env.BENCH_NAME_PREFIX }} - efficiency_score
+        tool: customBiggerIsBetter
+        output-file-path: ${{ env.OUTPUT_DIR }}/benchmark-results-efficiency_score.json
+        external-data-json-path: ./cache/efficiency_score/benchmark-data.json
+        alert-threshold: ${{ steps.aggregate.outputs.threshold_efficiency_score }}
+        fail-on-alert: true
+        github-token: ${{ env.BENCH_TOKEN }}
+        alert-comment-cc-users: ${{ env.BENCH_CC_USERS }}
+        comment-on-alert: ${{ env.BENCH_COMMENT_ON_ALERT }}
+        summary-always: ${{ env.BENCH_SUMMARY_ALWAYS }}
+    - name: Compare Memory Utilization
+      if: always() && steps.aggregate.outputs.gated_memory_util == 'true'
+      uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba # v1.22.1
+      with:
+        name: ${{ env.BENCH_NAME_PREFIX }} - memory_util
+        tool: customBiggerIsBetter
+        output-file-path: ${{ env.OUTPUT_DIR }}/benchmark-results-memory_util.json
+        external-data-json-path: ./cache/memory_util/benchmark-data.json
+        alert-threshold: ${{ steps.aggregate.outputs.threshold_memory_util }}
+        fail-on-alert: true
+        github-token: ${{ env.BENCH_TOKEN }}
+        alert-comment-cc-users: ${{ env.BENCH_CC_USERS }}
+        comment-on-alert: ${{ env.BENCH_COMMENT_ON_ALERT }}
+        summary-always: ${{ env.BENCH_SUMMARY_ALWAYS }}
+    # The two observe-only steps carry the median of every key the registry
+    # screens. A screened key still has to accumulate history and appear in the
+    # chart: that is the whole difference between "screened, and here is the
+    # series" and "silently absent", and it is what the `none` sentinel buys
+    # over the silent skip it replaces.
+    #
+    # The threshold is set where nothing can reach it. These keys are screened
+    # because their dispersion makes a relative alert meaningless, so an alert
+    # on them would be noise a reader learns to ignore. The steps exist to
+    # record, not to signal. fail-on-alert is false as well, so neither can
+    # affect the gate under any threshold.
+    - name: Record observed smaller-is-better keys (no gate)
+      if: always()
+      uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba # v1.22.1
+      with:
+        name: ${{ env.BENCH_NAME_PREFIX }} - observed_smaller
+        tool: customSmallerIsBetter
+        output-file-path: ${{ env.OUTPUT_DIR }}/benchmark-results-observed_smaller.json
+        external-data-json-path: ./cache/observed_smaller/benchmark-data.json
+        alert-threshold: '10000%'
+        fail-on-alert: false
+        github-token: ${{ env.BENCH_TOKEN }}
+        alert-comment-cc-users: ${{ env.BENCH_CC_USERS }}
+        comment-on-alert: ${{ env.BENCH_COMMENT_ON_ALERT }}
+        summary-always: ${{ env.BENCH_SUMMARY_ALWAYS }}
+    - name: Record observed bigger-is-better keys (no gate)
+      if: always()
+      uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba # v1.22.1
+      with:
+        name: ${{ env.BENCH_NAME_PREFIX }} - observed_bigger
+        tool: customBiggerIsBetter
+        output-file-path: ${{ env.OUTPUT_DIR }}/benchmark-results-observed_bigger.json
+        external-data-json-path: ./cache/observed_bigger/benchmark-data.json
+        alert-threshold: '10000%'
+        fail-on-alert: false
         github-token: ${{ env.BENCH_TOKEN }}
         alert-comment-cc-users: ${{ env.BENCH_CC_USERS }}
         comment-on-alert: ${{ env.BENCH_COMMENT_ON_ALERT }}
@@ -248,11 +337,15 @@ jobs:
         # doubles vs. its prior baseline without gating the pipeline.
         #
         # What this number now measures has changed. Before the batch was
-        # spread across runners it was within-cluster dispersion on one
-        # degrading kind cluster, which is 0.2% to 3.9% of the total variance
-        # of the thing the gate actually compares. It is now between-run
-        # dispersion, the dominant term, so a doubling here is a real change in
-        # the gate's noise floor rather than a change in one cluster's mood.
+        # spread across runners it was within-cluster dispersion, which is 0.2%
+        # to 3.9% of the total variance of the thing the gate actually
+        # compares. It is now between-run dispersion, the dominant term, so a
+        # doubling here is a real change in the gate's noise floor rather than a
+        # change in one cluster's mood.
+        #
+        # It is not a substitute for the censoring screen in the aggregate step.
+        # A key that only ever records its own timeout has a 1.23% sample CV and
+        # measures nothing, so no CV threshold can catch it.
         alert-threshold: '200%'
         fail-on-alert: false
         github-token: ${{ env.BENCH_TOKEN }}
@@ -266,10 +359,7 @@ jobs:
         name: performance-batch-${{ inputs.test_name }}-${{ github.run_id }}
         path: |
           ${{ env.OUTPUT_DIR }}/aggregated_summary.json
-          ${{ env.OUTPUT_DIR }}/benchmark-results-smaller-tight.json
-          ${{ env.OUTPUT_DIR }}/benchmark-results-smaller-loose.json
-          ${{ env.OUTPUT_DIR }}/benchmark-results-bigger.json
-          ${{ env.OUTPUT_DIR }}/benchmark-results-cv.json
+          ${{ env.OUTPUT_DIR }}/benchmark-results-*.json
           ./baseline-state/baseline-state.json
         retention-days: 30
         if-no-files-found: ignore

@@ -87,45 +87,44 @@ var _ = Describe("Perf Aggregate", func() {
 
 			BeforeEach(func() {
 				seedSyntheticIterations(tmp, iters)
-				Expect(run(tmp, iters, iters, os.Stdout)).To(Succeed())
+				Expect(run(tmp, iters, iters, syntheticRegistry(), os.Stdout)).To(Succeed())
 			})
 
-			It("routes utilization/efficiency into bigger-is-better, Controller CPU into smaller-loose, and other smaller metrics into smaller-tight", func() {
-				smallerTight := loadEntries(filepath.Join(tmp, "benchmark-results-smaller-tight.json"))
-				smallerLoose := loadEntries(filepath.Join(tmp, "benchmark-results-smaller-loose.json"))
-				bigger := loadEntries(filepath.Join(tmp, "benchmark-results-bigger.json"))
-				Expect(smallerTight).ToNot(BeEmpty(), "expected at least one smaller-tight entry")
-				Expect(smallerLoose).ToNot(BeEmpty(), "expected at least one smaller-loose entry")
-				Expect(bigger).ToNot(BeEmpty(), "expected at least one bigger-is-better entry")
-				for _, e := range smallerTight {
-					Expect(e.Name).ToNot(ContainSubstring("Utilization"), "smaller-tight group leaked bigger-is-better metric: %s", e.Name)
-					Expect(e.Name).ToNot(ContainSubstring("Efficiency"), "smaller-tight group leaked bigger-is-better metric: %s", e.Name)
-					Expect(e.Name).ToNot(ContainSubstring("Controller CPU"), "smaller-tight group leaked Controller CPU (should be loose): %s", e.Name)
-					Expect(e.Name).ToNot(ContainSubstring("Consolidation Rounds"), "smaller-tight group leaked Consolidation Rounds (should be informational-only): %s", e.Name)
-				}
-				for _, e := range smallerLoose {
-					Expect(e.Name).To(ContainSubstring("Controller CPU"), "smaller-loose group has non-CPU metric: %s", e.Name)
-				}
-				for _, e := range bigger {
-					Expect(strings.Contains(e.Name, "Utilization") || strings.Contains(e.Name, "Efficiency")).To(BeTrue(), "bigger group has non-utilization metric: %s", e.Name)
-				}
+			It("gives each gated field its own step so each can carry its own threshold", func() {
+				// One file per gated field, holding only that field's keys. That
+				// is what lets the registry's per-key numbers reach
+				// benchmark-action, which takes one threshold per step.
+				duration := loadEntries(filepath.Join(tmp, "benchmark-results-duration.json"))
+				cpu := loadEntries(filepath.Join(tmp, "benchmark-results-controller_cpu.json"))
+				cpuUtil := loadEntries(filepath.Join(tmp, "benchmark-results-cpu_util.json"))
+				nodes := loadEntries(filepath.Join(tmp, "benchmark-results-final_nodes.json"))
+				Expect(duration).To(HaveLen(1))
+				Expect(duration[0].Name).To(Equal("Test A - Duration (median)"))
+				Expect(cpu).To(HaveLen(1))
+				Expect(cpu[0].Name).To(Equal("Test B - Controller CPU (median)"))
+				Expect(cpuUtil).To(HaveLen(1))
+				Expect(cpuUtil[0].Name).To(ContainSubstring("CPU Utilization"))
+				// Both tests report total_nodes, so this is the one step here
+				// that holds more than one key.
+				Expect(nodes).To(HaveLen(2))
 			})
 
-			It("emits Consolidation Rounds into the CV file only, never into gate files", func() {
-				smallerTight := loadEntries(filepath.Join(tmp, "benchmark-results-smaller-tight.json"))
-				smallerLoose := loadEntries(filepath.Join(tmp, "benchmark-results-smaller-loose.json"))
-				bigger := loadEntries(filepath.Join(tmp, "benchmark-results-bigger.json"))
+			It("routes a screened field to the observe-only file and out of every gating file", func() {
+				observed := loadEntries(filepath.Join(tmp, resultsFileFor(observedBiggerSlug)))
+				Expect(entryNames(observed)).To(ContainElement("Test A - Efficiency Score (median)"))
+				Expect(loadEntries(filepath.Join(tmp, "benchmark-results-efficiency_score.json"))).To(BeEmpty())
+			})
+
+			It("emits Consolidation Rounds into the CV file only, never into a gating or observe file", func() {
 				cv := loadEntries(filepath.Join(tmp, "benchmark-results-cv.json"))
-				hasRoundsCV := false
-				for _, e := range cv {
-					if strings.Contains(e.Name, "Consolidation Rounds") {
-						hasRoundsCV = true
-						break
+				Expect(entryNames(cv)).To(ContainElement("Test A - Consolidation Rounds (CV%)"))
+				for _, f := range allResultFiles() {
+					if f == resultsFileFor(cvSlug) {
+						continue
 					}
-				}
-				Expect(hasRoundsCV).To(BeTrue(), "expected Consolidation Rounds in CV list")
-				for _, e := range append(append(smallerTight, smallerLoose...), bigger...) {
-					Expect(e.Name).ToNot(ContainSubstring("Consolidation Rounds"), "gate file leaked Consolidation Rounds: %s", e.Name)
+					for _, e := range loadEntries(filepath.Join(tmp, f)) {
+						Expect(e.Name).ToNot(ContainSubstring("Consolidation Rounds"), "%s leaked Consolidation Rounds: %s", f, e.Name)
+					}
 				}
 			})
 
@@ -158,9 +157,45 @@ var _ = Describe("Perf Aggregate", func() {
 			})
 		})
 
+		It("publishes one threshold and one gated flag per step, so the yaml carries no numbers", func() {
+			seedSyntheticIterations(tmp, 3)
+			out := filepath.Join(tmp, "step-output")
+			GinkgoT().Setenv("GITHUB_OUTPUT", out)
+			Expect(run(tmp, 3, 3, syntheticRegistry(), os.Stdout)).To(Succeed())
+			b, err := os.ReadFile(out) //nolint:gosec // G304: test tempdir
+			Expect(err).ToNot(HaveOccurred())
+			got := string(b)
+			// test_a total_time is registered at 1.10.
+			Expect(got).To(ContainSubstring("gated_duration=true"))
+			Expect(got).To(ContainSubstring("threshold_duration=110%"))
+			// Both total_nodes keys are registered at 1.05, so the step runs at
+			// the loosest of them, which is that value.
+			Expect(got).To(ContainSubstring("threshold_final_nodes=105%"))
+			// Screened everywhere, so its step must not run: benchmark-action on
+			// an empty array stores a baseline entry holding no keys, which then
+			// reads as a baseline that legitimately has none.
+			Expect(got).To(ContainSubstring("gated_efficiency_score=false"))
+			Expect(got).ToNot(ContainSubstring("threshold_efficiency_score="))
+			// No synthetic key reports peak memory.
+			Expect(got).To(ContainSubstring("gated_peak_memory=false"))
+		})
+
+		It("observes every gateable field and gates none when no registry is present", func() {
+			// The local and Regression-suite path. Without a committed list of
+			// what should be gated, gating anything is a guess, so the safe
+			// direction is to compare nothing and record everything.
+			seedSyntheticIterations(tmp, 3)
+			Expect(run(tmp, 3, 3, nil, os.Stdout)).To(Succeed())
+			for _, m := range gatedMetrics() {
+				Expect(loadEntries(filepath.Join(tmp, resultsFileFor(m.slug)))).To(BeEmpty(), "%s gated without a registry", m.slug)
+			}
+			Expect(loadEntries(filepath.Join(tmp, resultsFileFor(observedSmallerSlug)))).ToNot(BeEmpty())
+			Expect(loadEntries(filepath.Join(tmp, resultsFileFor(observedBiggerSlug)))).ToNot(BeEmpty())
+		})
+
 		Context("with no iter_* subdirs at all", func() {
 			It("fails closed rather than emitting empty benchmark files", func() {
-				err := run(tmp, 5, 5, os.Stdout)
+				err := run(tmp, 5, 5, nil, os.Stdout)
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("no performance reports found"))
 			})
@@ -181,7 +216,7 @@ var _ = Describe("Perf Aggregate", func() {
 						})
 					}
 				}
-				err := run(tmp, 3, 3, os.Stdout)
+				err := run(tmp, 3, 3, nil, os.Stdout)
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("refusing to gate on partial data"))
 			})
@@ -197,16 +232,16 @@ var _ = Describe("Perf Aggregate", func() {
 
 			It("gates and warns when the batch clears the quorum", func() {
 				var buf strings.Builder
-				Expect(run(tmp, 3, 2, &buf)).To(Succeed())
+				Expect(run(tmp, 3, 2, syntheticRegistry(), &buf)).To(Succeed())
 				Expect(buf.String()).To(ContainSubstring("Performance batch short"))
 				Expect(buf.String()).To(ContainSubstring("gated on 2 of 3 samples"))
-				for _, e := range loadEntries(filepath.Join(tmp, "benchmark-results-smaller-tight.json")) {
+				for _, e := range loadEntries(filepath.Join(tmp, "benchmark-results-duration.json")) {
 					Expect(e.Extra).To(ContainSubstring("n=2"))
 				}
 			})
 
 			It("refuses when the batch falls below the quorum", func() {
-				err := run(tmp, 3, 3, os.Stdout)
+				err := run(tmp, 3, 3, syntheticRegistry(), os.Stdout)
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("below the quorum of 3"))
 			})
@@ -231,9 +266,10 @@ var _ = Describe("Perf Aggregate", func() {
 					})
 				}
 				var buf strings.Builder
-				Expect(run(tmp, 3, 3, &buf)).To(Succeed())
+				reg := mustParseRegistry("drift_execution total_nodes 1.05\n")
+				Expect(run(tmp, 3, 3, reg, &buf)).To(Succeed())
 				Expect(buf.String()).To(ContainSubstring("Collected 3 sample directories"))
-				entries := loadEntries(filepath.Join(tmp, "benchmark-results-smaller-tight.json"))
+				entries := loadEntries(filepath.Join(tmp, "benchmark-results-final_nodes.json"))
 				Expect(entries).To(HaveLen(1))
 				Expect(entries[0].Name).To(Equal("Drift Execution - Final Nodes (median)"))
 				Expect(entries[0].Value).To(Equal(301.0))
@@ -250,7 +286,7 @@ var _ = Describe("Perf Aggregate", func() {
 			tmp, err = os.MkdirTemp("", "perf-aggregate-keys-*")
 			Expect(err).ToNot(HaveOccurred())
 			seedSyntheticIterations(tmp, 3)
-			Expect(run(tmp, 3, 3, os.Stdout)).To(Succeed())
+			Expect(run(tmp, 3, 3, syntheticRegistry(), os.Stdout)).To(Succeed())
 		})
 
 		AfterEach(func() {
@@ -260,22 +296,18 @@ var _ = Describe("Perf Aggregate", func() {
 		It("omits the iteration count so changing repeat does not void the stored baseline", func() {
 			// benchmark-action matches history by exact key name. An n in the
 			// name means a repeat-count change silently drops every baseline.
-			for _, f := range []string{
-				"benchmark-results-smaller-tight.json",
-				"benchmark-results-smaller-loose.json",
-				"benchmark-results-bigger.json",
-				"benchmark-results-cv.json",
-			} {
-				entries := loadEntries(filepath.Join(tmp, f))
-				Expect(entries).ToNot(BeEmpty(), "%s was empty", f)
-				for _, e := range entries {
+			seen := 0
+			for _, f := range allResultFiles() {
+				for _, e := range loadEntries(filepath.Join(tmp, f)) {
 					Expect(e.Name).ToNot(ContainSubstring("n="), "%s key embeds the iteration count: %s", f, e.Name)
+					seen++
 				}
 			}
+			Expect(seen).ToNot(BeZero())
 		})
 
 		It("keeps the iteration count in Extra, which benchmark-action does not match on", func() {
-			for _, e := range loadEntries(filepath.Join(tmp, "benchmark-results-smaller-tight.json")) {
+			for _, e := range loadEntries(filepath.Join(tmp, "benchmark-results-duration.json")) {
 				Expect(e.Extra).To(ContainSubstring("n=3"))
 			}
 		})
@@ -291,7 +323,7 @@ var _ = Describe("Perf Aggregate", func() {
 			Expect(err).ToNot(HaveOccurred())
 			cacheDir = filepath.Join(tmp, "cache")
 			seedSyntheticIterations(tmp, 3)
-			Expect(run(tmp, 3, 3, os.Stdout)).To(Succeed())
+			Expect(run(tmp, 3, 3, syntheticRegistry(), os.Stdout)).To(Succeed())
 		})
 
 		AfterEach(func() {
@@ -302,7 +334,10 @@ var _ = Describe("Perf Aggregate", func() {
 			return baselineConfig{outputDir: root, baselineDir: cache, stateDir: cache, namePrefix: prefix, runID: "42"}
 		}
 
-		It("reports a seed and records state when no baseline exists at all", func() {
+		// Nothing compared, no cache entry matched, no state file: a scope
+		// nobody has written to. Seeding is the only possible outcome and it
+		// needs no flag.
+		It("reports a seed and records state when the scope has never been written to", func() {
 			var buf strings.Builder
 			Expect(checkBaseline(cfg(tmp, cacheDir), &buf)).To(Succeed())
 			Expect(buf.String()).To(ContainSubstring("Performance baseline seeded"))
@@ -310,12 +345,41 @@ var _ = Describe("Perf Aggregate", func() {
 			var state baselineState
 			loadJSON(filepath.Join(cacheDir, "baseline-state.json"), &state)
 			Expect(state.FirstSeedRun).To(Equal("42"))
-			Expect(state.GatedKeys["smaller-tight"]).ToNot(BeEmpty())
+			Expect(state.GatedKeys["duration"]).ToNot(BeEmpty())
+		})
+
+		// The landing shape: the cache entry matched and the state survived, but
+		// the chart names moved, so nothing compares. Without the registry that
+		// reads as a first seed on every key. The registry is committed, so it
+		// still declares those keys gated and the run fails unless the seed is
+		// asked for.
+		It("fails when the cache matched and the registry declares keys the history lacks", func() {
+			Expect(checkBaseline(cfg(tmp, cacheDir), os.Stdout)).To(Succeed())
+			c := cfg(tmp, cacheDir)
+			c.cacheHit = "Linux-perf-benchmark-Test Suite--run-8999-1"
+			c.registry = syntheticRegistry()
+			var buf strings.Builder
+			err := checkBaseline(c, &buf)
+			Expect(err).To(MatchError(ContainSubstring("baseline missing")))
+			Expect(err.Error()).To(ContainSubstring("declared by"))
+			Expect(buf.String()).To(ContainSubstring("ALLOW_BASELINE_SEED"))
+		})
+
+		It("seeds the same shape once the seed is asked for", func() {
+			Expect(checkBaseline(cfg(tmp, cacheDir), os.Stdout)).To(Succeed())
+			c := cfg(tmp, cacheDir)
+			c.cacheHit = "Linux-perf-benchmark-Test Suite--run-8999-1"
+			c.registry = syntheticRegistry()
+			c.allowSeed = true
+			var buf strings.Builder
+			Expect(checkBaseline(c, &buf)).To(Succeed())
+			Expect(buf.String()).To(ContainSubstring("ALLOW_BASELINE_SEED"))
 		})
 
 		It("fails when a key the last green run gated on has lost its baseline", func() {
 			// First run seeds and records the key set. The second run finds no
-			// history file, which is the silent-pass case this guards.
+			// history file, which is the silent-pass case this guards. The state
+			// file survived, so this is not the first-run shape.
 			Expect(checkBaseline(cfg(tmp, cacheDir), os.Stdout)).To(Succeed())
 			var buf strings.Builder
 			err := checkBaseline(cfg(tmp, cacheDir), &buf)
@@ -327,10 +391,26 @@ var _ = Describe("Perf Aggregate", func() {
 		It("reports keys as compared when the stored history carries them", func() {
 			Expect(checkBaseline(cfg(tmp, cacheDir), os.Stdout)).To(Succeed())
 			seedBaselineHistory(tmp, cacheDir, prefix)
+			c := cfg(tmp, cacheDir)
+			c.registry = syntheticRegistry()
 			var buf strings.Builder
-			Expect(checkBaseline(cfg(tmp, cacheDir), &buf)).To(Succeed())
+			Expect(checkBaseline(c, &buf)).To(Succeed())
 			Expect(buf.String()).To(ContainSubstring("0 seeded, 0 missing"))
 			Expect(buf.String()).ToNot(ContainSubstring("Performance baseline seeded"))
+		})
+
+		// A partial loss is unambiguous whatever the cache says: keys compared,
+		// so the scope is populated, and the ones that did not compare lost
+		// history they are committed to have.
+		It("fails on a partial loss even with no cache hit and no state", func() {
+			seedBaselineHistory(tmp, cacheDir, prefix)
+			Expect(os.RemoveAll(filepath.Join(cacheDir, "duration"))).To(Succeed())
+			c := cfg(tmp, cacheDir)
+			c.stateDir = filepath.Join(tmp, "baseline-state")
+			c.registry = syntheticRegistry()
+			err := checkBaseline(c, os.Stdout)
+			Expect(err).To(MatchError(ContainSubstring("baseline missing")))
+			Expect(err.Error()).To(ContainSubstring("duration /"))
 		})
 
 		It("requires BENCH_NAME_PREFIX so a missing chart name cannot read as an empty baseline", func() {
@@ -340,8 +420,8 @@ var _ = Describe("Perf Aggregate", func() {
 		})
 
 		It("refuses to treat a corrupt history file as an absent one", func() {
-			Expect(os.MkdirAll(filepath.Join(cacheDir, "smaller-tight"), 0o755)).To(Succeed())
-			Expect(os.WriteFile(filepath.Join(cacheDir, "smaller-tight", "benchmark-data.json"), []byte("{not json"), 0o600)).To(Succeed())
+			Expect(os.MkdirAll(filepath.Join(cacheDir, "duration"), 0o755)).To(Succeed())
+			Expect(os.WriteFile(filepath.Join(cacheDir, "duration", "benchmark-data.json"), []byte("{not json"), 0o600)).To(Succeed())
 			Expect(checkBaseline(cfg(tmp, cacheDir), os.Stdout)).To(MatchError(ContainSubstring("parsing")))
 		})
 
@@ -362,6 +442,7 @@ var _ = Describe("Perf Aggregate", func() {
 			c := cfg(tmp, cacheDir)
 			c.stateDir = filepath.Join(tmp, "baseline-state")
 			Expect(checkBaseline(c, os.Stdout)).To(Succeed())
+			c.allowSeed = false
 			err := checkBaseline(c, os.Stdout)
 			Expect(err).To(MatchError(ContainSubstring("baseline missing")))
 		})
@@ -389,6 +470,7 @@ var _ = Describe("Perf Aggregate", func() {
 			Expect(filepath.Join(cacheDir, "baseline-state.json")).To(BeAnExistingFile())
 
 			split := cfg(tmp, cacheDir)
+			split.allowSeed = false
 			split.stateDir = filepath.Join(tmp, "baseline-state")
 			split.cacheHit = "Linux-perf-benchmark-Drift Performance--run-8999-1"
 			var buf strings.Builder
@@ -423,6 +505,47 @@ var _ = Describe("Perf Aggregate", func() {
 
 // --- helpers ---
 
+// syntheticRegistry registers exactly the fields seedSyntheticIterations
+// produces. A gateable field that is registered and then absent from the batch
+// is an error, so the two have to agree.
+func syntheticRegistry() *gateRegistry {
+	return mustParseRegistry(`
+_gate  cpu_core_cap  2.0
+
+test_a total_time                         1.10
+test_a total_nodes                        1.05
+test_a total_reserved_cpu_utilization     1.05
+test_a resource_efficiency_score          none   # derived from the two utilizations
+test_a total_reserved_memory_utilization  1.05
+
+test_b karpenter_p95_cpu_cores            1.20
+test_b total_nodes                        1.05
+`)
+}
+
+func mustParseRegistry(body string) *gateRegistry {
+	reg, err := parseRegistry("test-registry.txt", strings.NewReader(body))
+	Expect(err).ToNot(HaveOccurred())
+	return reg
+}
+
+// allResultFiles lists every benchmark-action file run emits.
+func allResultFiles() []string {
+	out := []string{resultsFileFor(observedSmallerSlug), resultsFileFor(observedBiggerSlug), resultsFileFor(cvSlug)}
+	for _, m := range gatedMetrics() {
+		out = append(out, resultsFileFor(m.slug))
+	}
+	return out
+}
+
+func entryNames(entries []benchmarkEntry) []string {
+	out := make([]string, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, e.Name)
+	}
+	return out
+}
+
 // seedSyntheticIterations lays down iter_1..iter_N per-test performance
 // reports whose values are chosen so median/mean/min/max are trivial to
 // check in the assertions above.
@@ -449,11 +572,11 @@ func seedSyntheticIterations(root string, iters int) {
 	}
 }
 
-// seedBaselineHistory writes, for every gate tier, a benchmark-action history
+// seedBaselineHistory writes, for every gate step, a benchmark-action history
 // file whose latest entry carries exactly the keys the current run emitted.
 // That is the state a healthy second run restores from cache.
 func seedBaselineHistory(outputDir, cacheDir, namePrefix string) {
-	for _, t := range gateTiers {
+	for _, t := range gateTiers() {
 		names, err := readEntryNames(filepath.Join(outputDir, t.resultsFile))
 		Expect(err).ToNot(HaveOccurred())
 		benches := make([]map[string]any, 0, len(names))

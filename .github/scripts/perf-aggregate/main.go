@@ -47,12 +47,21 @@ limitations under the License.
 //	BENCH_NAME_PREFIX   required when BASELINE_DIR is set; the chart-name
 //	                    prefix the workflow passes to benchmark-action
 //	GITHUB_RUN_ID       recorded in the baseline state file for provenance
+//	GATE_KEYS_FILE      optional; the committed gate-key registry. When set and
+//	                    present, every gateable field of every phase key in the
+//	                    batch must have an entry, and the entry decides whether
+//	                    the key gates and at what threshold. Absent file means
+//	                    no registry: nothing gates, everything is observed. See
+//	                    registry.go
+//	ALLOW_BASELINE_SEED optional; "true" permits a run to seed a key that has no
+//	                    stored baseline. Default is to refuse, which is what
+//	                    turns a double cache eviction from a green gate that
+//	                    compared nothing into a red one
 //
-// Four benchmark-action files are emitted. Direction is a per-tool rather than
-// a per-metric property in github-action-benchmark, so utilization and
-// efficiency metrics need their own bigger-is-better file. The smaller-is-better
-// metrics are split again by threshold tier, and batch CV goes to its own
-// informational file.
+// One benchmark-action file is emitted per gated field, plus one observe-only
+// file for the fields the registry screens and one informational file for batch
+// CV. Direction is a per-tool rather than a per-field property in
+// github-action-benchmark, so each step names the tool its field needs.
 package main
 
 import (
@@ -76,56 +85,61 @@ const (
 	biggerIsBetter
 )
 
-// tier controls which gating benchmark-action step consumes a metric.
-// benchmark-action takes one alert-threshold per step, so a metric can only
-// carry its own threshold by getting its own step. The split is the mechanism
-// @ryan-mist's per-metric stddev gating ask needs (PR#2994 comment
-// 3961447028); the per-metric values it should carry are still open, because
-// setting them needs the cross-run CV of the batch median per key and that has
-// not been measured. Both gating tiers sit at 150% until it is.
-type tier int
-
-const (
-	// tierTight metrics gate at 150%: Duration, Controller Peak Memory, Final
-	// Nodes.
-	tierTight tier = iota
-	// tierLoose metrics gate at their own threshold in the yaml, also 150%
-	// today. Controller CPU is the one such metric. The tier is kept separate
-	// from tierTight rather than merged at the shared value so this metric can
-	// be retuned without disturbing the other three, which is the pending
-	// per-key work.
-	tierLoose
-	// tierInformational metrics skip the gating benchmark-action steps and
-	// only emit into the informational CV file. Consolidation Rounds falls
-	// in this bucket: the integer 0-9 range and per-test P90 CV of 149% make
-	// any relative-threshold gate an FP generator.
-	tierInformational
-)
-
-// metricSpec describes how to extract, label, and classify one field from a
+// metricSpec describes how to extract, label, and route one field from a
 // performance report.
+//
+// benchmark-action takes one alert-threshold per step, so a field can only
+// carry its own threshold by getting its own step. Grouping fields into two
+// shared tiers, which is what this file did before, forces every field in a
+// tier to the loosest threshold any of its keys needs. Measured over the seven
+// gated phase keys that is the difference between a median threshold of 1.09
+// and the flat 1.50 the gate shipped, and the flat 1.50 fires on 40.6% of clean
+// upstream main runs. One step per field is the smallest change that lets the
+// registry's numbers reach benchmark-action.
 type metricSpec struct {
 	jsonField string
 	display   string
 	unit      string
 	dir       direction
-	tier      tier
+	// slug names the Compare step, its results file, and its cache subdirectory.
+	// Empty means the field cannot gate under any registry: it reaches the CV
+	// step only. Those two are kept out of the registry entirely rather than
+	// registered and screened, because no evidence would ever move them.
+	slug string
+	// cappedBy names the registry parameter that bounds this field from above,
+	// if any. A bounded field's largest reportable ratio is cap/baseline, so a
+	// threshold at or above that makes the step unfalsifiable.
+	cappedBy string
 }
 
 var metrics = []metricSpec{
-	{"total_time", "Duration", "seconds", smallerIsBetter, tierTight},
-	{"karpenter_p95_memory_mb", "Controller Peak Memory", "MB", smallerIsBetter, tierTight},
-	{"karpenter_p95_cpu_cores", "Controller CPU", "cores", smallerIsBetter, tierLoose},
+	{jsonField: "total_time", display: "Duration", unit: "seconds", dir: smallerIsBetter, slug: "duration"},
+	{jsonField: "karpenter_p95_memory_mb", display: "Controller Peak Memory", unit: "MB", dir: smallerIsBetter, slug: "peak_memory"},
+	{jsonField: "karpenter_p95_cpu_cores", display: "Controller CPU", unit: "cores", dir: smallerIsBetter, slug: "controller_cpu", cappedBy: paramCPUCoreCap},
 	// Sustained controller CPU, emitted for visibility only. @ryan-mist's
 	// per-test threshold proposal (PR#2994 comment 4012042309) needs this
 	// statistic in the report; which CPU key gates, and at what threshold,
-	// is still open, so it stays out of both gate files for now.
-	{"karpenter_p50_cpu_cores", "Controller CPU P50", "cores", smallerIsBetter, tierInformational},
-	{"total_nodes", "Final Nodes", "nodes", smallerIsBetter, tierTight},
-	{"total_reserved_cpu_utilization", "CPU Utilization", "percent", biggerIsBetter, tierTight},
-	{"resource_efficiency_score", "Efficiency Score", "score", biggerIsBetter, tierTight},
-	{"total_reserved_memory_utilization", "Memory Utilization", "percent", biggerIsBetter, tierTight},
-	{"rounds", "Consolidation Rounds", "rounds", smallerIsBetter, tierInformational},
+	// is still open, so it stays out of the registry and out of every gate file.
+	{jsonField: "karpenter_p50_cpu_cores", display: "Controller CPU P50", unit: "cores", dir: smallerIsBetter},
+	{jsonField: "total_nodes", display: "Final Nodes", unit: "nodes", dir: smallerIsBetter, slug: "final_nodes"},
+	{jsonField: "total_reserved_cpu_utilization", display: "CPU Utilization", unit: "percent", dir: biggerIsBetter, slug: "cpu_util"},
+	{jsonField: "resource_efficiency_score", display: "Efficiency Score", unit: "score", dir: biggerIsBetter, slug: "efficiency_score"},
+	{jsonField: "total_reserved_memory_utilization", display: "Memory Utilization", unit: "percent", dir: biggerIsBetter, slug: "memory_util"},
+	// Consolidation Rounds: integer 0-9 with a per-test P90 CV of 149%, and it
+	// is the poll counter the consolidation duration aliases rather than an
+	// independent measurement. CV step only.
+	{jsonField: "rounds", display: "Consolidation Rounds", unit: "rounds", dir: smallerIsBetter},
+}
+
+// gatedMetrics returns the fields a registry can gate, in declaration order.
+func gatedMetrics() []metricSpec {
+	out := make([]metricSpec, 0, len(metrics))
+	for _, m := range metrics {
+		if m.slug != "" {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 type stats struct {
@@ -171,7 +185,12 @@ func main() {
 		fmt.Fprintf(os.Stderr, "MIN_ITERATIONS=%d exceeds ITERATIONS=%d\n", minIterations, iterations)
 		os.Exit(2)
 	}
-	if err := run(outputDir, iterations, minIterations, os.Stdout); err != nil {
+	registry, err := loadRegistry(os.Getenv("GATE_KEYS_FILE"))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	if err := run(outputDir, iterations, minIterations, registry, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -189,6 +208,8 @@ func main() {
 			namePrefix:  os.Getenv("BENCH_NAME_PREFIX"),
 			runID:       os.Getenv("GITHUB_RUN_ID"),
 			cacheHit:    os.Getenv("BASELINE_CACHE_HIT"),
+			registry:    registry,
+			allowSeed:   os.Getenv("ALLOW_BASELINE_SEED") == "true",
 		}, os.Stdout)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -213,7 +234,7 @@ func positiveEnv(name string, def int) (int, error) {
 
 // run performs the aggregation and returns nil on success. It is separated
 // from main so tests can drive it with synthetic input.
-func run(outputDir string, iterations, minIterations int, out io.Writer) error {
+func run(outputDir string, iterations, minIterations int, registry *gateRegistry, out io.Writer) error {
 	reportsByTest, samples, err := collectReports(outputDir)
 	if err != nil {
 		return err
@@ -223,6 +244,26 @@ func run(outputDir string, iterations, minIterations int, out io.Writer) error {
 	// data, so surface it as an aggregator failure instead.
 	if len(reportsByTest) == 0 {
 		return fmt.Errorf("no performance reports found under %s (expected %d sample directories)", outputDir, iterations)
+	}
+	// The censoring screen runs before the quorum check and before any
+	// statistic is computed, because a censored sample is not a datum. It is a
+	// bound the phase stopped on, and averaging it into a batch median is how a
+	// key that measures nothing returns a tight CV. See gateRegistry.censor.
+	censored := map[string]censorResult{}
+	if registry != nil {
+		// The thresholds and the sample design are one artefact. Refuse rather
+		// than warn: a warning on a gate that fires on nine runs in ten is a
+		// warning nobody will read twice.
+		if n, ok := registry.params[paramDerivedForN]; ok && float64(iterations) < n {
+			return fmt.Errorf(
+				"%s declares %s=%.0f but ITERATIONS=%d: its thresholds bound the dispersion of a %.0f-sample median, which is far tighter than a %d-sample one. Refusing to gate",
+				registry.path, paramDerivedForN, n, iterations, n, iterations)
+		}
+		fmt.Fprintf(out, "Censoring screen against %s\n", registry.path)
+		reportsByTest, censored = registry.censor(reportsByTest, out)
+		if len(reportsByTest) == 0 {
+			return fmt.Errorf("every sample of every key was censored: no key under %s produced a measurement", outputDir)
+		}
 	}
 	// Per-test quorum check. A silent partial batch would let a batch-median
 	// regression slip through when half the samples went missing, so a thin
@@ -235,6 +276,13 @@ func run(outputDir string, iterations, minIterations int, out io.Writer) error {
 		len(samples), plural(len(samples), "y", "ies"), outputDir, strings.Join(samples, " "))
 	for _, testKey := range sortedKeys(reportsByTest) {
 		n := len(reportsByTest[testKey])
+		// An unmeasurable key is exempt. It lost samples to the censoring
+		// screen and is already screened out of the gating steps, so failing
+		// the whole run on its thin batch would turn a screened key into an
+		// outage.
+		if censored[phaseKey(testKey)].reason != "" {
+			continue
+		}
 		switch {
 		case n < minIterations:
 			return fmt.Errorf(
@@ -251,76 +299,201 @@ func run(outputDir string, iterations, minIterations int, out io.Writer) error {
 	// printed table are reproducible across runs.
 	testKeys := sortedKeys(reportsByTest)
 
-	summary, results := buildResults(testKeys, reportsByTest)
+	summary, results, err := buildResults(testKeys, reportsByTest, registry, censored, out)
+	if err != nil {
+		return err
+	}
 
-	if err := writeJSON(filepath.Join(outputDir, "benchmark-results-smaller-tight.json"), results.smallerTight); err != nil {
-		return err
+	for _, m := range gatedMetrics() {
+		if err := writeJSON(filepath.Join(outputDir, resultsFileFor(m.slug)), results.gated[m.slug]); err != nil {
+			return err
+		}
 	}
-	if err := writeJSON(filepath.Join(outputDir, "benchmark-results-smaller-loose.json"), results.smallerLoose); err != nil {
-		return err
+	for _, slug := range []string{observedSmallerSlug, observedBiggerSlug} {
+		if err := writeJSON(filepath.Join(outputDir, resultsFileFor(slug)), results.observed[slug]); err != nil {
+			return err
+		}
 	}
-	if err := writeJSON(filepath.Join(outputDir, "benchmark-results-bigger.json"), results.bigger); err != nil {
-		return err
-	}
-	if err := writeJSON(filepath.Join(outputDir, "benchmark-results-cv.json"), results.cv); err != nil {
+	if err := writeJSON(filepath.Join(outputDir, resultsFileFor(cvSlug)), results.cv); err != nil {
 		return err
 	}
 	if err := writeJSON(filepath.Join(outputDir, "aggregated_summary.json"), summary); err != nil {
 		return err
 	}
+	// The thresholds reach benchmark-action through the step outputs rather than
+	// being written into the yaml a second time. One number, one place: the
+	// registry. A value in both files is a value that drifts between them.
+	if err := results.writeStepOutputs(os.Getenv("GITHUB_OUTPUT")); err != nil {
+		return err
+	}
 	printTable(out, testKeys, summary)
-	fmt.Fprintf(out, "\nEmitted %d smaller-tight, %d smaller-loose, %d bigger-is-better, %d CV metrics\n",
-		len(results.smallerTight), len(results.smallerLoose), len(results.bigger), len(results.cv))
+	results.printRouting(out)
 	return nil
 }
 
-// benchmarkResults holds the four parallel benchmark-action arrays this
-// aggregator emits: one gating file per (direction, tier) pair plus one
-// informational CV file. Splitting smaller-is-better into tight and loose
-// tiers lets the yaml apply per-metric-key thresholds without moving the gate
-// decision into Go: benchmark-action still owns the compare against cached
-// batch median, but each tier feeds its own step with its own threshold.
-type benchmarkResults struct {
-	smallerTight []benchmarkEntry
-	smallerLoose []benchmarkEntry
-	bigger       []benchmarkEntry
-	cv           []benchmarkEntry
+// The non-gating files. All three run under fail-on-alert: false.
+//
+// The observed files carry the batch median of every key the registry screens. A
+// screened key has to keep accumulating history: that is the difference between
+// "screened, and here is the series" and "silently absent". They are split by
+// direction because benchmark-action's tool is a per-step choice, so a
+// bigger-is-better field in a smaller-is-better step would annotate every
+// improvement as a regression.
+//
+// cv carries the within-batch coefficient of variation of every field, gateable
+// or not. Lower is always better there, so it needs no split.
+const (
+	observedSmallerSlug = "observed_smaller"
+	observedBiggerSlug  = "observed_bigger"
+	cvSlug              = "cv"
+)
+
+func resultsFileFor(slug string) string { return "benchmark-results-" + slug + ".json" }
+
+func observedSlugFor(d direction) string {
+	if d == biggerIsBetter {
+		return observedBiggerSlug
+	}
+	return observedSmallerSlug
 }
 
-// buildResults computes stats for every (test, metric) pair and appends
-// the corresponding gating and CV benchmark entries. It also returns the
-// summary map keyed by test then metric display name.
-func buildResults(testKeys []string, reportsByTest map[string][]map[string]any) (map[string]map[string]stats, benchmarkResults) {
+// routing records what happened to one (phase key, field) pair, for the log.
+type routing struct {
+	key       string
+	field     string
+	threshold float64
+	reason    string
+}
+
+// benchmarkResults holds one benchmark-action array per gated field plus the
+// two non-gating arrays. benchmark-action still owns the compare against the
+// cached batch median; the registry decides which keys reach a comparing step
+// and what threshold that step runs at.
+type benchmarkResults struct {
+	gated    map[string][]benchmarkEntry
+	observed map[string][]benchmarkEntry
+	cv       []benchmarkEntry
+	// thresholds[slug] is the largest registry threshold among the keys routed
+	// into that step. benchmark-action takes one per step, so a step holding
+	// more than one key runs at the loosest of them. With the registry screening
+	// the loop-instrumented phases, six of the seven gather jobs route exactly
+	// one key per field and the step threshold is that key's own value.
+	thresholds map[string]float64
+	routed     []routing
+	screened   []routing
+}
+
+func newBenchmarkResults() benchmarkResults {
+	return benchmarkResults{
+		gated:      map[string][]benchmarkEntry{},
+		observed:   map[string][]benchmarkEntry{},
+		thresholds: map[string]float64{},
+	}
+}
+
+// buildResults computes stats for every (test, field) pair and routes each one
+// to a gating step, to the observe-only step, or to the CV step alone.
+//
+// An unregistered gateable field is an error rather than a skip. That is the
+// point of the registry: benchmark-action skips a key it cannot match without
+// saying so, so a key that fell out of the suite, a key somebody forgot to
+// register, and a key screened on purpose all produce the same green step.
+func buildResults(
+	testKeys []string,
+	reportsByTest map[string][]map[string]any,
+	registry *gateRegistry,
+	censored map[string]censorResult,
+	out io.Writer,
+) (map[string]map[string]stats, benchmarkResults, error) {
 	summary := map[string]map[string]stats{}
-	var results benchmarkResults
+	results := newBenchmarkResults()
 	for _, testKey := range testKeys {
 		datas := reportsByTest[testKey]
 		if len(datas) == 0 {
 			continue
 		}
+		phase := phaseKey(testKey)
 		name := prettifyTestName(testKey)
 		testSummary := map[string]stats{}
 		for _, m := range metrics {
 			values := extractValues(datas, m.jsonField)
 			if len(values) == 0 {
+				if registry != nil && registry.registered(phase, m.jsonField) {
+					// A field the registry expects and the batch did not
+					// produce. Left as a skip this is the silent-green case the
+					// registry exists to remove: benchmark-action would compare
+					// nothing and report a pass.
+					return nil, results, fmt.Errorf(
+						"%s: %s is registered in %s but absent from every sample; refusing to gate a key whose measurement went missing",
+						phase, m.jsonField, registry.path)
+				}
 				continue
 			}
 			s := computeStats(values)
 			testSummary[m.display] = s
-			results.appendMetric(name, m, s)
+			if err := results.route(phase, name, m, s, registry, censored[phase], out); err != nil {
+				return nil, results, err
+			}
 		}
 		summary[testKey] = testSummary
 	}
-	return summary, results
+	return summary, results, nil
 }
 
-// appendMetric records both the gating (median-based) entry and the
-// informational CV entry for a single (test, metric) pair. Gating entries
-// route to smaller-tight, smaller-loose, or bigger by (direction, tier);
-// tierInformational metrics skip gating entirely and land in the CV list
-// only. CV entries share a single smaller-is-better list because lower batch
-// variance is always better.
-func (r *benchmarkResults) appendMetric(name string, m metricSpec, s stats) {
+// route decides which file one (phase key, field) pair lands in.
+func (r *benchmarkResults) route(phase, name string, m metricSpec, s stats, registry *gateRegistry, cens censorResult, out io.Writer) error {
+	entry := r.appendMetric(name, m, s)
+	if m.slug == "" {
+		return nil // CV only, by declaration. Never in the registry.
+	}
+	if registry == nil {
+		// No registry: nothing gates. Observe everything. This is the local and
+		// Regression-suite path, and it is deliberately the safe direction.
+		slug := observedSlugFor(m.dir)
+		r.observed[slug] = append(r.observed[slug], entry)
+		r.screened = append(r.screened, routing{phase, m.jsonField, 0, "no registry"})
+		return nil
+	}
+	if !registry.registered(phase, m.jsonField) {
+		return fmt.Errorf(
+			"%s: %s has no entry in %s. Add a threshold, or %q with the reason, before this key can reach a gate step",
+			phase, m.jsonField, registry.path, screenSentinel)
+	}
+	screen := func(reason string) {
+		slug := observedSlugFor(m.dir)
+		r.observed[slug] = append(r.observed[slug], entry)
+		r.screened = append(r.screened, routing{phase, m.jsonField, 0, reason})
+	}
+	if cens.reason != "" {
+		screen("censored: " + cens.reason)
+		return nil
+	}
+	t, gated := registry.threshold(phase, m.jsonField)
+	if !gated {
+		screen("registry: " + registry.screened[phase][m.jsonField])
+		return nil
+	}
+	// The ceiling screen. A bounded field cannot report a ratio above
+	// cap/baseline, so a threshold at or above that is a step no regression can
+	// trip. Recomputed from this batch, because the baseline moves.
+	if ceil, capped := registry.ceiling(m, s.Median); capped && t >= ceil {
+		fmt.Fprintf(out, "::warning title=Performance key unfalsifiable::%s %s: threshold %.2f is at or above the ceiling %.2f (cap %.1f / baseline %.3f). No regression can trip it, so it is screened rather than passed.\n",
+			phase, m.jsonField, t, ceil, registry.params[m.cappedBy], s.Median)
+		screen(fmt.Sprintf("unfalsifiable at run time: ceiling %.2f below threshold %.2f", ceil, t))
+		return nil
+	}
+	r.gated[m.slug] = append(r.gated[m.slug], entry)
+	if t > r.thresholds[m.slug] {
+		r.thresholds[m.slug] = t
+	}
+	r.routed = append(r.routed, routing{phase, m.jsonField, t, ""})
+	return nil
+}
+
+// appendMetric records the informational CV entry for a single (test, field)
+// pair and returns the median-based entry its caller routes. CV entries share a
+// single smaller-is-better list because lower batch variance is always better.
+func (r *benchmarkResults) appendMetric(name string, m metricSpec, s stats) benchmarkEntry {
 	// The key name carries no iteration count. benchmark-action matches
 	// history by exact key name, so embedding n would void every stored
 	// baseline the moment the workflow's repeat input changed, with no signal
@@ -336,22 +509,11 @@ func (r *benchmarkResults) appendMetric(name string, m metricSpec, s stats) {
 			s.Mean, s.Stddev, s.CVPct, s.Min, s.Max, s.N,
 		),
 	}
-	switch {
-	case m.tier == tierInformational:
-		// Do not emit a gating entry. The CV entry below still fires so the
-		// metric shows up in the batch-CV chart.
-	case m.dir == biggerIsBetter:
-		r.bigger = append(r.bigger, gate)
-	case m.tier == tierLoose:
-		r.smallerLoose = append(r.smallerLoose, gate)
-	default:
-		r.smallerTight = append(r.smallerTight, gate)
-	}
 	// CV entries feed an informational-only benchmark-action invocation
 	// (fail-on-alert: false). They surface when a batch's within-batch
 	// coefficient of variation grows beyond its historical envelope, so a
 	// reviewer can notice noise-floor regressions without gating the
-	// pipeline — the informational answer to Ryan's PR#2994 variance
+	// pipeline, the informational answer to Ryan's PR#2994 variance
 	// question (comment 3857936029).
 	r.cv = append(r.cv, benchmarkEntry{
 		Name:  fmt.Sprintf("%s - %s (CV%%)", name, m.display),
@@ -359,6 +521,60 @@ func (r *benchmarkResults) appendMetric(name string, m metricSpec, s stats) {
 		Value: s.CVPct,
 		Extra: fmt.Sprintf("median=%v stddev=%v n=%d", s.Median, s.Stddev, s.N),
 	})
+	return gate
+}
+
+// writeStepOutputs publishes each gating step's threshold and whether it has any
+// key to compare. The workflow reads both, so the numbers live only in the
+// registry and the step list lives only in the yaml.
+//
+// A step with no gated key must not run at all. benchmark-action on an empty
+// array writes an empty entry into the history, which then reads as a baseline
+// that legitimately contains no keys.
+func (r *benchmarkResults) writeStepOutputs(path string) error {
+	if path == "" {
+		return nil
+	}
+	var b strings.Builder
+	for _, m := range gatedMetrics() {
+		gated := len(r.gated[m.slug]) > 0
+		fmt.Fprintf(&b, "gated_%s=%t\n", m.slug, gated)
+		if gated {
+			// benchmark-action parses alert-threshold as a percentage.
+			fmt.Fprintf(&b, "threshold_%s=%.0f%%\n", m.slug, r.thresholds[m.slug]*100)
+		}
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o600) //nolint:gosec // G304: path is GITHUB_OUTPUT
+	if err != nil {
+		return err
+	}
+	if _, err := f.WriteString(b.String()); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
+}
+
+// printRouting puts every routing decision on the record. A reviewer reading a
+// red gate needs to know which keys were compared and at what threshold, and a
+// reviewer reading a green one needs to know which were not.
+func (r *benchmarkResults) printRouting(out io.Writer) {
+	fmt.Fprintf(out, "\n%-46s %-34s %8s  %s\n", "Phase key", "Field", "Threshold", "Disposition")
+	fmt.Fprintln(out, strings.Repeat("-", 120))
+	for _, x := range r.routed {
+		fmt.Fprintf(out, "%-46s %-34s %8.2f  gated\n", x.key, x.field, x.threshold)
+	}
+	for _, x := range r.screened {
+		fmt.Fprintf(out, "%-46s %-34s %8s  screened, %s\n", x.key, x.field, "-", x.reason)
+	}
+	fmt.Fprintf(out, "\n%d gated, %d screened, %d CV entries\n", len(r.routed), len(r.screened), len(r.cv))
+	for _, m := range gatedMetrics() {
+		if n := len(r.gated[m.slug]); n > 0 {
+			fmt.Fprintf(out, "  step %-18s %d key(s) at %.2f\n", m.slug, n, r.thresholds[m.slug])
+		} else {
+			fmt.Fprintf(out, "  step %-18s skipped, no gated key\n", m.slug)
+		}
+	}
 }
 
 // baselineStateFile is the record checkBaseline keeps of which keys the last
@@ -377,21 +593,26 @@ func (r *benchmarkResults) appendMetric(name string, m metricSpec, s stats) {
 const baselineStateFile = "baseline-state.json"
 
 // gateTier ties one benchmark-action Compare step in
-// .github/workflows/e2e.yaml to the files it touches. cacheSubdir must match
-// that step's external-data-json-path and nameSuffix must match the suffix on
-// its name input, otherwise the baseline lookup reads the wrong history. Only
-// blocking tiers are listed: the informational CV step cannot fail a job, so a
-// missing CV baseline is not a gate defect.
+// .github/workflows/perf-gate.yaml to the files it touches. cacheSubdir must
+// match that step's external-data-json-path and nameSuffix must match the suffix
+// on its name input, otherwise the baseline lookup reads the wrong history. Both
+// are derived from the field's slug so the three cannot drift apart.
+//
+// Only blocking steps are listed. The observe-only and CV steps cannot fail a
+// job, so a missing baseline on either is not a gate defect.
 type gateTier struct {
 	resultsFile string
 	cacheSubdir string
 	nameSuffix  string
 }
 
-var gateTiers = []gateTier{
-	{"benchmark-results-smaller-tight.json", "smaller-tight", " - smaller-tight"},
-	{"benchmark-results-smaller-loose.json", "smaller-loose", " - smaller-loose"},
-	{"benchmark-results-bigger.json", "bigger", " - bigger-is-better"},
+func gateTiers() []gateTier {
+	gm := gatedMetrics()
+	out := make([]gateTier, 0, len(gm))
+	for _, m := range gm {
+		out = append(out, gateTier{resultsFileFor(m.slug), m.slug, " - " + m.slug})
+	}
+	return out
 }
 
 // baselineState records which keys the last green run gated on, per tier. It is
@@ -426,6 +647,15 @@ type baselineConfig struct {
 	// cacheHit is the cache-matched-key output of the actions/cache step that
 	// restored baselineDir. Non-empty means the scope is populated.
 	cacheHit string
+	// registry, when set, is the authority for which keys are supposed to be
+	// gated. It is committed, so it survives the loss of every cache entry,
+	// which the state file does not. That is what closes the last hole in the
+	// eviction audit: the state file could only say "the last green run gated
+	// this key", and the last green run's record lives in the same cache.
+	registry *gateRegistry
+	// allowSeed permits a key with no stored baseline. Establishing a new cache
+	// scope needs it once; a run that has it set is not gating those keys.
+	allowSeed bool
 }
 
 // checkBaseline fails the aggregation when a gated key that used to have a
@@ -482,8 +712,12 @@ func checkBaseline(cfg baselineConfig, out io.Writer) error {
 		next.FirstSeedRun = cfg.runID
 	}
 
-	var compared, seeded, missing []string
-	for _, t := range gateTiers {
+	// First pass: split the emitted keys into those the stored history carries
+	// and those it does not. What to do about the second group depends on
+	// evidence collected across every tier, so the verdict waits for the split.
+	var compared, unbaselined []string
+	priorGated := map[string]bool{}
+	for _, t := range gateTiers() {
 		current, err := readEntryNames(filepath.Join(cfg.outputDir, t.resultsFile))
 		if err != nil {
 			return err
@@ -499,14 +733,40 @@ func checkBaseline(cfg baselineConfig, out io.Writer) error {
 		}
 		for _, key := range current {
 			label := t.cacheSubdir + " / " + key
-			switch {
-			case slices.Contains(baseline, key):
-				compared = append(compared, label)
-			case slices.Contains(prior.GatedKeys[t.cacheSubdir], key):
-				missing = append(missing, label)
-			default:
-				seeded = append(seeded, label)
+			if slices.Contains(prior.GatedKeys[t.cacheSubdir], key) {
+				priorGated[label] = true
 			}
+			if slices.Contains(baseline, key) {
+				compared = append(compared, label)
+				continue
+			}
+			unbaselined = append(unbaselined, label)
+		}
+	}
+	// A scope nobody has ever written to: nothing compared, no cache entry
+	// matched, and no state file in either location. Seeding is the only
+	// possible outcome there and it is not a defect.
+	//
+	// It remains the one case a committed registry cannot decide. The registry
+	// says which keys ought to have a baseline; it cannot say whether this scope
+	// ever held one. Deciding that needs storage outside actions/cache. What the
+	// registry does change is every other case: a partial loss, and a loss on a
+	// scope whose state or cache entry survived, are now errors measured against
+	// a committed list rather than against a record that shared the cache's fate.
+	firstRun := len(compared) == 0 && cfg.cacheHit == "" && prior.LastRun == ""
+	var seeded, missing []string
+	for _, label := range unbaselined {
+		switch {
+		case cfg.allowSeed || firstRun:
+			seeded = append(seeded, label)
+		case cfg.registry != nil:
+			// The key reached a gating file, so the registry declares it gated.
+			// A committed declaration plus no stored baseline is a loss.
+			missing = append(missing, label)
+		case priorGated[label]:
+			missing = append(missing, label)
+		default:
+			seeded = append(seeded, label)
 		}
 	}
 
@@ -523,14 +783,22 @@ func checkBaseline(cfg baselineConfig, out io.Writer) error {
 		// log. Seeded keys were not compared against anything, which is the one
 		// case where a green gate does not mean the run was checked, so this is
 		// a warning rather than a notice.
-		fmt.Fprintf(out, "::warning title=Performance baseline seeded::%d of %d gated key(s) had no stored baseline and were seeded by run %s. Those keys were not compared. Every later run on this cache scope must find a baseline for them.\n",
+		fmt.Fprintf(out, "::warning title=Performance baseline seeded::%d of %d gated key(s) had no stored baseline and were seeded by run %s under ALLOW_BASELINE_SEED. Those keys were not compared. Clear the flag once this scope is populated.\n",
 			len(seeded), len(seeded)+len(compared)+len(missing), cfg.runID)
 	}
 	if len(missing) > 0 {
-		fmt.Fprintf(out, "::error title=Performance baseline missing::%d gated key(s) were gated by run %s but have no stored baseline now, so they would pass without being compared. Refusing to report a green gate.\n",
-			len(missing), prior.LastRun)
-		return fmt.Errorf("baseline missing for %d gated key(s) last gated by run %s: %s",
-			len(missing), prior.LastRun, strings.Join(missing, ", "))
+		// authority names what said the key should have had a baseline, because
+		// the remedy differs. The registry is committed, so a run that trips it
+		// has lost a baseline it is contractually meant to have. The state file
+		// only records the last green run and shares the cache's fate.
+		authority := "the last green run " + prior.LastRun
+		if cfg.registry != nil {
+			authority = cfg.registry.path
+		}
+		fmt.Fprintf(out, "::error title=Performance baseline missing::%d gated key(s) are declared gated by %s but have no stored baseline, so they would pass without being compared. Refusing to report a green gate. Set ALLOW_BASELINE_SEED=true only when deliberately establishing a new cache scope.\n",
+			len(missing), authority)
+		return fmt.Errorf("baseline missing for %d gated key(s) declared by %s: %s",
+			len(missing), authority, strings.Join(missing, ", "))
 	}
 	// Only recorded on a clean check. Overwriting after a missing-baseline
 	// failure would erase the evidence of which keys used to be gated, and the

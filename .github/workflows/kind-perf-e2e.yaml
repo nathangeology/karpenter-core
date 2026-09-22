@@ -155,3 +155,15 @@ jobs:
       test_name: ${{ matrix.test }}
       iterations: ${{ fromJSON(needs.plan.outputs.iterations) }}
       min_iterations: ${{ fromJSON(needs.plan.outputs.min_iterations) }}
+      # One-time. Splitting the two shared threshold tiers into one Compare step
+      # per field renames every benchmark-action chart, so no stored history
+      # matches and the first run on each existing cache scope compares nothing.
+      # The cache entry and the audit state both survive that, so the registry
+      # correctly reads it as a loss rather than a first run, and the gate would
+      # go red on all seven tests at once.
+      #
+      # Set this back to false, or delete the line, after one green run has
+      # populated the new scopes. Until then the gate is not gating: a run with
+      # this set seeds instead of comparing, and says so in a ::warning naming
+      # the count.
+      allow_baseline_seed: true

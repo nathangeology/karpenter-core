@@ -1,0 +1,242 @@
+# Committed gate-key registry for the kind performance gate.
+#
+# Format, one record per line, exactly three whitespace-separated fields
+# and an optional trailing # comment:
+#
+#     <phase-key>  <field>  <value>
+#
+# <phase-key> is the performance-report basename the suite writes, minus
+# the _performance_report.json suffix. <field> is either a report JSON
+# field, in which case <value> is a benchmark-action alert ratio or the
+# literal `none`, or one of the reserved fields below.
+#
+#   none                 screen the key out of the gate AND record that the
+#                        screen was deliberate. A key with no entry at all is
+#                        an error, not a skip: benchmark-action silently skips
+#                        a key it cannot match, so an omission and a deliberate
+#                        screen are indistinguishable on the wire without this.
+#                        A screened key still lands in the informational CV
+#                        file and the chart history. It cannot fail a step.
+#   timeout_seconds      the timeout argument at the phase's Report* call site.
+#                        A sample at or above 0.95 of it is censored: the
+#                        monitor loop exited on the clock, so the value is the
+#                        timeout rather than a measurement.
+#   assert_max_seconds   the suite's own absolute total_time bound for the
+#                        phase, from TotalTimeThreshold. A sample at or above
+#                        it is censored too. Under an unclamped run the suite
+#                        would have failed the leg, so such a sample only
+#                        reaches the batch when a provider has widened the
+#                        bound through KARPENTER_PERF_THRESHOLDS. Censoring on
+#                        it keeps the relative gate's statistic independent of
+#                        that override.
+#   derived_for_n        under the reserved phase key _gate. The sample count
+#                        the thresholds were derived for. They bound the
+#                        dispersion of the batch MEDIAN at that n, which is 3 to
+#                        10 times smaller than one sample's. The aggregator
+#                        refuses to gate a smaller batch. Replayed against 33
+#                        real upstream main runs, which take one iteration each,
+#                        these thresholds fire on 93.8% of them; at n=10 their
+#                        union false-positive rate is 0.49%.
+#   cpu_core_cap         under the reserved phase key _gate. The controller CPU
+#                        limit, so the aggregator can compute each key's
+#                        ceiling from the batch it just took. A key whose
+#                        ceiling falls below its shipped threshold is
+#                        unfalsifiable and is screened at run time with a
+#                        named warning rather than passing green.
+#
+# THRESHOLD VALUES ARE PROVISIONAL. They are T_min from the n=10-per-side
+# fresh-runner measurement, runs 35680298794 and 35680365019, raised to a
+# 1.01 floor and rounded up. kp-ojhb8u3 is deriving the scale_out detection
+# method and may revise them. The mechanism in this file is independent of
+# the values.
+#
+# WHAT GATES, AND WHY. The axis is the report writer, not the phase name.
+# ReportScaleOut (report.go:107) blocks on one Eventually and hardcodes
+# Rounds:1 at report.go:146, so its total_time cannot alias a poll count.
+# ReportConsolidation and ReportDrift each run a loop that RETURNS when the
+# timeout expires (report.go:349, report.go:252), so their total_time can
+# record the monitor's own sleep schedule instead of the code under test.
+# Measured: total_time = A + 55*R + 30*Q on consolidation, R^2 of total_time
+# on rounds 0.844 to 0.972, and corr(rounds, nodes removed) -0.818. On
+# drift_execution the same defect is latent, not absent: corr +0.97, slope
+# 49.3 s per round. Every loop-instrumented key is therefore screened here.
+#
+# Re-admitting a screened key is a one-line change to this file plus the
+# evidence that justifies it. It is not a code change. kp-pt1hu0o section 5d
+# lists the four conditions consolidation has to meet first.
+
+# ---- file-level parameters ----
+_gate                                          derived_for_n                      10     # runs 35680298794 and 35680365019, 10 independent runners per side
+_gate                                          cpu_core_cap                       2.0    # Makefile:9, --set controller.resources.limits.cpu=2
+
+# ---- Basic Scale Test ----
+# scale_out: ReportScaleOut, basic_test.go:44
+scale_out                                      timeout_seconds                    900    # basic_test.go:44, 15*time.Minute
+scale_out                                      assert_max_seconds                 120    # basic_test.go:50
+scale_out                                      total_time                         1.05   # T_min 1.040, cv_median 0.80%
+scale_out                                      karpenter_p95_memory_mb            1.09   # T_min 1.090, cv_median 1.74%
+scale_out                                      karpenter_p95_cpu_cores            1.36   # T_min 1.352, cv_median 6.12%, ceiling 2.31
+scale_out                                      total_nodes                        1.04   # T_min 1.036, cv_median 0.72%
+scale_out                                      total_reserved_cpu_utilization     1.05   # T_min 1.044, cv_median 0.88%
+scale_out                                      resource_efficiency_score          none   # derived: 90*cpu_util + 10*mem_util, report.go:128
+scale_out                                      total_reserved_memory_utilization  1.04   # T_min 1.033, cv_median 0.66%
+
+# consolidation: ReportConsolidation, basic_test.go:71
+consolidation                                  timeout_seconds                    1200   # basic_test.go:71, 20*time.Minute
+consolidation                                  assert_max_seconds                 1200   # basic_test.go:76
+consolidation                                  total_time                         none   # loop-instrumented, ReportConsolidation, T_min 3.05
+consolidation                                  karpenter_p95_memory_mb            none   # loop-instrumented, ReportConsolidation, T_min 1.08
+consolidation                                  karpenter_p95_cpu_cores            none   # loop-instrumented, ReportConsolidation, T_min 1.66
+consolidation                                  total_nodes                        none   # loop-instrumented, ReportConsolidation, T_min 1.16
+consolidation                                  total_reserved_cpu_utilization     none   # loop-instrumented, ReportConsolidation, T_min 1.04
+consolidation                                  resource_efficiency_score          none   # derived: 90*cpu_util + 10*mem_util, report.go:128
+consolidation                                  total_reserved_memory_utilization  none   # loop-instrumented, ReportConsolidation, T_min 1.01
+
+# ---- Do Not Disrupt Performance ----
+# do_not_disrupt_scale_out: ReportScaleOut, do_no_disrupt_test.go:55
+do_not_disrupt_scale_out                       timeout_seconds                    900    # do_no_disrupt_test.go:55, 15*time.Minute
+do_not_disrupt_scale_out                       assert_max_seconds                 240    # do_no_disrupt_test.go:63
+do_not_disrupt_scale_out                       total_time                         1.26   # T_min 1.250, cv_median 4.53%
+do_not_disrupt_scale_out                       karpenter_p95_memory_mb            1.13   # T_min 1.124, cv_median 2.37%
+do_not_disrupt_scale_out                       karpenter_p95_cpu_cores            1.14   # T_min 1.139, cv_median 2.63%, ceiling 1.43
+do_not_disrupt_scale_out                       total_nodes                        1.08   # T_min 1.079, cv_median 1.53%
+do_not_disrupt_scale_out                       total_reserved_cpu_utilization     1.09   # T_min 1.082, cv_median 1.59%
+do_not_disrupt_scale_out                       resource_efficiency_score          none   # derived: 90*cpu_util + 10*mem_util, report.go:128
+do_not_disrupt_scale_out                       total_reserved_memory_utilization  1.03   # T_min 1.023, cv_median 0.47%
+
+# do_not_disrupt_consolidation: ReportConsolidation, do_no_disrupt_test.go:99
+do_not_disrupt_consolidation                   timeout_seconds                    1500   # do_no_disrupt_test.go:99, 25*time.Minute
+do_not_disrupt_consolidation                   assert_max_seconds                 2100   # do_no_disrupt_test.go:107
+do_not_disrupt_consolidation                   total_time                         none   # loop-instrumented, ReportConsolidation, T_min 1.93
+do_not_disrupt_consolidation                   karpenter_p95_memory_mb            none   # loop-instrumented, ReportConsolidation, T_min 1.06
+do_not_disrupt_consolidation                   karpenter_p95_cpu_cores            none   # loop-instrumented, ReportConsolidation, T_min 1.37
+do_not_disrupt_consolidation                   total_nodes                        none   # loop-instrumented, ReportConsolidation, T_min 1.07
+do_not_disrupt_consolidation                   total_reserved_cpu_utilization     none   # loop-instrumented, ReportConsolidation, T_min 1.19
+do_not_disrupt_consolidation                   resource_efficiency_score          none   # derived: 90*cpu_util + 10*mem_util, report.go:128
+do_not_disrupt_consolidation                   total_reserved_memory_utilization  none   # loop-instrumented, ReportConsolidation, T_min 1.03
+
+# ---- Drift Performance ----
+# drift_initial_deployment: ReportScaleOut, drift_performance_test.go:53
+drift_initial_deployment                       timeout_seconds                    1200   # drift_performance_test.go:53, 20*time.Minute
+drift_initial_deployment                       assert_max_seconds                 300    # drift_performance_test.go:61
+drift_initial_deployment                       total_time                         1.07   # T_min 1.068, cv_median 1.33%
+drift_initial_deployment                       karpenter_p95_memory_mb            1.15   # T_min 1.146, cv_median 2.76%
+drift_initial_deployment                       karpenter_p95_cpu_cores            1.57   # T_min 1.562, cv_median 9.06%, ceiling 2.00
+drift_initial_deployment                       total_nodes                        1.03   # T_min 1.027, cv_median 0.55%
+drift_initial_deployment                       total_reserved_cpu_utilization     1.01   # T_min 1.010, cv_median 0.12%
+drift_initial_deployment                       resource_efficiency_score          none   # derived: 90*cpu_util + 10*mem_util, report.go:128
+drift_initial_deployment                       total_reserved_memory_utilization  1.01   # T_min 1.010, cv_median 0.07%
+
+# drift_execution: ReportDrift, drift_performance_test.go:83
+drift_execution                                timeout_seconds                    1800   # drift_performance_test.go:83, 30*time.Minute
+drift_execution                                assert_max_seconds                 3000   # drift_performance_test.go:92
+drift_execution                                total_time                         none   # loop-instrumented, ReportDrift, T_min 1.33
+drift_execution                                karpenter_p95_memory_mb            none   # loop-instrumented, ReportDrift, T_min 1.02
+drift_execution                                karpenter_p95_cpu_cores            none   # loop-instrumented, ReportDrift, T_min 1.04
+drift_execution                                total_nodes                        none   # loop-instrumented, ReportDrift, T_min 1.01
+drift_execution                                total_reserved_cpu_utilization     none   # loop-instrumented, ReportDrift, T_min 1.01
+drift_execution                                resource_efficiency_score          none   # derived: 90*cpu_util + 10*mem_util, report.go:128
+drift_execution                                total_reserved_memory_utilization  none   # loop-instrumented, ReportDrift, T_min 1.01
+
+# ---- Host Name Spreading ----
+# hostname_spread_scale_out: ReportScaleOut, host_name_spreading_test.go:51
+hostname_spread_scale_out                      timeout_seconds                    900    # host_name_spreading_test.go:51, 15*time.Minute
+hostname_spread_scale_out                      assert_max_seconds                 300    # host_name_spreading_test.go:59
+hostname_spread_scale_out                      total_time                         1.47   # T_min 1.466, cv_median 7.76%
+hostname_spread_scale_out                      karpenter_p95_memory_mb            1.05   # T_min 1.045, cv_median 0.89%
+hostname_spread_scale_out                      karpenter_p95_cpu_cores            1.19   # T_min 1.183, cv_median 3.41%, ceiling 1.49
+hostname_spread_scale_out                      total_nodes                        1.04   # T_min 1.032, cv_median 0.63%
+hostname_spread_scale_out                      total_reserved_cpu_utilization     1.01   # T_min 1.010, cv_median 0.16%
+hostname_spread_scale_out                      resource_efficiency_score          none   # derived: 90*cpu_util + 10*mem_util, report.go:128
+hostname_spread_scale_out                      total_reserved_memory_utilization  1.01   # T_min 1.010, cv_median 0.05%
+
+# hostname_spread_consolidation: ReportConsolidation, host_name_spreading_test.go:80
+hostname_spread_consolidation                  timeout_seconds                    1800   # host_name_spreading_test.go:80, 30*time.Minute
+#                                              assert_max_seconds                 -      # no TotalTimeThreshold call site; the only phase without one
+hostname_spread_consolidation                  total_time                         none   # loop-instrumented, ReportConsolidation, T_min 5.68
+hostname_spread_consolidation                  karpenter_p95_memory_mb            none   # loop-instrumented, ReportConsolidation, T_min 1.06
+hostname_spread_consolidation                  karpenter_p95_cpu_cores            none   # loop-instrumented, ReportConsolidation, T_min 2.14
+hostname_spread_consolidation                  total_nodes                        none   # loop-instrumented, ReportConsolidation, T_min 1.03
+hostname_spread_consolidation                  total_reserved_cpu_utilization     none   # loop-instrumented, ReportConsolidation, T_min 1.03
+hostname_spread_consolidation                  resource_efficiency_score          none   # derived: 90*cpu_util + 10*mem_util, report.go:128
+hostname_spread_consolidation                  total_reserved_memory_utilization  none   # loop-instrumented, ReportConsolidation, T_min 1.02
+
+# ---- Host Name Spreading XL ----
+# hostname_spread_xl_scale_out: ReportScaleOut, host_name_spreading_xl_test.go:51
+hostname_spread_xl_scale_out                   timeout_seconds                    1500   # host_name_spreading_xl_test.go:51, 25*time.Minute
+hostname_spread_xl_scale_out                   assert_max_seconds                 2100   # host_name_spreading_xl_test.go:59
+hostname_spread_xl_scale_out                   total_time                         1.17   # T_min 1.163, cv_median 3.07%
+hostname_spread_xl_scale_out                   karpenter_p95_memory_mb            1.08   # T_min 1.074, cv_median 1.45%
+hostname_spread_xl_scale_out                   karpenter_p95_cpu_cores            none   # unfalsifiable, ceiling 1.11 below T_min 1.14
+hostname_spread_xl_scale_out                   total_nodes                        1.08   # T_min 1.075, cv_median 1.48%
+hostname_spread_xl_scale_out                   total_reserved_cpu_utilization     1.02   # T_min 1.019, cv_median 0.37%
+hostname_spread_xl_scale_out                   resource_efficiency_score          none   # derived: 90*cpu_util + 10*mem_util, report.go:128
+hostname_spread_xl_scale_out                   total_reserved_memory_utilization  1.01   # T_min 1.010, cv_median 0.12%
+
+# hostname_spread_xl_consolidation: ReportConsolidation, host_name_spreading_xl_test.go:80
+hostname_spread_xl_consolidation               timeout_seconds                    1500   # host_name_spreading_xl_test.go:80, 25*time.Minute
+hostname_spread_xl_consolidation               assert_max_seconds                 2100   # host_name_spreading_xl_test.go:89
+hostname_spread_xl_consolidation               total_time                         none   # loop-instrumented, ReportConsolidation, T_min 1.59
+hostname_spread_xl_consolidation               karpenter_p95_memory_mb            none   # loop-instrumented, ReportConsolidation, T_min 1.20
+hostname_spread_xl_consolidation               karpenter_p95_cpu_cores            none   # loop-instrumented, ReportConsolidation, T_min 1.04
+hostname_spread_xl_consolidation               total_nodes                        none   # loop-instrumented, ReportConsolidation, T_min 1.09
+hostname_spread_xl_consolidation               total_reserved_cpu_utilization     none   # loop-instrumented, ReportConsolidation, T_min 1.02
+hostname_spread_xl_consolidation               resource_efficiency_score          none   # derived: 90*cpu_util + 10*mem_util, report.go:128
+hostname_spread_xl_consolidation               total_reserved_memory_utilization  none   # loop-instrumented, ReportConsolidation, T_min 1.01
+
+# ---- Self Anti-Affinity Interference ----
+# self_antiaffinity_scale_out_small: ReportScaleOut, interference_test.go:50
+self_antiaffinity_scale_out_small              timeout_seconds                    900    # interference_test.go:50, 15*time.Minute
+self_antiaffinity_scale_out_small              assert_max_seconds                 300    # interference_test.go:58
+self_antiaffinity_scale_out_small              total_time                         1.43   # T_min 1.426, cv_median 7.21%
+self_antiaffinity_scale_out_small              karpenter_p95_memory_mb            1.10   # T_min 1.092, cv_median 1.78%
+self_antiaffinity_scale_out_small              karpenter_p95_cpu_cores            1.13   # T_min 1.126, cv_median 2.41%, ceiling 1.45
+self_antiaffinity_scale_out_small              total_nodes                        1.01   # T_min 1.010, cv_median 0.00%
+self_antiaffinity_scale_out_small              total_reserved_cpu_utilization     1.01   # T_min 1.010, cv_median 0.00%
+self_antiaffinity_scale_out_small              resource_efficiency_score          none   # derived: 90*cpu_util + 10*mem_util, report.go:128
+self_antiaffinity_scale_out_small              total_reserved_memory_utilization  1.01   # T_min 1.010, cv_median 0.00%
+
+# self_antiaffinity_interference: ReportScaleOut, interference_test.go:79
+self_antiaffinity_interference                 timeout_seconds                    300    # interference_test.go:79, 5*time.Minute
+self_antiaffinity_interference                 assert_max_seconds                 600    # interference_test.go:87
+self_antiaffinity_interference                 total_time                         1.51   # T_min 1.509, cv_median 8.36%
+self_antiaffinity_interference                 karpenter_p95_memory_mb            1.12   # T_min 1.112, cv_median 2.14%
+self_antiaffinity_interference                 karpenter_p95_cpu_cores            1.31   # T_min 1.308, cv_median 5.44%, ceiling 1.35
+self_antiaffinity_interference                 total_nodes                        1.20   # T_min 1.200, cv_median 3.70%
+self_antiaffinity_interference                 total_reserved_cpu_utilization     1.17   # T_min 1.166, cv_median 3.11%
+self_antiaffinity_interference                 resource_efficiency_score          none   # derived: 90*cpu_util + 10*mem_util, report.go:128
+self_antiaffinity_interference                 total_reserved_memory_utilization  1.18   # T_min 1.176, cv_median 3.29%
+
+# self_antiaffinity_interference_consolidation: ReportConsolidation, interference_test.go:112
+self_antiaffinity_interference_consolidation   timeout_seconds                    900    # interference_test.go:112, 15*time.Minute
+self_antiaffinity_interference_consolidation   assert_max_seconds                 1500   # interference_test.go:121
+self_antiaffinity_interference_consolidation   total_time                         none   # loop-instrumented, ReportConsolidation, T_min 1.03
+self_antiaffinity_interference_consolidation   karpenter_p95_memory_mb            none   # loop-instrumented, ReportConsolidation, T_min 1.02
+self_antiaffinity_interference_consolidation   karpenter_p95_cpu_cores            none   # loop-instrumented, ReportConsolidation, T_min 1.25
+self_antiaffinity_interference_consolidation   total_nodes                        none   # loop-instrumented, ReportConsolidation, T_min 1.01
+self_antiaffinity_interference_consolidation   total_reserved_cpu_utilization     none   # loop-instrumented, ReportConsolidation, T_min 1.01
+self_antiaffinity_interference_consolidation   resource_efficiency_score          none   # derived: 90*cpu_util + 10*mem_util, report.go:128
+self_antiaffinity_interference_consolidation   total_reserved_memory_utilization  none   # loop-instrumented, ReportConsolidation, T_min 1.01
+
+# ---- Wide Deployments ----
+# wide_deployments_scale_out: ReportScaleOut, wide_deployments_test.go:169
+wide_deployments_scale_out                     timeout_seconds                    1200   # wide_deployments_test.go:169, 20*time.Minute
+wide_deployments_scale_out                     assert_max_seconds                 300    # wide_deployments_test.go:177
+wide_deployments_scale_out                     total_time                         1.06   # T_min 1.060, cv_median 1.18%
+wide_deployments_scale_out                     karpenter_p95_memory_mb            1.12   # T_min 1.116, cv_median 2.22%
+wide_deployments_scale_out                     karpenter_p95_cpu_cores            1.27   # T_min 1.262, cv_median 4.73%, ceiling 1.67
+wide_deployments_scale_out                     total_nodes                        1.10   # T_min 1.092, cv_median 1.79%
+wide_deployments_scale_out                     total_reserved_cpu_utilization     1.06   # T_min 1.060, cv_median 1.18%
+wide_deployments_scale_out                     resource_efficiency_score          none   # derived: 90*cpu_util + 10*mem_util, report.go:128
+wide_deployments_scale_out                     total_reserved_memory_utilization  1.08   # T_min 1.071, cv_median 1.40%
+
+# wide_deployments_consolidation: ReportConsolidation, wide_deployments_test.go:200
+wide_deployments_consolidation                 timeout_seconds                    1800   # wide_deployments_test.go:200, 30*time.Minute
+wide_deployments_consolidation                 assert_max_seconds                 2400   # wide_deployments_test.go:209
+wide_deployments_consolidation                 total_time                         none   # loop-instrumented, ReportConsolidation, T_min 2.49
+wide_deployments_consolidation                 karpenter_p95_memory_mb            none   # loop-instrumented, ReportConsolidation, T_min 1.07
+wide_deployments_consolidation                 karpenter_p95_cpu_cores            none   # loop-instrumented, ReportConsolidation, T_min 1.80
+wide_deployments_consolidation                 total_nodes                        none   # loop-instrumented, ReportConsolidation, T_min 1.07
+wide_deployments_consolidation                 total_reserved_cpu_utilization     none   # loop-instrumented, ReportConsolidation, T_min 1.10
+wide_deployments_consolidation                 resource_efficiency_score          none   # derived: 90*cpu_util + 10*mem_util, report.go:128
+wide_deployments_consolidation                 total_reserved_memory_utilization  none   # loop-instrumented, ReportConsolidation, T_min 1.07
