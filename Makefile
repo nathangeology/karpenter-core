@@ -38,6 +38,7 @@ apply-with-kind: verify build-with-kind ## Deploy the kwok controller from the c
 	kubectl apply -f kwok/charts/crds
 	helm upgrade --install karpenter kwok/charts --namespace $(KARPENTER_NAMESPACE) --skip-crds \
 		$(HELM_OPTS) \
+		$(EXTRA_HELM_OPTS) \
 		--set controller.image.repository=$(IMG_REPOSITORY) \
 		--set controller.image.tag=$(IMG_TAG) \
 		--set serviceMonitor.enabled=true \

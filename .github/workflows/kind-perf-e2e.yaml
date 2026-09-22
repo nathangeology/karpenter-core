@@ -1,169 +1,140 @@
-name: kind-perf-e2e
+name: kind-perf-e2e-mde
+# EXPERIMENT ONLY, NOT FOR MERGE.
+#
+# Interleaved injection A/B for calibrating the performance e2e's minimum
+# detectable effect. Every arm of the comparison runs as a leg of ONE workflow
+# run.
+#
+# Why one run. Run-level nuisance (runner-pool generation, queue depth, hosted
+# image drift) is otherwise fully confounded with the treatment, and the
+# between-run term carries 96% to 99.8% of total variance on the keys where it
+# has been decomposed. One run makes that term common to the arms rather than
+# part of the contrast. A prior two-run contrast drew 5 CPU models split
+# 24/22, 8/7, 6/3, 2/3, 0/4 across arms and carried that whole difference with
+# no standard-error term for it.
+#
+# Why env vars rather than refs. Every arm checks out the SAME commit and runs
+# the SAME image. The arms differ only in the controller's environment, which
+# selects the injection and its magnitude. Three consequences: the ko image
+# layer cache is shared by every leg in the run, so the marginal cost of an arm
+# is a test run rather than a build; there is no product-code delta to confound
+# the contrast; and the clean arm is the same binary as the injected arm with
+# the injection set to zero.
+#
+# The injection itself is compiled in only under the perf_inject build tag, set
+# here and nowhere else. A default build selects pkg/perfinject/inject_off.go,
+# whose two functions are empty and whose import list is empty.
+#
+# GitHub does not guarantee matrix leg dispatch order, so within-run adjacency
+# cannot be forced from the workflow. Each leg records its runner CPU model and
+# start time; the analysis pairs post hoc on start-time proximity within suite
+# and blocks on CPU model.
 on:
-  push:
-    branches: [main]
-  pull_request:
-    types: [labeled, synchronize]
-  workflow_run:
-    workflows:
-      - ApprovalComment
-    types:
-      - completed
   workflow_dispatch:
     inputs:
       iterations:
         type: string
         required: false
-        default: "10"
-        description: "Samples per test. Lower it to exercise the workflow cheaply."
-env:
-  # Samples per test. Each one is a separate job, so this is also the matrix
-  # multiplier: 7 tests times this number is the job count.
-  #
-  # 10 is chosen on measurement, not convention. The batch median's standard
-  # error falls as the square root of this number on the between-run variance
-  # component, which is 96% to 99.8% of the total on the keys where it has been
-  # decomposed. Ten samples put the smallest defensible per-key threshold at
-  # 1.07 under the optimistic noise model and 1.37 under the pessimistic one,
-  # which is the only count that clears the 2.07x regression this gate exists
-  # to catch without first having to settle which model is right.
-  #
-  # Cost, measured over 42 upstream jobs: 70 jobs and 30.2 runner-hours against
-  # 7 jobs and 25.6 at the previous in-loop repeat of 10, so 18% more
-  # runner-time for ten independent samples instead of one. Wall clock improves
-  # from 5.2 hours to between 1.5 and 2.2, because the samples parallelise
-  # instead of queueing behind one runner.
-  PERF_ITERATIONS: "10"
-  # Quorum. A batch gates on this many samples even if the rest were lost. The
-  # upstream per-job failure rate on this workflow is 19%, and 44% on Wide
-  # Deployments, so requiring all ten would leave a batch gateable 12% of the
-  # time on a typical key. At seven, with the per-sample retry in
-  # run-perf-iters.sh, it is effectively always. A batch below ten gates and
-  # says so in a job annotation, so the n it gated on stays on the record.
-  PERF_MIN_ITERATIONS: "7"
+        default: "5"
+        description: "Samples per (suite, arm). Total legs = suites x arms x this."
+      suites:
+        type: string
+        required: false
+        default: "basic"
+        description: "basic | basic+hns | xl | all"
+      arms:
+        type: string
+        required: false
+        default: '[{"label":"clean","env":{}}]'
+        description: >-
+          JSON list of arm specs. Each is {"label":str, "env":{NAME:VALUE},
+          "helm":str optional, "thresholds":str optional}. label must be
+          filename-safe. env is injected into the controller pod. helm is
+          appended to the chart's --set list. thresholds is the value of
+          KARPENTER_PERF_THRESHOLDS for the test process.
 jobs:
-  # Expands PERF_ITERATIONS into the sample index list the matrix fans out
-  # over. A matrix cannot count, so the list has to be built somewhere; doing it
-  # here keeps the sample count a single number rather than a hand-maintained
-  # array, and lets workflow_dispatch lower it to exercise the workflow without
-  # editing the file.
   plan:
-    if: >-
-      (github.event_name == 'push') ||
-      (github.event_name == 'workflow_dispatch') ||
-      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') ||
-      (github.event_name == 'pull_request' &&
-       contains(github.event.pull_request.labels.*.name, 'ok-to-test') &&
-       !contains(github.event.pull_request.labels.*.name, 'skip-perf') &&
-       (contains(github.event.pull_request.labels.*.name, 'perf-check') ||
-        ((contains(github.event.pull_request.labels.*.name, 'size/XL') ||
-          contains(github.event.pull_request.labels.*.name, 'size/XXL')) &&
-         (startsWith(github.event.pull_request.title, 'feat:') ||
-          startsWith(github.event.pull_request.title, 'fix:') ||
-          startsWith(github.event.pull_request.title, 'perf:')))))
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     outputs:
-      iterations: ${{ steps.plan.outputs.iterations }}
-      min_iterations: ${{ steps.plan.outputs.min_iterations }}
-      indices: ${{ steps.plan.outputs.indices }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+      legs: ${{ steps.plan.outputs.legs }}
     steps:
-    - name: plan the sample matrix
+    - name: build the interleaved injection matrix
       id: plan
       env:
         REQUESTED: ${{ inputs.iterations }}
+        SUITES: ${{ inputs.suites }}
+        ARMS: ${{ inputs.arms }}
       shell: bash
       run: |
         set -euo pipefail
-        n="${REQUESTED:-$PERF_ITERATIONS}"
-        if ! [[ "$n" =~ ^[0-9]+$ ]] || [[ "$n" -lt 1 ]]; then
-          echo "iterations must be a positive integer, got '$n'" >&2
-          exit 1
-        fi
-        # The quorum cannot exceed the sample count, which it would on a
-        # reduced-sample dispatch.
-        min="$PERF_MIN_ITERATIONS"
-        if [[ "$min" -gt "$n" ]]; then min="$n"; fi
-        indices="$(seq 1 "$n" | paste -sd, - | sed 's/^/[/; s/$/]/')"
-        {
-          echo "iterations=$n"
-          echo "min_iterations=$min"
-          echo "indices=$indices"
-        } >> "$GITHUB_OUTPUT"
-        echo "$n sample(s) per test, quorum $min, indices $indices"
-  # One job per (test, sample). Each gets its own runner, its own kind cluster,
-  # and its own Karpenter pod, so the samples of a batch are independent draws
-  # rather than successive readings off one degrading cluster.
-  #
-  # The previous shape looped the samples inside one job on one cluster. That
-  # sampled the within-run variance ten times and the between-run variance once,
-  # which is backwards: the between-run term carries 96% to 99.8% of the total
-  # on the keys where it has been decomposed, so ten in-loop samples bought
-  # almost no precision on the component that moves. It also left
-  # karpenter_p95_memory_mb reading a high-water mark on a pod nothing ever
-  # restarted, rising with sample index at Spearman rho +0.675, which broke
-  # every one of the eight measured keys' absolute memory assertion at or before
-  # the eighth sample. A fresh pod per sample cannot accumulate.
+        python3 - <<'PY' >> "$GITHUB_OUTPUT"
+        import json, os, re
+        n = int(os.environ.get("REQUESTED") or "5")
+        if n < 1:
+            raise SystemExit("iterations must be >= 1")
+        which = (os.environ.get("SUITES") or "basic").strip()
+        ALL = {
+            "basic": ("Basic Scale Test", "Basic Deployment"),
+            "hns": ("Host Name Spreading", "Host Name Spreading Deployment Reg"),
+            "xl": ("Host Name Spreading XL", "Host Name Spreading Deployment XL"),
+            "interference": ("Self Anti-Affinity Deployment Interference",
+                             "Self Anti-Affinity Deployment Interference"),
+            "drift": ("Drift Performance", "Drift Performance"),
+            "wide": ("Wide Deployments", "Wide Deployments"),
+            "dnd": ("Do Not Disrupt Performance", "Do Not Disrupt Performance Test"),
+        }
+        SETS = {
+            "basic": ["basic"],
+            "basic+hns": ["basic", "hns"],
+            "xl": ["xl"],
+            "all": list(ALL),
+        }
+        if which not in SETS:
+            raise SystemExit("unknown suites value %r" % which)
+        suites = [ALL[k] for k in SETS[which]]
+        arms = json.loads(os.environ["ARMS"])
+        if not arms:
+            raise SystemExit("arms must be a non-empty list")
+        for a in arms:
+            if not re.fullmatch(r"[A-Za-z0-9_.-]+", a.get("label", "")):
+                raise SystemExit("arm label %r is not filename-safe" % a.get("label"))
+        inc = []
+        for i in range(1, n + 1):
+            # Rotate the arm order by iteration index so no arm sits in a fixed
+            # position in the expansion. With more than two arms a reversal is
+            # not enough: a rotation gives every arm every position.
+            order = arms[i % len(arms):] + arms[:i % len(arms)]
+            for name, focus in suites:
+                for a in order:
+                    inc.append({
+                        "name": name,
+                        "focus": focus,
+                        "iteration": i,
+                        "arm": a["label"],
+                        "inject_env": json.dumps(a.get("env", {})),
+                        "helm_extra": a.get("helm", ""),
+                        "perf_thresholds": a.get("thresholds", ""),
+                    })
+        print("matrix=" + json.dumps({"include": inc}))
+        print("legs=%d" % len(inc))
+        PY
+        echo "planned $(grep -o 'legs=[0-9]*' "$GITHUB_OUTPUT" | tail -1)"
   kind-perf-e2e:
     needs: plan
     permissions:
       issues: write
     strategy:
       fail-fast: false
-      matrix:
-        test:
-          - name: "Drift Performance"
-            focus: "Drift Performance"
-          - name: "Host Name Spreading"
-            focus: "Host Name Spreading Deployment Reg"
-          - name: "Host Name Spreading XL"
-            focus: "Host Name Spreading Deployment XL"
-          - name: "Wide Deployments"
-            focus: "Wide Deployments"
-          - name: "Basic Scale Test"
-            focus: "Basic Deployment"
-          - name: "Do Not Disrupt Performance"
-            focus: "Do Not Disrupt Performance Test"
-          - name: "Self Anti-Affinity Deployment Interference"
-            focus: "Self Anti-Affinity Deployment Interference"
-        iteration: ${{ fromJSON(needs.plan.outputs.indices) }}
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     uses: ./.github/workflows/e2e.yaml
     with:
       suite: Performance
-      focus: ${{ matrix.test.focus }}
-      test_name: ${{ matrix.test.name }}
+      focus: ${{ matrix.focus }}
+      test_name: ${{ matrix.name }}
       iteration: ${{ matrix.iteration }}
-  # One gather job per test, after that test's samples have all landed. Runs on
-  # always() so a batch that lost a sample still gates, subject to the quorum.
-  perf-gate:
-    needs: [plan, kind-perf-e2e]
-    if: always() && needs.plan.result == 'success'
-    permissions:
-      issues: write
-    strategy:
-      fail-fast: false
-      matrix:
-        test:
-          - "Drift Performance"
-          - "Host Name Spreading"
-          - "Host Name Spreading XL"
-          - "Wide Deployments"
-          - "Basic Scale Test"
-          - "Do Not Disrupt Performance"
-          - "Self Anti-Affinity Deployment Interference"
-    uses: ./.github/workflows/perf-gate.yaml
-    with:
-      test_name: ${{ matrix.test }}
-      iterations: ${{ fromJSON(needs.plan.outputs.iterations) }}
-      min_iterations: ${{ fromJSON(needs.plan.outputs.min_iterations) }}
-      # One-time. Splitting the two shared threshold tiers into one Compare step
-      # per field renames every benchmark-action chart, so no stored history
-      # matches and the first run on each existing cache scope compares nothing.
-      # The cache entry and the audit state both survive that, so the registry
-      # correctly reads it as a loss rather than a first run, and the gate would
-      # go red on all seven tests at once.
-      #
-      # Set this back to false, or delete the line, after one green run has
-      # populated the new scopes. Until then the gate is not gating: a run with
-      # this set seeds instead of comparing, and says so in a ::warning naming
-      # the count.
-      allow_baseline_seed: true
+      arm: ${{ matrix.arm }}
+      inject_env: ${{ matrix.inject_env }}
+      helm_extra: ${{ matrix.helm_extra }}
+      perf_thresholds: ${{ matrix.perf_thresholds }}

@@ -25,12 +25,44 @@ on:
           directory and the uploaded artifact. One job is one sample: the
           caller fans out over this input so each sample gets its own runner,
           its own kind cluster, and its own Karpenter pod.
+      # ---- EXPERIMENT-ONLY inputs, MDE calibration. Not for merge. ----
+      arm:
+        type: string
+        required: false
+        default: ""
+        description: >-
+          Arm label for an injection A/B. Empty means the normal single-arm run.
+          Carried into the artifact name so the arms of one run stay separable.
+      inject_env:
+        type: string
+        required: false
+        default: "{}"
+        description: >-
+          JSON map of environment variables set on the controller pod. The
+          injection reads KPERF_* names from here. An empty map is the clean arm
+          and is indistinguishable from an untagged build at run time.
+      helm_extra:
+        type: string
+        required: false
+        default: ""
+        description: >-
+          Extra --set arguments appended after HELM_OPTS. Used to vary
+          controller.resources.limits.cpu for the CPU-ceiling probe. Helm takes
+          the last --set for a key, so this overrides HELM_OPTS.
+      perf_thresholds:
+        type: string
+        required: false
+        default: ""
+        description: >-
+          KARPENTER_PERF_THRESHOLDS for the test process. An injected arm has to
+          widen the suite's own absolute bounds or the leg fails its assertion,
+          run-perf-iters.sh retries, and the retry deletes the sample directory.
 jobs:
   e2e:
     permissions:
       issues: write
     runs-on: ubuntu-latest
-    name: ${{ inputs.test_name || format('suite-{0}', inputs.suite) }}${{ inputs.iteration > 1 && format(' iter {0}', inputs.iteration) || '' }}
+    name: ${{ inputs.test_name || format('suite-{0}', inputs.suite) }}${{ inputs.arm != '' && format(' arm {0}', inputs.arm) || '' }}${{ inputs.iteration > 1 && format(' iter {0}', inputs.iteration) || '' }}
     steps:
     - name: Debug workflow_run trigger
       run: |
@@ -57,13 +89,70 @@ jobs:
       shell: bash
       run: |
         go install github.com/google/ko@latest
+    # Records what this leg actually ran on. The CPU model is the blocking
+    # variable in the paired analysis: a two-run contrast on this workflow drew
+    # five different models across its arms.
+    - name: record runner environment
+      shell: bash
+      run: |
+        set -euo pipefail
+        python3 - <<'PY' > runner_env.json
+        import json, os, platform, re, subprocess
+        def first(path, key):
+            try:
+                for line in open(path):
+                    if line.startswith(key):
+                        return line.split(":", 1)[1].strip()
+            except OSError:
+                pass
+            return ""
+        print(json.dumps({
+            "cpu_model": first("/proc/cpuinfo", "model name"),
+            "cpu_mhz": first("/proc/cpuinfo", "cpu MHz"),
+            "nproc": os.cpu_count(),
+            "mem_total": first("/proc/meminfo", "MemTotal"),
+            "kernel": platform.release(),
+            "head_sha": subprocess.run(["git","rev-parse","HEAD"],capture_output=True,text=True).stdout.strip(),
+            "arm": os.environ.get("ARM",""),
+            "iteration": os.environ.get("ITER",""),
+            "started_at": subprocess.run(["date","-u","+%Y-%m-%dT%H:%M:%SZ"],capture_output=True,text=True).stdout.strip(),
+        }, indent=2))
+        PY
+        cat runner_env.json
+      env:
+        ARM: ${{ inputs.arm }}
+        ITER: ${{ inputs.iteration }}
+    # Turns the arm's JSON env map into the chart's --set-string list. index 0 is
+    # taken by ENABLE_PROFILING in the Makefile, so injected variables start at 1.
+    #
+    # WITH_GOFLAGS is the Makefile's own hook in front of ko build. Setting the
+    # perf_inject tag here, and only here, is what compiles the injection in. A
+    # build that does not pass through this step selects inject_off.go.
     - name: install kwok and controller
       shell: bash
       run: |
+        set -euo pipefail
+        EXTRA="$(python3 - <<'PY'
+        import json, os, shlex
+        env = json.loads(os.environ.get("INJECT_ENV") or "{}")
+        out = []
+        for i, (k, v) in enumerate(sorted(env.items()), start=1):
+            out.append("--set-string controller.env[%d].name=%s" % (i, k))
+            out.append("--set-string controller.env[%d].value=%s" % (i, shlex.quote(str(v))))
+        print(" ".join(out))
+        PY
+        )"
+        EXTRA="$EXTRA ${HELM_EXTRA}"
+        echo "EXTRA_HELM_OPTS: $EXTRA"
         make install-kwok
         export KWOK_REPO=kind.local
         export KIND_CLUSTER_NAME=chart-testing
-        make apply-with-kind
+        make apply-with-kind \
+          EXTRA_HELM_OPTS="$EXTRA" \
+          WITH_GOFLAGS="GOFLAGS=-tags=perf_inject"
+      env:
+        INJECT_ENV: ${{ inputs.inject_env }}
+        HELM_EXTRA: ${{ inputs.helm_extra }}
     - name: ping cluster
       shell: bash
       run: |
@@ -84,12 +173,36 @@ jobs:
           FOCUS: ${{ inputs.focus }}
           ITERATIONS: 1
           ITER_INDEX: ${{ inputs.iteration }}
+          KARPENTER_PERF_THRESHOLDS: ${{ inputs.perf_thresholds }}
       shell: bash
       run: |
         OUTPUT_DIR="$(mktemp -d)"
         export OUTPUT_DIR
         echo "OUTPUT_DIR=$OUTPUT_DIR" >> "$GITHUB_ENV"
+        # Follow the controller's stdout for the duration of the test and keep
+        # only the injection's counter lines. A follow rather than a single
+        # kubectl logs at the end: the controller runs at debug level, kubelet
+        # rotates the container log at 10Mi, and the early ticks are the ones a
+        # rotation takes. The counters are cumulative, so a lost tail is
+        # recoverable but a lost head is not.
+        ( kubectl logs -n kube-system -l app.kubernetes.io/name=karpenter \
+            --tail=-1 -f 2>/dev/null \
+          | grep --line-buffered PERFINJECT >> "$OUTPUT_DIR/perfinject.log" ) &
+        echo "PERFINJECT_TAIL_PID=$!" >> "$GITHUB_ENV"
         bash .github/scripts/run-perf-iters.sh
+    # Stops the follower and reports what it caught. A clean arm emits a config
+    # line and ticks with zero sleep, which is the check that the tagged build is
+    # live on every arm rather than only on the injected ones.
+    - name: collect injection counters
+      if: always() && env.OUTPUT_DIR != ''
+      shell: bash
+      run: |
+        sleep 12
+        kill "${PERFINJECT_TAIL_PID}" 2>/dev/null || true
+        cp runner_env.json "$OUTPUT_DIR/runner_env.json" || true
+        echo "lines captured: $(wc -l < "$OUTPUT_DIR/perfinject.log" 2>/dev/null || echo 0)"
+        head -2 "$OUTPUT_DIR/perfinject.log" 2>/dev/null || true
+        tail -3 "$OUTPUT_DIR/perfinject.log" 2>/dev/null || true
     # The sample's reports, uploaded raw. Aggregation, the baseline cache, and
     # the benchmark-action compare steps all live in perf-gate.yaml, which runs
     # once per test after every sample has landed. They cannot live here: all
@@ -103,11 +216,13 @@ jobs:
       if: always() && env.OUTPUT_DIR != ''
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
-        name: performance-results-${{ inputs.test_name || format('suite-{0}', inputs.suite) }}-iter-${{ inputs.iteration }}-${{ github.run_id }}
+        name: performance-results-${{ inputs.test_name || format('suite-{0}', inputs.suite) }}${{ inputs.arm != '' && format('-arm-{0}', inputs.arm) || '' }}-iter-${{ inputs.iteration }}-${{ github.run_id }}
         path: |
           ${{ env.OUTPUT_DIR }}/iter_${{ inputs.iteration }}/*_performance_report.json
           ${{ env.OUTPUT_DIR }}/karpenter_memory_profile_*.pb.gz
           ${{ env.OUTPUT_DIR }}/karpenter_cpu_profile_*.pb.gz
+          ${{ env.OUTPUT_DIR }}/perfinject.log
+          ${{ env.OUTPUT_DIR }}/runner_env.json
         retention-days: 30
         if-no-files-found: ignore
     - name: cleanup
