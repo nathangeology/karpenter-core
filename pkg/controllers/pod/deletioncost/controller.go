@@ -113,9 +113,13 @@ func (c *Controller) Reconcile(ctx context.Context) (reconciler.Result, error) {
 
 	nodeRanks, err := c.rankingEngine.RankNodes(ctx, c.kubeClient, nodes)
 	if err != nil {
+		// Swallow the error after logging and eventing it. Returning it alongside
+		// RequeueAfter makes controller-runtime apply exponential backoff that races
+		// the explicit interval on a first-wins basis, so the requeue cadence stops
+		// being predictable. The log line and DisabledEvent preserve visibility.
 		log.FromContext(ctx).Error(err, "failed to rank nodes")
 		c.recorder.Publish(DisabledEvent(fmt.Sprintf("failed to rank nodes: %v", err)))
-		return reconciler.Result{RequeueAfter: reconcileInterval}, err
+		return reconciler.Result{RequeueAfter: reconcileInterval}, nil
 	}
 
 	c.recorder.Publish(RankingCompletedEvent(len(nodeRanks)))
@@ -123,9 +127,11 @@ func (c *Controller) Reconcile(ctx context.Context) (reconciler.Result, error) {
 	activeRanks := c.boundAndCleanup(ctx, nodeRanks)
 
 	if err := c.annotationMgr.UpdatePodDeletionCosts(ctx, activeRanks); err != nil {
+		// Same reasoning as the ranking failure above: log and event, requeue on the
+		// fixed interval, do not hand controller-runtime a competing backoff.
 		log.FromContext(ctx).Error(err, "failed to update pod deletion costs")
 		c.recorder.Publish(DisabledEvent(fmt.Sprintf("failed to update pod deletion costs: %v", err)))
-		return reconciler.Result{RequeueAfter: reconcileInterval}, err
+		return reconciler.Result{RequeueAfter: reconcileInterval}, nil
 	}
 
 	log.FromContext(ctx).V(1).WithValues("nodeCount", len(activeRanks)).Info("updated pod deletion costs")
