@@ -43,7 +43,20 @@ jobs:
       BENCH_NAME_PREFIX: Karpenter Performance (${{ inputs.test_name }})
       BENCH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       BENCH_CC_USERS: '@nathangeology'
-      BENCH_COMMENT_ON_ALERT: 'true'
+      # Off, and it has to be. benchmark-action posts an alert to the commit
+      # comment endpoint, which needs contents: write. This job grants
+      # issues: write, so the first alert on any tier ends the step with
+      # "Resource not accessible by integration" instead of the alert. That
+      # defeats fail-on-alert: false on the informational tier, which then fails
+      # the job on a noise spike, and it replaces the gating tiers' alert
+      # message with a permissions error.
+      #
+      # Measured: run 35684679041, both gather jobs failed on the informational
+      # CV step after it raised 9 alerts. The alternative fix is to grant
+      # contents: write, which is a real privilege increase on a job that only
+      # needs to read. summary-always already writes the same detail to the job
+      # summary, where it needs no token at all.
+      BENCH_COMMENT_ON_ALERT: 'false'
       BENCH_SUMMARY_ALWAYS: 'true'
       OUTPUT_DIR: ${{ github.workspace }}/perf-batch
     steps:
