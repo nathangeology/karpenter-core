@@ -84,6 +84,12 @@ jobs:
           FOCUS: ${{ inputs.focus }}
           ITERATIONS: 1
           ITER_INDEX: ${{ inputs.iteration }}
+          # EXPERIMENT ONLY, not for merge. Lifts every absolute inline
+          # assertion so a breach cannot lose a sample. Applied identically on
+          # both sides of the comparison, so the relative gate is what is being
+          # measured. consolidation breaches its 260 MB cap at the first sample
+          # even on a fresh pod, which would otherwise cost that leg.
+          KARPENTER_PERF_THRESHOLDS: '{"basic/scaleOut":{"memory_mb":100000,"cpu_cores":1000,"total_time_minutes":600,"cpu_util":-1,"memory_util":-1},"basic/consolidation":{"memory_mb":100000,"cpu_cores":1000,"total_time_minutes":600,"cpu_util":-1,"memory_util":-1},"drift/initial":{"memory_mb":100000,"cpu_cores":1000,"total_time_minutes":600,"cpu_util":-1,"memory_util":-1},"drift/drift":{"memory_mb":100000,"cpu_cores":1000,"total_time_minutes":600,"cpu_util":-1,"memory_util":-1},"hostNameSpreading/scaleOut":{"memory_mb":100000,"cpu_cores":1000,"total_time_minutes":600,"cpu_util":-1,"memory_util":-1},"hostNameSpreading/consolidation":{"memory_mb":100000,"cpu_cores":1000,"total_time_minutes":600,"cpu_util":-1,"memory_util":-1},"hostNameSpreadingXL/scaleOut":{"memory_mb":100000,"cpu_cores":1000,"total_time_minutes":600,"cpu_util":-1,"memory_util":-1},"hostNameSpreadingXL/consolidation":{"memory_mb":100000,"cpu_cores":1000,"total_time_minutes":600,"cpu_util":-1,"memory_util":-1},"wideDeployments/scaleOut":{"memory_mb":100000,"cpu_cores":1000,"total_time_minutes":600,"cpu_util":-1,"memory_util":-1},"wideDeployments/consolidation":{"memory_mb":100000,"cpu_cores":1000,"total_time_minutes":600,"cpu_util":-1,"memory_util":-1},"doNotDisrupt/scaleOut":{"memory_mb":100000,"cpu_cores":1000,"total_time_minutes":600,"cpu_util":-1,"memory_util":-1},"doNotDisrupt/consolidation":{"memory_mb":100000,"cpu_cores":1000,"total_time_minutes":600,"cpu_util":-1,"memory_util":-1},"interference/scaleOut":{"memory_mb":100000,"cpu_cores":1000,"total_time_minutes":600,"cpu_util":-1,"memory_util":-1},"interference/interference":{"memory_mb":100000,"cpu_cores":1000,"total_time_minutes":600,"cpu_util":-1,"memory_util":-1},"interference/consolidation":{"memory_mb":100000,"cpu_cores":1000,"total_time_minutes":600,"cpu_util":-1,"memory_util":-1}}'
       shell: bash
       run: |
         OUTPUT_DIR="$(mktemp -d)"
