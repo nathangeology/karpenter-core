@@ -25,12 +25,32 @@ on:
           directory and the uploaded artifact. One job is one sample: the
           caller fans out over this input so each sample gets its own runner,
           its own kind cluster, and its own Karpenter pod.
+      side:
+        type: string
+        required: false
+        default: ""
+        description: >-
+          EXPERIMENT ONLY. Label for the A/B arm this sample belongs to. When
+          set, the caller is running both arms of a comparison inside ONE
+          workflow run so the run-level nuisance term is common to both arms
+          instead of confounded with the treatment. The label lands in the
+          artifact name so the harvest can separate the arms.
+      ref:
+        type: string
+        required: false
+        default: ""
+        description: >-
+          EXPERIMENT ONLY. Commit to check out for this sample. Empty means the
+          ref that triggered the run, which is the normal path. A caller running
+          two arms in one run sets this per arm, so the product code under test
+          differs by arm while the orchestration, the runner pool and the queue
+          conditions are shared.
 jobs:
   e2e:
     permissions:
       issues: write
     runs-on: ubuntu-latest
-    name: ${{ inputs.test_name || format('suite-{0}', inputs.suite) }}${{ inputs.iteration > 1 && format(' iter {0}', inputs.iteration) || '' }}
+    name: ${{ inputs.test_name || format('suite-{0}', inputs.suite) }}${{ inputs.side != '' && format(' {0}', inputs.side) || '' }}${{ inputs.iteration > 1 && format(' iter {0}', inputs.iteration) || '' }}
     steps:
     - name: Debug workflow_run trigger
       run: |
@@ -38,6 +58,15 @@ jobs:
         echo "Workflow run conclusion: ${{ github.event.workflow_run.conclusion }}"
         echo "Workflow run name: ${{ github.event.workflow_run.name }}"
     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        ref: ${{ inputs.ref }}
+    - name: record the commit actually built
+      shell: bash
+      run: |
+        echo "side=${{ inputs.side }}"
+        echo "requested ref=${{ inputs.ref }}"
+        echo "checked out HEAD=$(git rev-parse HEAD)"
+        git log --oneline -1
     - uses: ./.github/actions/install-deps
       with:
           k8sVersion: ${{ inputs.k8s_version }}
@@ -84,6 +113,8 @@ jobs:
           FOCUS: ${{ inputs.focus }}
           ITERATIONS: 1
           ITER_INDEX: ${{ inputs.iteration }}
+          SIDE_LABEL: ${{ inputs.side }}
+          REF_REQUESTED: ${{ inputs.ref }}
           # EXPERIMENT ONLY, not for merge. Lifts every absolute inline
           # assertion so a breach cannot lose a sample. Applied identically on
           # both sides of the comparison, so the relative gate is what is being
@@ -95,6 +126,40 @@ jobs:
         OUTPUT_DIR="$(mktemp -d)"
         export OUTPUT_DIR
         echo "OUTPUT_DIR=$OUTPUT_DIR" >> "$GITHUB_ENV"
+        mkdir -p "$OUTPUT_DIR/iter_${{ inputs.iteration }}"
+        # Hardware identity of this runner, captured alongside the sample.
+        # Runner CPU model and memory vary across the hosted pool, and that
+        # heterogeneity is a nuisance factor the analysis can block on only if
+        # it is recorded per leg.
+        python3 - > "$OUTPUT_DIR/iter_${{ inputs.iteration }}/runner_env.json" <<'PY'
+        import json, os, platform, re, subprocess
+        def first(path, pat):
+            try:
+                for line in open(path):
+                    m = re.match(pat, line)
+                    if m:
+                        return m.group(1).strip()
+            except OSError:
+                pass
+            return None
+        out = {
+            "side": os.environ.get("SIDE_LABEL", ""),
+            "ref_requested": os.environ.get("REF_REQUESTED", ""),
+            "head_sha": subprocess.run(["git","rev-parse","HEAD"],capture_output=True,text=True).stdout.strip(),
+            "iteration": os.environ.get("ITER_INDEX", ""),
+            "suite": os.environ.get("SUITE", ""),
+            "focus": os.environ.get("FOCUS", ""),
+            "runner_name": os.environ.get("RUNNER_NAME", ""),
+            "cpu_model": first("/proc/cpuinfo", r"model name\s*:\s*(.*)"),
+            "cpu_mhz": first("/proc/cpuinfo", r"cpu MHz\s*:\s*(.*)"),
+            "nproc": os.cpu_count(),
+            "mem_total_kb": first("/proc/meminfo", r"MemTotal:\s*(\d+)"),
+            "kernel": platform.release(),
+            "started_utc": subprocess.run(["date","-u","+%Y-%m-%dT%H:%M:%SZ"],capture_output=True,text=True).stdout.strip(),
+        }
+        print(json.dumps(out, indent=1))
+        PY
+        cat "$OUTPUT_DIR/iter_${{ inputs.iteration }}/runner_env.json"
         bash .github/scripts/run-perf-iters.sh
     # The sample's reports, uploaded raw. Aggregation, the baseline cache, and
     # the benchmark-action compare steps all live in perf-gate.yaml, which runs
@@ -109,9 +174,10 @@ jobs:
       if: always() && env.OUTPUT_DIR != ''
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
-        name: performance-results-${{ inputs.test_name || format('suite-{0}', inputs.suite) }}-iter-${{ inputs.iteration }}-${{ github.run_id }}
+        name: performance-results-${{ inputs.test_name || format('suite-{0}', inputs.suite) }}${{ inputs.side != '' && format('-side-{0}', inputs.side) || '' }}-iter-${{ inputs.iteration }}-${{ github.run_id }}
         path: |
           ${{ env.OUTPUT_DIR }}/iter_${{ inputs.iteration }}/*_performance_report.json
+          ${{ env.OUTPUT_DIR }}/iter_${{ inputs.iteration }}/runner_env.json
           ${{ env.OUTPUT_DIR }}/karpenter_memory_profile_*.pb.gz
           ${{ env.OUTPUT_DIR }}/karpenter_cpu_profile_*.pb.gz
         retention-days: 30
