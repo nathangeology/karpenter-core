@@ -20,11 +20,30 @@ limitations under the License.
 //
 // Environment:
 //
-//	OUTPUT_DIR          required; holds iter_N/*_performance_report.json inputs
-//	                    and receives the emitted benchmark-action files
-//	ITERATIONS          expected iteration count, default 1
-//	BASELINE_DIR        optional; restored actions/cache tree. When set, the
+//	OUTPUT_DIR          required; holds one directory per sample, each with
+//	                    *_performance_report.json inputs, and receives the
+//	                    emitted benchmark-action files
+//	ITERATIONS          expected sample count, default 1
+//	MIN_ITERATIONS      quorum; refuse to gate below this many samples per
+//	                    test key. Defaults to ITERATIONS, which is the
+//	                    all-or-nothing rule. The workflow sets it lower,
+//	                    because samples now arrive from independent runners
+//	                    and one lost runner must not forfeit the batch
+//	BASELINE_DIR        optional; restored actions/cache tree holding the
+//	                    per-tier benchmark-action history. When set, the
 //	                    baseline check runs and can fail the command
+//	BASELINE_STATE_DIR  optional; where the baseline state file lives.
+//	                    Defaults to BASELINE_DIR, which is where it used to
+//	                    live and is the wrong place: a cache eviction then
+//	                    takes the history and the record of what was gated
+//	                    together, and every key reads as a legitimate first
+//	                    seed. The workflow points this at a separately cached
+//	                    directory
+//	BASELINE_CACHE_HIT  optional; the cache-matched-key output of the
+//	                    actions/cache step that restored BASELINE_DIR. When
+//	                    non-empty the scope is known to be populated, so an
+//	                    absent state file is eviction rather than a first run
+//	                    and is an error
 //	BENCH_NAME_PREFIX   required when BASELINE_DIR is set; the chart-name
 //	                    prefix the workflow passes to benchmark-action
 //	GITHUB_RUN_ID       recorded in the baseline state file for provenance
@@ -40,6 +59,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"math"
 	"os"
 	"path/filepath"
@@ -135,27 +155,40 @@ func main() {
 		fmt.Fprintln(os.Stderr, "OUTPUT_DIR is required")
 		os.Exit(2)
 	}
-	iterations := 1
-	if v := os.Getenv("ITERATIONS"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n < 1 {
-			fmt.Fprintf(os.Stderr, "invalid ITERATIONS=%q: %v\n", v, err)
-			os.Exit(2)
-		}
-		iterations = n
+	iterations, err := positiveEnv("ITERATIONS", 1)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
 	}
-	if err := run(outputDir, iterations, os.Stdout); err != nil {
+	// Quorum defaults to the full count, which is the behaviour before samples
+	// were spread across runners.
+	minIterations, err := positiveEnv("MIN_ITERATIONS", iterations)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	if minIterations > iterations {
+		fmt.Fprintf(os.Stderr, "MIN_ITERATIONS=%d exceeds ITERATIONS=%d\n", minIterations, iterations)
+		os.Exit(2)
+	}
+	if err := run(outputDir, iterations, minIterations, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 	// BASELINE_DIR is set only by the workflow, after actions/cache has had a
 	// chance to restore. Local invocations leave it unset and skip the check.
 	if baselineDir := os.Getenv("BASELINE_DIR"); baselineDir != "" {
+		stateDir := os.Getenv("BASELINE_STATE_DIR")
+		if stateDir == "" {
+			stateDir = baselineDir
+		}
 		err := checkBaseline(baselineConfig{
 			outputDir:   outputDir,
 			baselineDir: baselineDir,
+			stateDir:    stateDir,
 			namePrefix:  os.Getenv("BENCH_NAME_PREFIX"),
 			runID:       os.Getenv("GITHUB_RUN_ID"),
+			cacheHit:    os.Getenv("BASELINE_CACHE_HIT"),
 		}, os.Stdout)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -164,10 +197,24 @@ func main() {
 	}
 }
 
+// positiveEnv reads a positive integer from the environment, falling back to
+// def when the variable is unset or empty.
+func positiveEnv(name string, def int) (int, error) {
+	v := os.Getenv(name)
+	if v == "" {
+		return def, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 1 {
+		return 0, fmt.Errorf("invalid %s=%q: want a positive integer", name, v)
+	}
+	return n, nil
+}
+
 // run performs the aggregation and returns nil on success. It is separated
 // from main so tests can drive it with synthetic input.
-func run(outputDir string, iterations int, out io.Writer) error {
-	reportsByTest, err := collectReports(outputDir, iterations)
+func run(outputDir string, iterations, minIterations int, out io.Writer) error {
+	reportsByTest, samples, err := collectReports(outputDir)
 	if err != nil {
 		return err
 	}
@@ -175,28 +222,34 @@ func run(outputDir string, iterations int, out io.Writer) error {
 	// with exit 0 would let the pipeline promote a run that gathered no
 	// data, so surface it as an aggregator failure instead.
 	if len(reportsByTest) == 0 {
-		return fmt.Errorf("no performance reports found under %s across %d iterations", outputDir, iterations)
+		return fmt.Errorf("no performance reports found under %s (expected %d sample directories)", outputDir, iterations)
 	}
-	// Per-test partial-data check: if any test has fewer report files than
-	// requested iterations, refuse to gate. A silent partial batch would let
-	// a batch-median regression slip through when half the samples went
-	// missing.
-	for testKey, datas := range reportsByTest {
-		if len(datas) < iterations {
+	// Per-test quorum check. A silent partial batch would let a batch-median
+	// regression slip through when half the samples went missing, so a thin
+	// batch is refused. The floor is MIN_ITERATIONS rather than ITERATIONS
+	// because samples arrive from independent runners: at the upstream 19%
+	// per-job failure rate, an all-or-nothing rule leaves a 10-sample batch
+	// complete only 12% of the time. A batch between the quorum and the full
+	// count gates, and says so, so the n it gated on is on the record.
+	fmt.Fprintf(out, "Collected %d sample director%s under %s: %s\n",
+		len(samples), plural(len(samples), "y", "ies"), outputDir, strings.Join(samples, " "))
+	for _, testKey := range sortedKeys(reportsByTest) {
+		n := len(reportsByTest[testKey])
+		switch {
+		case n < minIterations:
 			return fmt.Errorf(
-				"%s: got %d/%d iteration reports; refusing to gate on partial data",
-				testKey, len(datas), iterations,
+				"%s: got %d/%d samples, below the quorum of %d; refusing to gate on partial data",
+				testKey, n, iterations, minIterations,
 			)
+		case n < iterations:
+			fmt.Fprintf(out, "::warning title=Performance batch short::%s gated on %d of %d samples (quorum %d). Its threshold was derived for %d.\n",
+				testKey, n, iterations, minIterations, iterations)
 		}
 	}
 
 	// Iterate test keys in a stable order so the emitted arrays and the
 	// printed table are reproducible across runs.
-	testKeys := make([]string, 0, len(reportsByTest))
-	for k := range reportsByTest {
-		testKeys = append(testKeys, k)
-	}
-	sort.Strings(testKeys)
+	testKeys := sortedKeys(reportsByTest)
 
 	summary, results := buildResults(testKeys, reportsByTest)
 
@@ -308,11 +361,19 @@ func (r *benchmarkResults) appendMetric(name string, m metricSpec, s stats) {
 	})
 }
 
-// baselineStateFile is the record checkBaseline keeps inside the restored
-// baseline tree, next to the per-tier benchmark-action history files, so
-// actions/cache persists the two together. The cache action's save step only
-// runs on a green job, so this file is only ever written by a run that got all
-// the way through its compare steps.
+// baselineStateFile is the record checkBaseline keeps of which keys the last
+// green run gated on. It used to sit inside the restored baseline tree, next to
+// the per-tier benchmark-action history files, so one actions/cache entry
+// persisted both. That made the audit useless against the failure it exists to
+// catch: an eviction takes the history and the record of what was gated
+// together, prior.GatedKeys comes back empty, every key falls to the seeded
+// branch, and the run reports a green gate having compared nothing.
+//
+// It now lives under BASELINE_STATE_DIR, which the workflow caches separately,
+// so losing the history alone produces the intended missing-baseline failure.
+// Losing both entries is still indistinguishable from a first run; the
+// BASELINE_CACHE_HIT cross-check below closes the common case of that, where
+// the history entry restored but the state did not.
 const baselineStateFile = "baseline-state.json"
 
 // gateTier ties one benchmark-action Compare step in
@@ -357,8 +418,14 @@ type benchmarkHistory struct {
 type baselineConfig struct {
 	outputDir   string
 	baselineDir string
-	namePrefix  string
-	runID       string
+	// stateDir holds baselineStateFile. Separate from baselineDir so the two
+	// are cached independently; see the baselineStateFile comment.
+	stateDir   string
+	namePrefix string
+	runID      string
+	// cacheHit is the cache-matched-key output of the actions/cache step that
+	// restored baselineDir. Non-empty means the scope is populated.
+	cacheHit string
 }
 
 // checkBaseline fails the aggregation when a gated key that used to have a
@@ -375,10 +442,23 @@ func checkBaseline(cfg baselineConfig, out io.Writer) error {
 	if cfg.namePrefix == "" {
 		return fmt.Errorf("BENCH_NAME_PREFIX is required when BASELINE_DIR is set: the chart name cannot be derived without it, so no baseline can be located")
 	}
-	statePath := filepath.Join(cfg.baselineDir, baselineStateFile)
+	stateDir := cfg.stateDir
+	if stateDir == "" {
+		stateDir = cfg.baselineDir
+	}
+	statePath := filepath.Join(stateDir, baselineStateFile)
 	prior, err := readBaselineState(statePath)
 	if err != nil {
 		return err
+	}
+	// A restored history entry with no state file is eviction, not a first run.
+	// Without this the two cases are indistinguishable and the second one
+	// green-seeds every key. cacheHit is the cache-matched-key output, so it is
+	// non-empty exactly when a prior run's entry was found.
+	if cfg.cacheHit != "" && prior.LastRun == "" {
+		fmt.Fprintf(out, "::error title=Performance baseline state missing::actions/cache restored %s but %s is absent, so the record of which keys were gated is gone. Refusing to seed over a populated baseline scope.\n",
+			cfg.cacheHit, statePath)
+		return fmt.Errorf("baseline cache matched %q but no state file at %s: cannot tell a first run from an eviction", cfg.cacheHit, statePath)
 	}
 	next := baselineState{FirstSeedRun: prior.FirstSeedRun, LastRun: cfg.runID, GatedKeys: map[string][]string{}}
 	if next.FirstSeedRun == "" {
@@ -422,12 +502,12 @@ func checkBaseline(cfg baselineConfig, out io.Writer) error {
 		fmt.Fprintf(out, "  MISSING  %s\n", k)
 	}
 	if len(seeded) > 0 {
-		// A workflow notice surfaces as a job annotation, so a seeded run is
-		// visible without opening the log. Seeded keys were not compared
-		// against anything, which is the one case where a green gate does not
-		// mean the run was checked.
-		fmt.Fprintf(out, "::notice title=Performance baseline seeded::%d gated key(s) had no stored baseline and were seeded by run %s. Those keys were not compared. Every later run on this cache scope must find a baseline for them.\n",
-			len(seeded), cfg.runID)
+		// A workflow annotation makes a seeded run visible without opening the
+		// log. Seeded keys were not compared against anything, which is the one
+		// case where a green gate does not mean the run was checked, so this is
+		// a warning rather than a notice.
+		fmt.Fprintf(out, "::warning title=Performance baseline seeded::%d of %d gated key(s) had no stored baseline and were seeded by run %s. Those keys were not compared. Every later run on this cache scope must find a baseline for them.\n",
+			len(seeded), len(seeded)+len(compared)+len(missing), cfg.runID)
 	}
 	if len(missing) > 0 {
 		fmt.Fprintf(out, "::error title=Performance baseline missing::%d gated key(s) were gated by run %s but have no stored baseline now, so they would pass without being compared. Refusing to report a green gate.\n",
@@ -438,7 +518,7 @@ func checkBaseline(cfg baselineConfig, out io.Writer) error {
 	// Only recorded on a clean check. Overwriting after a missing-baseline
 	// failure would erase the evidence of which keys used to be gated, and the
 	// next run would read the loss as a legitimate first seed.
-	if err := os.MkdirAll(cfg.baselineDir, 0o755); err != nil {
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
 		return err
 	}
 	return writeJSON(statePath, next)
@@ -505,28 +585,81 @@ func readEntryNames(path string) ([]string, error) {
 	return names, nil
 }
 
-// collectReports loads every iter_N/*_performance_report.json under
-// outputDir and groups the parsed maps by the file's basename, which stands
-// in as the test-key across iterations.
-func collectReports(outputDir string, iterations int) (map[string][]map[string]any, error) {
-	reportsByTest := map[string][]map[string]any{}
-	for i := 1; i <= iterations; i++ {
-		pattern := filepath.Join(outputDir, fmt.Sprintf("iter_%d", i), "*_performance_report.json")
-		matches, err := filepath.Glob(pattern)
+const reportSuffix = "_performance_report.json"
+
+// collectReports finds every *_performance_report.json anywhere under
+// outputDir and groups the parsed maps by the file's basename, which stands in
+// as the test-key across samples. It also returns the sample directories,
+// relative to outputDir, in sorted order.
+//
+// One directory holding reports is one sample. The directory name is not
+// parsed, only used as the sample identity, and the depth is not fixed. Three
+// layouts therefore work with no translation step:
+//
+//	iter_1/, iter_2/, ...                      a single runner looping locally
+//	<artifact-name>/                           download-artifact, flat payload
+//	<artifact-name>/iter_N/                    download-artifact, nested payload
+//
+// The nesting in the download case depends on what else the uploaded artifact
+// matched, because upload-artifact roots the payload at the least common
+// ancestor of the files it found. Walking rather than globbing a fixed depth
+// keeps that an implementation detail of the upload rather than a coupling.
+//
+// Counting sample directories rather than walking a 1..N range is also what
+// lets a missing sample read as a gap instead of truncating the batch at the
+// first hole, which matters once samples arrive from independent runners.
+func collectReports(outputDir string) (map[string][]map[string]any, []string, error) {
+	byDir := map[string][]string{}
+	err := filepath.WalkDir(outputDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return nil, fmt.Errorf("glob %s: %w", pattern, err)
+			return err
 		}
-		for _, path := range matches {
+		if d.IsDir() || !strings.HasSuffix(d.Name(), reportSuffix) {
+			return nil
+		}
+		dir, err := filepath.Rel(outputDir, filepath.Dir(path))
+		if err != nil {
+			return err
+		}
+		byDir[dir] = append(byDir[dir], path)
+		return nil
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("walking %s: %w", outputDir, err)
+	}
+
+	reportsByTest := map[string][]map[string]any{}
+	samples := sortedKeys(byDir)
+	for _, dir := range samples {
+		paths := byDir[dir]
+		sort.Strings(paths)
+		for _, path := range paths {
 			data, err := readReport(path)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "warn: skipping %s: %v\n", path, err)
 				continue
 			}
-			testKey := filepath.Base(path)
-			reportsByTest[testKey] = append(reportsByTest[testKey], data)
+			reportsByTest[filepath.Base(path)] = append(reportsByTest[filepath.Base(path)], data)
 		}
 	}
-	return reportsByTest, nil
+	return reportsByTest, samples, nil
+}
+
+// sortedKeys returns the map's keys in a stable order.
+func sortedKeys[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
 }
 
 func readReport(path string) (map[string]any, error) {

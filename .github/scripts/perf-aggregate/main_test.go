@@ -87,7 +87,7 @@ var _ = Describe("Perf Aggregate", func() {
 
 			BeforeEach(func() {
 				seedSyntheticIterations(tmp, iters)
-				Expect(run(tmp, iters, os.Stdout)).To(Succeed())
+				Expect(run(tmp, iters, iters, os.Stdout)).To(Succeed())
 			})
 
 			It("routes utilization/efficiency into bigger-is-better, Controller CPU into smaller-loose, and other smaller metrics into smaller-tight", func() {
@@ -160,7 +160,7 @@ var _ = Describe("Perf Aggregate", func() {
 
 		Context("with no iter_* subdirs at all", func() {
 			It("fails closed rather than emitting empty benchmark files", func() {
-				err := run(tmp, 5, os.Stdout)
+				err := run(tmp, 5, 5, os.Stdout)
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("no performance reports found"))
 			})
@@ -181,9 +181,63 @@ var _ = Describe("Perf Aggregate", func() {
 						})
 					}
 				}
-				err := run(tmp, 3, os.Stdout)
+				err := run(tmp, 3, 3, os.Stdout)
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("refusing to gate on partial data"))
+			})
+		})
+
+		// Samples now arrive from one runner each, so a lost runner is a gap in
+		// the batch rather than a truncation. The quorum decides whether what
+		// arrived is enough to gate on.
+		Context("with a batch short of the full sample count", func() {
+			BeforeEach(func() {
+				seedSyntheticIterations(tmp, 2)
+			})
+
+			It("gates and warns when the batch clears the quorum", func() {
+				var buf strings.Builder
+				Expect(run(tmp, 3, 2, &buf)).To(Succeed())
+				Expect(buf.String()).To(ContainSubstring("Performance batch short"))
+				Expect(buf.String()).To(ContainSubstring("gated on 2 of 3 samples"))
+				for _, e := range loadEntries(filepath.Join(tmp, "benchmark-results-smaller-tight.json")) {
+					Expect(e.Extra).To(ContainSubstring("n=2"))
+				}
+			})
+
+			It("refuses when the batch falls below the quorum", func() {
+				err := run(tmp, 3, 3, os.Stdout)
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("below the quorum of 3"))
+			})
+		})
+
+		// download-artifact names each downloaded directory after its artifact,
+		// so a batch gathered from per-iteration runners arrives under names
+		// that are not iter_N. The sample identity is the directory, whatever
+		// it is called.
+		Context("with sample directories named after artifacts", func() {
+			It("treats each directory as one sample regardless of its name", func() {
+				names := []string{
+					"performance-results-Drift Performance-iter-1-9001",
+					"performance-results-Drift Performance-iter-2-9001",
+					"performance-results-Drift Performance-iter-7-9001",
+				}
+				for i, name := range names {
+					dir := filepath.Join(tmp, name)
+					Expect(os.MkdirAll(dir, 0o755)).To(Succeed())
+					writeReport(filepath.Join(dir, "drift_execution_performance_report.json"), map[string]any{
+						"total_nodes": float64(300 + i),
+					})
+				}
+				var buf strings.Builder
+				Expect(run(tmp, 3, 3, &buf)).To(Succeed())
+				Expect(buf.String()).To(ContainSubstring("Collected 3 sample directories"))
+				entries := loadEntries(filepath.Join(tmp, "benchmark-results-smaller-tight.json"))
+				Expect(entries).To(HaveLen(1))
+				Expect(entries[0].Name).To(Equal("Drift Execution - Final Nodes (median)"))
+				Expect(entries[0].Value).To(Equal(301.0))
+				Expect(entries[0].Extra).To(ContainSubstring("n=3"))
 			})
 		})
 	})
@@ -196,7 +250,7 @@ var _ = Describe("Perf Aggregate", func() {
 			tmp, err = os.MkdirTemp("", "perf-aggregate-keys-*")
 			Expect(err).ToNot(HaveOccurred())
 			seedSyntheticIterations(tmp, 3)
-			Expect(run(tmp, 3, os.Stdout)).To(Succeed())
+			Expect(run(tmp, 3, 3, os.Stdout)).To(Succeed())
 		})
 
 		AfterEach(func() {
@@ -237,7 +291,7 @@ var _ = Describe("Perf Aggregate", func() {
 			Expect(err).ToNot(HaveOccurred())
 			cacheDir = filepath.Join(tmp, "cache")
 			seedSyntheticIterations(tmp, 3)
-			Expect(run(tmp, 3, os.Stdout)).To(Succeed())
+			Expect(run(tmp, 3, 3, os.Stdout)).To(Succeed())
 		})
 
 		AfterEach(func() {
@@ -245,7 +299,7 @@ var _ = Describe("Perf Aggregate", func() {
 		})
 
 		cfg := func(root, cache string) baselineConfig {
-			return baselineConfig{outputDir: root, baselineDir: cache, namePrefix: prefix, runID: "42"}
+			return baselineConfig{outputDir: root, baselineDir: cache, stateDir: cache, namePrefix: prefix, runID: "42"}
 		}
 
 		It("reports a seed and records state when no baseline exists at all", func() {
@@ -289,6 +343,49 @@ var _ = Describe("Perf Aggregate", func() {
 			Expect(os.MkdirAll(filepath.Join(cacheDir, "smaller-tight"), 0o755)).To(Succeed())
 			Expect(os.WriteFile(filepath.Join(cacheDir, "smaller-tight", "benchmark-data.json"), []byte("{not json"), 0o600)).To(Succeed())
 			Expect(checkBaseline(cfg(tmp, cacheDir), os.Stdout)).To(MatchError(ContainSubstring("parsing")))
+		})
+
+		// The state file used to live inside the tree it audits, so one cache
+		// eviction removed the history and the record of what had been gated
+		// together and every key read as a legitimate first seed.
+		It("writes the state outside the audited baseline tree", func() {
+			c := cfg(tmp, cacheDir)
+			c.stateDir = filepath.Join(tmp, "baseline-state")
+			Expect(checkBaseline(c, os.Stdout)).To(Succeed())
+			Expect(filepath.Join(cacheDir, "baseline-state.json")).ToNot(BeAnExistingFile())
+			var state baselineState
+			loadJSON(filepath.Join(c.stateDir, "baseline-state.json"), &state)
+			Expect(state.FirstSeedRun).To(Equal("42"))
+		})
+
+		It("still carries the audit across runs when the state lives in its own directory", func() {
+			c := cfg(tmp, cacheDir)
+			c.stateDir = filepath.Join(tmp, "baseline-state")
+			Expect(checkBaseline(c, os.Stdout)).To(Succeed())
+			err := checkBaseline(c, os.Stdout)
+			Expect(err).To(MatchError(ContainSubstring("baseline missing")))
+		})
+
+		// A restored history entry with no state file is an eviction, not a
+		// first run, and seeding over it reports a green gate having compared
+		// nothing.
+		It("fails when the baseline cache matched but the state file is gone", func() {
+			c := cfg(tmp, cacheDir)
+			c.stateDir = filepath.Join(tmp, "baseline-state")
+			c.cacheHit = "Linux-perf-benchmark-Drift Performance--run-8999-1"
+			var buf strings.Builder
+			err := checkBaseline(c, &buf)
+			Expect(err).To(MatchError(ContainSubstring("cannot tell a first run from an eviction")))
+			Expect(buf.String()).To(ContainSubstring("Performance baseline state missing"))
+		})
+
+		It("allows a matched cache once the state file is present", func() {
+			c := cfg(tmp, cacheDir)
+			c.stateDir = filepath.Join(tmp, "baseline-state")
+			Expect(checkBaseline(c, os.Stdout)).To(Succeed())
+			seedBaselineHistory(tmp, cacheDir, prefix)
+			c.cacheHit = "Linux-perf-benchmark-Drift Performance--run-8999-1"
+			Expect(checkBaseline(c, os.Stdout)).To(Succeed())
 		})
 	})
 

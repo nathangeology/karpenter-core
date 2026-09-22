@@ -16,26 +16,21 @@ on:
         type: string
         required: false
         description: "Human-readable test name for job identification"
-      repeat:
+      iteration:
         type: number
         required: false
         default: 1
-        description: "Number of iterations to run the test suite (for statistical aggregation)"
+        description: >-
+          Index of the sample this job produces, used to label the sample
+          directory and the uploaded artifact. One job is one sample: the
+          caller fans out over this input so each sample gets its own runner,
+          its own kind cluster, and its own Karpenter pod.
 jobs:
   e2e:
     permissions:
       issues: write
     runs-on: ubuntu-latest
-    name: ${{ inputs.test_name || format('suite-{0}', inputs.suite) }}
-    # Shared parameters for the four benchmark-action Compare steps below.
-    # Per-step configuration is limited to: name suffix, tool, output file,
-    # external-data path, alert threshold, and fail-on-alert.
-    env:
-      BENCH_NAME_PREFIX: Karpenter Performance (${{ inputs.test_name || inputs.suite }})
-      BENCH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      BENCH_CC_USERS: '@nathangeology'
-      BENCH_COMMENT_ON_ALERT: 'true'
-      BENCH_SUMMARY_ALWAYS: 'true'
+    name: ${{ inputs.test_name || format('suite-{0}', inputs.suite) }}${{ inputs.iteration > 1 && format(' iter {0}', inputs.iteration) || '' }}
     steps:
     - name: Debug workflow_run trigger
       run: |
@@ -54,14 +49,14 @@ jobs:
         kubectl config current-context
         kubectl get nodes
         kubectl taint nodes chart-testing-control-plane CriticalAddonsOnly:NoSchedule
-    - name: install prometheus 
+    - name: install prometheus
       uses: ./.github/actions/install-prometheus
-    - name: install pyroscope 
+    - name: install pyroscope
       uses: ./.github/actions/install-pyroscope
     - name: install ko
       shell: bash
       run: |
-        go install github.com/google/ko@latest      
+        go install github.com/google/ko@latest
     - name: install kwok and controller
       shell: bash
       run: |
@@ -71,202 +66,53 @@ jobs:
         make apply-with-kind
     - name: ping cluster
       shell: bash
-      run: | 
+      run: |
         sleep 15
-        kubectl get pods -n kube-system | grep karpenter 
+        kubectl get pods -n kube-system | grep karpenter
         kubectl get nodepools
         kubectl get pods -A
         kubectl describe nodes
+    # One sample per job. ITERATIONS=1 and ITER_INDEX carry the caller's matrix
+    # index into the sample directory name, so a batch spread across runners
+    # reassembles without collisions. The script keeps its retry, which is what
+    # a distributed batch needs: the upstream per-job failure rate on this
+    # workflow is 19%, so an unretried leg leaves a 10-sample batch complete
+    # only 12% of the time.
     - name: run the ${{ inputs.test_name || inputs.suite }} test
       env:
           SUITE: ${{ inputs.suite }}
           FOCUS: ${{ inputs.focus }}
-          ITERATIONS: ${{ inputs.repeat }}
+          ITERATIONS: 1
+          ITER_INDEX: ${{ inputs.iteration }}
       shell: bash
       run: |
         OUTPUT_DIR="$(mktemp -d)"
         export OUTPUT_DIR
         echo "OUTPUT_DIR=$OUTPUT_DIR" >> "$GITHUB_ENV"
         bash .github/scripts/run-perf-iters.sh
-    # One cache blob for the four benchmark-action Compare steps below.
-    # Each tier writes its baseline file under ./cache/<tier>/benchmark-data.json;
-    # actions/cache save-post persists the whole ./cache tree.
+    # The sample's reports, uploaded raw. Aggregation, the baseline cache, and
+    # the benchmark-action compare steps all live in perf-gate.yaml, which runs
+    # once per test after every sample has landed. They cannot live here: all
+    # samples of a run share github.run_id, so N jobs would contend for one
+    # cache key and actions/cache's save-on-success would leave the last green
+    # writer to win non-deterministically.
     #
-    # The key carries github.run_id so every run writes a new entry. Cache
-    # entries are immutable, so a key that is constant across runs restores
-    # run 1's blob forever and the baseline never advances past its first
-    # sample. restore-keys walks back to the most recent entry for this test,
-    # which is the baseline the Compare steps below need. The `--run-` token
-    # keeps one test's prefix from matching a longer test name, for example
-    # "Host Name Spreading" against "Host Name Spreading XL".
-    #
-    # actions/cache saves in a post step gated on success(), so only a run
-    # whose gate came back green advances the baseline. A run that alerts does
-    # not overwrite the comparison point it failed against.
-    - name: Download previous benchmark data (all tiers)
-      if: always() && env.OUTPUT_DIR != '' && inputs.repeat > 1
-      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-      with:
-        path: ./cache
-        key: ${{ runner.os }}-perf-benchmark-${{ inputs.test_name || inputs.suite }}--run-${{ github.run_id }}-${{ github.run_attempt }}
-        restore-keys: |
-          ${{ runner.os }}-perf-benchmark-${{ inputs.test_name || inputs.suite }}--run-
-    # Runs after the cache restore so it can audit the baseline it will be
-    # compared against. BASELINE_DIR makes the aggregator check that every
-    # gated key has stored history: keys with none are reported as seeded, and
-    # keys the last green run gated on that have lost their history fail the
-    # step. benchmark-action skips unmatched keys silently, so without this a
-    # run with no baseline reports a green gate having compared nothing.
-    - name: Aggregate and compare against baseline
-      if: always() && env.OUTPUT_DIR != '' && inputs.repeat > 1
-      env:
-        ITERATIONS: ${{ inputs.repeat }}
-        BASELINE_DIR: ./cache
-      shell: bash
-      run: |
-        go run ./.github/scripts/perf-aggregate
-    # The batch median regression alerts run below with fail-on-alert: true.
-    # An additional CV entry is emitted per metric so a reviewer can see when
-    # a batch's within-batch variance grows beyond its historical envelope.
-    # It runs under fail-on-alert: false so a noise spike comments but does
-    # not block the pipeline — this is the informational answer to Ryan's
-    # PR#2994 variance question. benchmark-action persists CV entries in
-    # the same cache format as the median entries; no cache-schema change
-    # is required.
-    #
-    # The smaller-is-better group is split into two tiers by observed
-    # per-metric CV so a single flat threshold does not force a choice
-    # between too-tight (FP on Controller CPU / Duration jitter) and too-loose
-    # (miss a real regression on stable metrics like Peak Memory or Final
-    # Nodes). Tiers are static approximations of @ryan-mist's stddev-based
-    # gate ask (PR#2994 comment 3961447028); a proper stddev-history gate
-    # remains a follow-up per the assessment.
-    - name: Compare smaller-is-better metrics (tight)
-      if: always() && env.OUTPUT_DIR != '' && inputs.repeat > 1
-      uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba # v1.22.1
-      with:
-        name: ${{ env.BENCH_NAME_PREFIX }} - smaller-tight
-        tool: customSmallerIsBetter
-        output-file-path: ${{ env.OUTPUT_DIR }}/benchmark-results-smaller-tight.json
-        external-data-json-path: ./cache/smaller-tight/benchmark-data.json
-        # Tight tier: Duration, Controller Peak Memory, Final Nodes.
-        # Threshold unchanged at 150%.
-        #
-        # The sub-10% cross-run CV this tier was placed on is not supported for
-        # Duration. Measured across 5 upstream runs, Duration CV is median 15%
-        # and max 54%, against median 5% for Peak Memory and 2% for Final
-        # Nodes. A single measured pair of runs on identical-except-for-diff
-        # code moved Consolidation Duration by 6.2x, which would have fired
-        # this tier. Memory and Nodes belong here; Duration is the open
-        # question and needs either its own threshold or a batch protocol that
-        # does not leave it this noisy. Not changed here, so the tier's
-        # behaviour is untouched while the CPU threshold is corrected.
-        alert-threshold: '150%'
-        fail-on-alert: true
-        github-token: ${{ env.BENCH_TOKEN }}
-        alert-comment-cc-users: ${{ env.BENCH_CC_USERS }}
-        comment-on-alert: ${{ env.BENCH_COMMENT_ON_ALERT }}
-        summary-always: ${{ env.BENCH_SUMMARY_ALWAYS }}
-    - name: Compare smaller-is-better metrics (loose)
-      if: always() && env.OUTPUT_DIR != '' && inputs.repeat > 1
-      uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba # v1.22.1
-      with:
-        name: ${{ env.BENCH_NAME_PREFIX }} - smaller-loose
-        tool: customSmallerIsBetter
-        output-file-path: ${{ env.OUTPUT_DIR }}/benchmark-results-smaller-loose.json
-        external-data-json-path: ./cache/smaller-loose/benchmark-data.json
-        # Loose tier: Controller CPU. Threshold is 150%, restored from 250%
-        # after the 250% figure was tested against real data and failed.
-        #
-        # The 250% value rested on an assumption: that the controller-CPU
-        # regression from PR#2671 (issue #2954) would show up here at the 3x
-        # the customer reported, so any threshold under 3.0 would catch it.
-        # That was never measured. It has now been measured, by replaying the
-        # PR#2671 diff through this workflow on two branches that differ only
-        # by that diff, 5 iterations per side. The largest Controller CPU
-        # ratio it produces is 2.070 on the hostname topology-spreading
-        # consolidation key, Mann-Whitney p=0.032, bootstrap 95% CI on the
-        # ratio [1.03, 2.52]. Not 3.0. At 250% the gate did not fire on any
-        # key; at 150% it fires on that key. Widening the tier to 250% is what
-        # turned a detection into a miss. A second key, scale_out, moved 1.448
-        # at p=0.008 and is still missed at 150%, which is the per-key
-        # threshold argument rather than an argument for a lower flat value.
-        #
-        # Known limitation, not addressed here. HELM_OPTS caps the controller
-        # at 2 cores, so the largest ratio this metric can ever report for a
-        # key is 2.0 divided by that key's baseline. Keys whose baseline
-        # already sits above 1.33 cores cannot reach 1.5x at all, so their
-        # pass carries no information. Screening those keys out of the gate,
-        # and adding a cumulative CPU-seconds metric that the core cap does
-        # not clip, are both follow-ups.
-        #
-        # Consolidation Rounds is excluded from both smaller-tier gate files
-        # (see main.go tierInformational); it lives only in the CV file below.
-        alert-threshold: '150%'
-        fail-on-alert: true
-        github-token: ${{ env.BENCH_TOKEN }}
-        alert-comment-cc-users: ${{ env.BENCH_CC_USERS }}
-        comment-on-alert: ${{ env.BENCH_COMMENT_ON_ALERT }}
-        summary-always: ${{ env.BENCH_SUMMARY_ALWAYS }}
-    - name: Compare bigger-is-better metrics
-      if: always() && env.OUTPUT_DIR != '' && inputs.repeat > 1
-      uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba # v1.22.1
-      with:
-        name: ${{ env.BENCH_NAME_PREFIX }} - bigger-is-better
-        # Utilization and efficiency-score metrics fail when they DROP,
-        # so they must not share a group with latency/resource-cost metrics.
-        tool: customBiggerIsBetter
-        output-file-path: ${{ env.OUTPUT_DIR }}/benchmark-results-bigger.json
-        external-data-json-path: ./cache/bigger/benchmark-data.json
-        alert-threshold: '150%'
-        fail-on-alert: true
-        github-token: ${{ env.BENCH_TOKEN }}
-        alert-comment-cc-users: ${{ env.BENCH_CC_USERS }}
-        comment-on-alert: ${{ env.BENCH_COMMENT_ON_ALERT }}
-        summary-always: ${{ env.BENCH_SUMMARY_ALWAYS }}
-    - name: Compare batch CV (informational only)
-      if: always() && env.OUTPUT_DIR != '' && inputs.repeat > 1
-      uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba # v1.22.1
-      with:
-        name: ${{ env.BENCH_NAME_PREFIX }} - batch CV
-        tool: customSmallerIsBetter
-        output-file-path: ${{ env.OUTPUT_DIR }}/benchmark-results-cv.json
-        external-data-json-path: ./cache/cv/benchmark-data.json
-        # Threshold is a benchmark-action ratio: alert fires when the
-        # current batch CV is >= 2x the previous batch CV for that metric.
-        # Derived empirically from 15 push-triggered kind-perf-e2e runs on
-        # kubernetes-sigs/karpenter@main between 2026-08-19 and 2026-09-02
-        # (n=120 (sub-test, metric) samples): cross-metric P95 CV = 43%,
-        # median CV = 3.8%, per-metric P95/median ratios span 1.7x-7x.
-        # Setting threshold to 200% (2x) is the informational analog to
-        # the 2 sigma heuristic in @ryan-mist's PR#2994 variance comment
-        # (id 3857936029): it fires when a batch's within-batch variance
-        # doubles vs. its prior baseline without gating the pipeline.
-        alert-threshold: '200%'
-        fail-on-alert: false
-        github-token: ${{ env.BENCH_TOKEN }}
-        alert-comment-cc-users: ${{ env.BENCH_CC_USERS }}
-        comment-on-alert: ${{ env.BENCH_COMMENT_ON_ALERT }}
-        summary-always: ${{ env.BENCH_SUMMARY_ALWAYS }}
+    # The artifact name carries the iteration because upload-artifact requires
+    # unique names within a run, and perf-gate.yaml matches on the prefix.
     - name: Upload performance results
       if: always() && env.OUTPUT_DIR != ''
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
-        name: performance-results-${{ inputs.test_name || format('suite-{0}', inputs.suite) }}-${{ github.run_id }}
+        name: performance-results-${{ inputs.test_name || format('suite-{0}', inputs.suite) }}-iter-${{ inputs.iteration }}-${{ github.run_id }}
         path: |
-          ${{ env.OUTPUT_DIR }}/**/*_performance_report.json
-          ${{ env.OUTPUT_DIR }}/aggregated_summary.json
-          ${{ env.OUTPUT_DIR }}/benchmark-results-smaller-tight.json
-          ${{ env.OUTPUT_DIR }}/benchmark-results-smaller-loose.json
-          ${{ env.OUTPUT_DIR }}/benchmark-results-bigger.json
-          ${{ env.OUTPUT_DIR }}/benchmark-results-cv.json
+          ${{ env.OUTPUT_DIR }}/iter_${{ inputs.iteration }}/*_performance_report.json
           ${{ env.OUTPUT_DIR }}/karpenter_memory_profile_*.pb.gz
           ${{ env.OUTPUT_DIR }}/karpenter_cpu_profile_*.pb.gz
         retention-days: 30
         if-no-files-found: ignore
-    - name: cleanup 
+    - name: cleanup
       shell: bash
-      run: | 
-        kubectl delete nodepools --all 
+      run: |
+        kubectl delete nodepools --all
         make delete
         make uninstall-kwok
