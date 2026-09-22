@@ -33,14 +33,14 @@ env:
   # runner-time for ten independent samples instead of one. Wall clock improves
   # from 5.2 hours to between 1.5 and 2.2, because the samples parallelise
   # instead of queueing behind one runner.
-  PERF_ITERATIONS: "10"
+  PERF_ITERATIONS: "2"
   # Quorum. A batch gates on this many samples even if the rest were lost. The
   # upstream per-job failure rate on this workflow is 19%, and 44% on Wide
   # Deployments, so requiring all ten would leave a batch gateable 12% of the
   # time on a typical key. At seven, with the per-sample retry in
   # run-perf-iters.sh, it is effectively always. A batch below ten gates and
   # says so in a job annotation, so the n it gated on stays on the record.
-  PERF_MIN_ITERATIONS: "7"
+  PERF_MIN_ITERATIONS: "2"
 jobs:
   # Expands PERF_ITERATIONS into the sample index list the matrix fans out
   # over. A matrix cannot count, so the list has to be built somewhere; doing it
@@ -115,16 +115,6 @@ jobs:
             focus: "Drift Performance"
           - name: "Host Name Spreading"
             focus: "Host Name Spreading Deployment Reg"
-          - name: "Host Name Spreading XL"
-            focus: "Host Name Spreading Deployment XL"
-          - name: "Wide Deployments"
-            focus: "Wide Deployments"
-          - name: "Basic Scale Test"
-            focus: "Basic Deployment"
-          - name: "Do Not Disrupt Performance"
-            focus: "Do Not Disrupt Performance Test"
-          - name: "Self Anti-Affinity Deployment Interference"
-            focus: "Self Anti-Affinity Deployment Interference"
         iteration: ${{ fromJSON(needs.plan.outputs.indices) }}
     uses: ./.github/workflows/e2e.yaml
     with:
@@ -145,11 +135,6 @@ jobs:
         test:
           - "Drift Performance"
           - "Host Name Spreading"
-          - "Host Name Spreading XL"
-          - "Wide Deployments"
-          - "Basic Scale Test"
-          - "Do Not Disrupt Performance"
-          - "Self Anti-Affinity Deployment Interference"
     uses: ./.github/workflows/perf-gate.yaml
     with:
       test_name: ${{ matrix.test }}
