@@ -19,6 +19,7 @@ package deletioncost_test
 import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/samber/lo"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -36,6 +37,11 @@ var _ = Describe("Controller", func() {
 
 	BeforeEach(func() {
 		nodePool = test.NodePool()
+		// PodDeletionCostManagement defaults to false, so every spec below that expects the
+		// controller to reach its ranking and annotation path has to turn the gate on. Without
+		// this, Reconcile returns at the gate check with a non-zero RequeueAfter and no error,
+		// which is indistinguishable from a successful no-op cycle.
+		ctx = options.ToContext(ctx, test.Options(test.OptionsFields{FeatureGates: test.FeatureGates{PodDeletionCostManagement: lo.ToPtr(true)}}))
 	})
 
 	It("should skip reconciliation when feature gate is disabled", func() {
