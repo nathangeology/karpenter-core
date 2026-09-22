@@ -22,6 +22,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -60,6 +61,10 @@ type optionsKey struct{}
 
 type FeatureGates struct {
 	inputStr string
+	// unrecognized holds the keys from inputStr that this build doesn't define. They are kept rather than rejected:
+	// gates that graduated and were removed, and gates owned by a provider fork, travel in the same FEATURE_GATES
+	// string, so failing startup on them would break upgrades. Surfaced by the operator once logging is initialized.
+	unrecognized []string
 
 	NodeRepair                bool
 	ReservedCapacity          bool
@@ -161,6 +166,38 @@ var KarpenterFeatureGates = []FeatureGate{
 	TerminateFirstDriftFeatureGate,
 	TerminateFirstRepairFeatureGate,
 	PodDeletionCostManagementFeatureGate,
+}
+
+// setters maps each recognized FEATURE_GATES key to the field it controls. Adding a gate means adding the struct
+// field, its FeatureGate to KarpenterFeatureGates, its default to DefaultFeatureGates, and its entry here. A gate
+// declared in KarpenterFeatureGates but missing here parses as unrecognized, which the options suite asserts against.
+func (f *FeatureGates) setters() map[string]*bool {
+	return map[string]*bool{
+		NodeRepairFeatureGate.Name:                &f.NodeRepair,
+		ReservedCapacityFeatureGate.Name:          &f.ReservedCapacity,
+		SpotToSpotConsolidationFeatureGate.Name:   &f.SpotToSpotConsolidation,
+		NodeOverlayFeatureGate.Name:               &f.NodeOverlay,
+		StaticCapacityFeatureGate.Name:            &f.StaticCapacity,
+		CapacityBufferFeatureGate.Name:            &f.CapacityBuffer,
+		TerminateFirstDriftFeatureGate.Name:       &f.TerminateFirstDrift,
+		TerminateFirstRepairFeatureGate.Name:      &f.TerminateFirstRepair,
+		PodDeletionCostManagementFeatureGate.Name: &f.PodDeletionCostManagement,
+	}
+}
+
+// Unrecognized returns the FEATURE_GATES keys that this build doesn't define, sorted. A key listed here had no effect
+// on any gate, which is what makes a typo such as "PodDeletionCostManagemnt=true" worth surfacing.
+func (f FeatureGates) Unrecognized() []string {
+	return f.unrecognized
+}
+
+// KnownFeatureGates returns the FEATURE_GATES keys this build declares, sorted. It reads KarpenterFeatureGates rather
+// than setters() so that the two stay independent: a gate declared there and missing from setters() is reported as
+// unrecognized, and the options suite turns that drift into a failure instead of a silently ignored gate.
+func KnownFeatureGates() []string {
+	names := lo.Map(KarpenterFeatureGates, func(g FeatureGate, _ int) string { return g.Name })
+	slices.Sort(names)
+	return names
 }
 
 // Options contains all CLI flags / env vars for karpenter-core. It adheres to the options.Injectable interface.
@@ -299,33 +336,16 @@ func ParseFeatureGates(gateStr string) (FeatureGates, error) {
 	if err := cliflag.NewMapStringBool(&gateMap).Set(gateStr); err != nil {
 		return gates, err
 	}
-	if val, ok := gateMap[NodeRepairFeatureGate.Name]; ok {
-		gates.NodeRepair = val
+	setters := gates.setters()
+	for key, val := range gateMap {
+		setter, ok := setters[key]
+		if !ok {
+			gates.unrecognized = append(gates.unrecognized, key)
+			continue
+		}
+		*setter = val
 	}
-	if val, ok := gateMap[SpotToSpotConsolidationFeatureGate.Name]; ok {
-		gates.SpotToSpotConsolidation = val
-	}
-	if val, ok := gateMap[ReservedCapacityFeatureGate.Name]; ok {
-		gates.ReservedCapacity = val
-	}
-	if val, ok := gateMap[NodeOverlayFeatureGate.Name]; ok {
-		gates.NodeOverlay = val
-	}
-	if val, ok := gateMap[StaticCapacityFeatureGate.Name]; ok {
-		gates.StaticCapacity = val
-	}
-	if val, ok := gateMap[CapacityBufferFeatureGate.Name]; ok {
-		gates.CapacityBuffer = val
-	}
-	if val, ok := gateMap[TerminateFirstDriftFeatureGate.Name]; ok {
-		gates.TerminateFirstDrift = val
-	}
-	if val, ok := gateMap[TerminateFirstRepairFeatureGate.Name]; ok {
-		gates.TerminateFirstRepair = val
-	}
-	if val, ok := gateMap[PodDeletionCostManagementFeatureGate.Name]; ok {
-		gates.PodDeletionCostManagement = val
-	}
+	slices.Sort(gates.unrecognized)
 
 	return gates, nil
 }
