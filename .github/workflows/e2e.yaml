@@ -126,12 +126,17 @@ jobs:
         OUTPUT_DIR="$(mktemp -d)"
         export OUTPUT_DIR
         echo "OUTPUT_DIR=$OUTPUT_DIR" >> "$GITHUB_ENV"
-        mkdir -p "$OUTPUT_DIR/iter_${{ inputs.iteration }}"
         # Hardware identity of this runner, captured alongside the sample.
         # Runner CPU model and memory vary across the hosted pool, and that
         # heterogeneity is a nuisance factor the analysis can block on only if
         # it is recorded per leg.
-        python3 - > "$OUTPUT_DIR/iter_${{ inputs.iteration }}/runner_env.json" <<'PY'
+        #
+        # It goes at the root of OUTPUT_DIR, not inside iter_<i>. Measured on run
+        # 35765433051: run-perf-iters.sh does `rm -rf "$iter_dir"` at the top of
+        # every attempt, so anything written into the sample directory before the
+        # suite runs is destroyed. The script only moves *_performance_report.json
+        # out of the root, so a root-level file survives.
+        python3 - > "$OUTPUT_DIR/runner_env.json" <<'PY'
         import json, os, platform, re, subprocess
         def first(path, pat):
             try:
@@ -159,7 +164,7 @@ jobs:
         }
         print(json.dumps(out, indent=1))
         PY
-        cat "$OUTPUT_DIR/iter_${{ inputs.iteration }}/runner_env.json"
+        cat "$OUTPUT_DIR/runner_env.json"
         bash .github/scripts/run-perf-iters.sh
     # The sample's reports, uploaded raw. Aggregation, the baseline cache, and
     # the benchmark-action compare steps all live in perf-gate.yaml, which runs
@@ -177,7 +182,7 @@ jobs:
         name: performance-results-${{ inputs.test_name || format('suite-{0}', inputs.suite) }}${{ inputs.side != '' && format('-side-{0}', inputs.side) || '' }}-iter-${{ inputs.iteration }}-${{ github.run_id }}
         path: |
           ${{ env.OUTPUT_DIR }}/iter_${{ inputs.iteration }}/*_performance_report.json
-          ${{ env.OUTPUT_DIR }}/iter_${{ inputs.iteration }}/runner_env.json
+          ${{ env.OUTPUT_DIR }}/runner_env.json
           ${{ env.OUTPUT_DIR }}/karpenter_memory_profile_*.pb.gz
           ${{ env.OUTPUT_DIR }}/karpenter_cpu_profile_*.pb.gz
         retention-days: 30
