@@ -95,6 +95,36 @@ var _ = Describe("Options", func() {
 			Entry("with whitespace", "SpotToSpotConsolidation\t= false", false),
 			Entry("multiple values", "Hello=true,SpotToSpotConsolidation=false,World=true", false),
 		)
+		It("should report unrecognized gates without failing the parse", func() {
+			gates, err := options.ParseFeatureGates("Hello=true,SpotToSpotConsolidation=true,World=true")
+			Expect(err).To(BeNil())
+			Expect(gates.Unrecognized()).To(Equal([]string{"Hello", "World"}))
+			// A gate this build doesn't define must not disturb the gates it does.
+			Expect(gates.SpotToSpotConsolidation).To(BeTrue())
+			Expect(gates.ReservedCapacity).To(Equal(options.DefaultFeatureGates().ReservedCapacity))
+		})
+		It("should report a misspelled gate rather than silently ignoring it", func() {
+			gates, err := options.ParseFeatureGates("NodeReapir=true")
+			Expect(err).To(BeNil())
+			Expect(gates.Unrecognized()).To(Equal([]string{"NodeReapir"}))
+			Expect(gates.NodeRepair).To(BeFalse())
+		})
+		It("should report no unrecognized gates when every key is known", func() {
+			gates, err := options.ParseFeatureGates("NodeRepair=true,ReservedCapacity=false,SpotToSpotConsolidation=true,NodeOverlay=true,StaticCapacity=true")
+			Expect(err).To(BeNil())
+			Expect(gates.Unrecognized()).To(BeEmpty())
+		})
+		It("should recognize every gate that KnownFeatureGates advertises", func() {
+			for _, gate := range options.KnownFeatureGates() {
+				gates, err := options.ParseFeatureGates(fmt.Sprintf("%s=true", gate))
+				Expect(err).To(BeNil())
+				Expect(gates.Unrecognized()).To(BeEmpty(), "gate %q is advertised but not parsed", gate)
+				// The advertised name must match the struct field the gate sets.
+				gateField := reflect.ValueOf(gates).FieldByName(gate)
+				Expect(gateField.IsValid()).To(BeTrue())
+				Expect(gateField.Bool()).To(BeTrue())
+			}
+		})
 	})
 
 	Context("Parse", func() {

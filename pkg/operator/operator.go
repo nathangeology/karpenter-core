@@ -144,6 +144,13 @@ func NewOperator(o ...option.Function[Options]) (context.Context, *Operator) {
 	log.SetLogger(logger)
 	klog.SetLogger(logger)
 
+	// FEATURE_GATES tolerates keys this build doesn't define, so that gates removed after graduation and gates owned by
+	// a provider fork don't fail startup. Report them here, the first point where a logger exists, so that a mistyped
+	// gate isn't silently ignored.
+	if unrecognized := options.FromContext(ctx).FeatureGates.Unrecognized(); len(unrecognized) > 0 {
+		logger.Info("ignoring unrecognized feature gates", "unrecognized", unrecognized, "known", options.KnownFeatureGates())
+	}
+
 	// Client Config
 	config := ctrl.GetConfigOrDie()
 	// Copy the leader config for lower QPS/Burst

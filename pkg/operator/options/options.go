@@ -22,6 +22,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/samber/lo"
@@ -55,12 +57,42 @@ type optionsKey struct{}
 
 type FeatureGates struct {
 	inputStr string
+	// unrecognized holds the keys from inputStr that this build doesn't define. They are kept rather than rejected:
+	// gates that graduated and were removed, and gates owned by a provider fork, travel in the same FEATURE_GATES
+	// string, so failing startup on them would break upgrades. Surfaced by the operator once logging is initialized.
+	unrecognized []string
 
 	NodeRepair              bool
 	ReservedCapacity        bool
 	SpotToSpotConsolidation bool
 	NodeOverlay             bool
 	StaticCapacity          bool
+}
+
+// setters maps each recognized FEATURE_GATES key to the field it controls. Adding a gate means adding the struct
+// field, its default to DefaultFeatureGates, and its entry here.
+func (f *FeatureGates) setters() map[string]*bool {
+	return map[string]*bool{
+		"NodeRepair":              &f.NodeRepair,
+		"ReservedCapacity":        &f.ReservedCapacity,
+		"SpotToSpotConsolidation": &f.SpotToSpotConsolidation,
+		"NodeOverlay":             &f.NodeOverlay,
+		"StaticCapacity":          &f.StaticCapacity,
+	}
+}
+
+// Unrecognized returns the FEATURE_GATES keys that this build doesn't define, sorted. A key listed here had no effect
+// on any gate, which is what makes a typo such as "PodDeletionCostManagemnt=true" worth surfacing.
+func (f FeatureGates) Unrecognized() []string {
+	return f.unrecognized
+}
+
+// KnownFeatureGates returns the FEATURE_GATES keys this build recognizes, sorted.
+func KnownFeatureGates() []string {
+	gates := FeatureGates{}
+	keys := lo.Keys(gates.setters())
+	slices.Sort(keys)
+	return keys
 }
 
 // Options contains all CLI flags / env vars for karpenter-core. It adheres to the options.Injectable interface.
@@ -130,7 +162,7 @@ func (o *Options) AddFlags(fs *FlagSet) {
 	fs.StringVar(&o.preferencePolicyRaw, "preference-policy", env.WithDefaultString("PREFERENCE_POLICY", string(PreferencePolicyRespect)), "How the Karpenter scheduler should treat preferences. Preferences include preferredDuringSchedulingIgnoreDuringExecution node and pod affinities/anti-affinities and ScheduleAnyways topologySpreadConstraints. Can be one of 'Ignore' and 'Respect'")
 	fs.StringVar(&o.minValuesPolicyRaw, "min-values-policy", env.WithDefaultString("MIN_VALUES_POLICY", string(MinValuesPolicyStrict)), "Min values policy for scheduling. Options include 'Strict' for existing behavior where min values are strictly enforced or 'BestEffort' where Karpenter relaxes min values when it isn't satisfied.")
 	fs.BoolVarWithEnv(&o.IgnoreDRARequests, "ignore-dra-requests", "IGNORE_DRA_REQUESTS", true, "When set, Karpenter will ignore pods' DRA requests during scheduling simulations. NOTE: This flag will be removed once formal DRA support is GA in Karpenter.")
-	fs.StringVar(&o.FeatureGates.inputStr, "feature-gates", env.WithDefaultString("FEATURE_GATES", "NodeRepair=false,ReservedCapacity=true,SpotToSpotConsolidation=false,NodeOverlay=false,StaticCapacity=false"), "Optional features can be enabled / disabled using feature gates. Current options are: NodeRepair, ReservedCapacity, SpotToSpotConsolidation, NodeOverlay, and StaticCapacity.")
+	fs.StringVar(&o.FeatureGates.inputStr, "feature-gates", env.WithDefaultString("FEATURE_GATES", "NodeRepair=false,ReservedCapacity=true,SpotToSpotConsolidation=false,NodeOverlay=false,StaticCapacity=false"), fmt.Sprintf("Optional features can be enabled / disabled using feature gates. Current options are: %s.", strings.Join(KnownFeatureGates(), ", ")))
 }
 
 func (o *Options) Parse(fs *FlagSet, args ...string) error {
@@ -185,21 +217,16 @@ func ParseFeatureGates(gateStr string) (FeatureGates, error) {
 	if err := cliflag.NewMapStringBool(&gateMap).Set(gateStr); err != nil {
 		return gates, err
 	}
-	if val, ok := gateMap["NodeRepair"]; ok {
-		gates.NodeRepair = val
+	setters := gates.setters()
+	for key, val := range gateMap {
+		setter, ok := setters[key]
+		if !ok {
+			gates.unrecognized = append(gates.unrecognized, key)
+			continue
+		}
+		*setter = val
 	}
-	if val, ok := gateMap["SpotToSpotConsolidation"]; ok {
-		gates.SpotToSpotConsolidation = val
-	}
-	if val, ok := gateMap["ReservedCapacity"]; ok {
-		gates.ReservedCapacity = val
-	}
-	if val, ok := gateMap["NodeOverlay"]; ok {
-		gates.NodeOverlay = val
-	}
-	if val, ok := gateMap["StaticCapacity"]; ok {
-		gates.StaticCapacity = val
-	}
+	slices.Sort(gates.unrecognized)
 
 	return gates, nil
 }
