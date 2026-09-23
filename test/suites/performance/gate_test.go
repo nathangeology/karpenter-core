@@ -26,6 +26,7 @@ import (
 	"github.com/onsi/gomega"
 
 	v1 "sigs.k8s.io/karpenter/pkg/apis/v1"
+	"sigs.k8s.io/karpenter/test/pkg/environment/common"
 )
 
 // These are plain Go tests rather than Ginkgo specs. Every spec in this package
@@ -306,3 +307,66 @@ func TestUnitMemoryGrowthThresholdOverride(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// convergenceFromSamples reads the dead tail out of the series the poller already
+// collected. It measures rather than waits, so a wrong answer costs a wrong
+// number in a report rather than a hung phase, but it is the number the
+// instrument-replacement decision rests on.
+func TestUnitConvergenceFromSamples(t *testing.T) {
+	start := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
+	at := func(sec int, eligible float64, found bool) common.ResourceSample {
+		return common.ResourceSample{
+			Timestamp:  start.Add(time.Duration(sec) * time.Second),
+			Disruption: common.DisruptionReading{EligibleNodes: eligible, EligibleNodesFound: found},
+		}
+	}
+	busy := func(sec int) common.ResourceSample { return at(sec, 2, true) }
+	idle := func(sec int) common.ResourceSample { return at(sec, 0, true) }
+	// Before the controller's first disruption loop the family is absent. Counting
+	// that as idle would report convergence at the phase's first sample.
+	absent := func(sec int) common.ResourceSample { return at(sec, 0, false) }
+
+	for _, tc := range []struct {
+		name      string
+		samples   []common.ResourceSample
+		converged bool
+		seconds   float64
+	}{
+		{
+			name:      "six idle samples after work",
+			samples:   []common.ResourceSample{busy(0), busy(5), idle(10), idle(15), idle(20), idle(25), idle(30), idle(35), idle(40)},
+			converged: true,
+			// The sixth consecutive idle sample is at t=35.
+			seconds: 35,
+		},
+		{
+			name:      "a busy sample resets the run",
+			samples:   []common.ResourceSample{idle(0), idle(5), idle(10), busy(15), idle(20), idle(25), idle(30), idle(35), idle(40), idle(45)},
+			converged: true,
+			seconds:   45,
+		},
+		{
+			name:      "never six in a row",
+			samples:   []common.ResourceSample{idle(0), idle(5), busy(10), idle(15), idle(20), busy(25), idle(30)},
+			converged: false,
+			seconds:   0,
+		},
+		{
+			name:      "the family was never present",
+			samples:   []common.ResourceSample{absent(0), absent(5), absent(10), absent(15), absent(20), absent(25), absent(30)},
+			converged: false,
+			seconds:   0,
+		},
+		{name: "no samples at all", samples: nil, converged: false, seconds: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			converged, d := convergenceFromSamples(tc.samples, start)
+			if converged != tc.converged {
+				t.Fatalf("converged = %v, want %v", converged, tc.converged)
+			}
+			if math.Abs(d.Seconds()-tc.seconds) > 1e-9 {
+				t.Errorf("duration = %v s, want %v s", d.Seconds(), tc.seconds)
+			}
+		})
+	}
+}

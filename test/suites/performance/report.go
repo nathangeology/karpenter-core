@@ -45,6 +45,13 @@ func OutputPerformanceReport(report *PerformanceReport, filePrefix string) {
 	GinkgoWriter.Printf("Efficiency Score: %.1f%%\n", report.ResourceEfficiencyScore)
 	GinkgoWriter.Printf("Pods per Node: %.1f\n", report.PodsPerNode)
 	GinkgoWriter.Printf("Rounds: %d\n", report.Rounds)
+	if report.TestType == "consolidation" {
+		verdict := "converged"
+		if !report.Converged {
+			verdict = "NOT converged, the value below is a bound and not a measurement"
+		}
+		GinkgoWriter.Printf("Convergence: %.1f s (%s)\n", report.ConvergenceSeconds, verdict)
+	}
 
 	// Karpenter pod resource usage (from Kubernetes Metrics API)
 	if report.MetricsSampleCount > 0 {
@@ -52,6 +59,17 @@ func OutputPerformanceReport(report *PerformanceReport, filePrefix string) {
 			report.KarpenterP95MemoryMB, report.KarpenterAvgMemoryMB, report.KarpenterMaxMemoryMB, report.MetricsSampleCount)
 		GinkgoWriter.Printf("Karpenter CPU (P95/Avg/Max): %.4f / %.4f / %.4f cores (%d samples)\n",
 			report.KarpenterP95CPUCores, report.KarpenterAvgCPUCores, report.KarpenterMaxCPUCores, report.MetricsSampleCount)
+		if report.KarpenterCPUCoreLimit > 0 {
+			note := ""
+			if report.KarpenterCPUSaturatedPct >= 50 {
+				note = "  CPU is clamped for most of this phase, so its CPU columns cannot move and a real effect displaces into duration"
+			}
+			GinkgoWriter.Printf("Karpenter CPU limit: %.2f cores, samples at or above it: %.1f%%%s\n",
+				report.KarpenterCPUCoreLimit, report.KarpenterCPUSaturatedPct, note)
+		}
+		GinkgoWriter.Printf("Disruption: %.0f decisions, %.0f evaluations, %.4f s mean evaluation, %.0f consolidation timeouts, %.0f failed validations\n",
+			report.DisruptionDecisions, report.DecisionEvalCount, report.DecisionEvalMeanSeconds,
+			report.ConsolidationTimeouts, report.FailedValidations)
 	} else {
 		GinkgoWriter.Printf("Karpenter Metrics: Not available (0 samples collected)\n")
 	}
@@ -93,17 +111,8 @@ func writeReportFiles(report *PerformanceReport, filePrefix, outputDir string) {
 	}
 }
 
-// ReportScaleOut monitors a scale-out operation and returns a performance report.
-// This function waits for the specified number of pods to become healthy and measures
-// the time taken, resource utilization, and node efficiency.
-//
-// Parameters:
-//   - env: The test environment
-//   - testName: Name of the test for reporting
-//   - expectedPods: Expected number of healthy pods
-//   - timeout: Maximum time to wait for scale-out completion
-//
-// Returns a PerformanceReport with scale-out metrics and timing information.
+// ReportScaleOut waits for expectedPods pods to become healthy and reports the
+// time taken, resource utilization and node efficiency.
 func ReportScaleOut(env *common.Environment, testName string, expectedPods int, timeout time.Duration) (*PerformanceReport, error) {
 	profiler := common.StartKarpenterProfiler(env)
 	metricsPoller := common.StartKarpenterMetricsPoller(env)
@@ -131,7 +140,7 @@ func ReportScaleOut(env *common.Environment, testName string, expectedPods int, 
 		podsPerNode = float64(expectedPods) / float64(nodeCount)
 	}
 
-	return &PerformanceReport{
+	report := &PerformanceReport{
 		TestName:                testName,
 		TestType:                "scale-out",
 		TotalPods:               expectedPods,
@@ -145,30 +154,18 @@ func ReportScaleOut(env *common.Environment, testName string, expectedPods int, 
 		PodsPerNode:             podsPerNode,
 		Rounds:                  1, // Scale-out is always 1 round
 		Timestamp:               time.Now(),
-		KarpenterP95MemoryMB:    stats.P95MemoryMB,
-		KarpenterAvgMemoryMB:    stats.AvgMemoryMB,
-		KarpenterMaxMemoryMB:    stats.MaxMemoryMB,
-		KarpenterP95CPUCores:    stats.P95CPUCores,
-		KarpenterAvgCPUCores:    stats.AvgCPUCores,
-		KarpenterMaxCPUCores:    stats.MaxCPUCores,
-		MetricsSampleCount:      stats.SampleCount,
-		MemoryProfileData:       memProfile,
-		CPUProfileData:          cpuProfile,
-	}, nil
+		// Scale-out blocks on one Eventually and does not wait for the controller
+		// to go quiet, so there is no convergence window to report.
+		Converged:         true,
+		MemoryProfileData: memProfile,
+		CPUProfileData:    cpuProfile,
+	}
+	applyResourceStats(report, stats)
+	return report, nil
 }
 
-// ReportConsolidation monitors a consolidation operation and returns a performance report.
-// This function waits for pods to scale down and then monitors node consolidation rounds.
-//
-// Parameters:
-//   - env: The test environment
-//   - testName: Name of the test for reporting
-//   - initialPods: Initial number of pods before consolidation
-//   - finalPods: Expected final number of pods after consolidation
-//   - initialNodes: Initial number of nodes before consolidation
-//   - timeout: Maximum time to wait for consolidation completion
-//
-// Returns a PerformanceReport with consolidation metrics and timing information.
+// ReportConsolidation waits for the pod count to reach finalPods, then monitors
+// node consolidation rounds until the controller goes quiet or timeout elapses.
 func ReportConsolidation(env *common.Environment, testName string, initialPods, finalPods, initialNodes int, timeout time.Duration) (*PerformanceReport, error) {
 	profiler := common.StartKarpenterProfiler(env)
 	metricsPoller := common.StartKarpenterMetricsPoller(env)
@@ -184,7 +181,9 @@ func ReportConsolidation(env *common.Environment, testName string, initialPods, 
 	consolidationRounds, _ := monitorConsolidationRounds(env, timeout)
 	totalTime := time.Since(startTime)
 	memProfile, cpuProfile := profiler.Stop()
+	samples := metricsPoller.Samples()
 	stats := metricsPoller.Stop()
+	converged, convergence := convergenceFromSamples(samples, startTime)
 
 	// Collect final metrics
 	finalNodes := env.Monitor.CreatedNodeCount()
@@ -198,7 +197,7 @@ func ReportConsolidation(env *common.Environment, testName string, initialPods, 
 		podsPerNode = float64(finalPods) / float64(finalNodes)
 	}
 
-	return &PerformanceReport{
+	report := &PerformanceReport{
 		TestName:                testName,
 		TestType:                "consolidation",
 		TotalPods:               finalPods,
@@ -212,29 +211,68 @@ func ReportConsolidation(env *common.Environment, testName string, initialPods, 
 		PodsPerNode:             podsPerNode,
 		Rounds:                  len(consolidationRounds),
 		Timestamp:               time.Now(),
-		KarpenterP95MemoryMB:    stats.P95MemoryMB,
-		KarpenterAvgMemoryMB:    stats.AvgMemoryMB,
-		KarpenterMaxMemoryMB:    stats.MaxMemoryMB,
-		KarpenterP95CPUCores:    stats.P95CPUCores,
-		KarpenterAvgCPUCores:    stats.AvgCPUCores,
-		KarpenterMaxCPUCores:    stats.MaxCPUCores,
-		MetricsSampleCount:      stats.SampleCount,
+		ConvergenceSeconds:      convergence.Seconds(),
+		Converged:               converged,
 		MemoryProfileData:       memProfile,
 		CPUProfileData:          cpuProfile,
-	}, nil
+	}
+	applyResourceStats(report, stats)
+	return report, nil
 }
 
-// ReportDrift monitors a drift operation and returns a performance report.
-// This function monitors node replacement during drift operations and measures
-// the time taken and number of replacement rounds.
+// quiescenceConfirmations is how many consecutive poller samples must read zero
+// eligible nodes before the controller is taken to have finished.
 //
-// Parameters:
-//   - env: The test environment
-//   - testName: Name of the test for reporting
-//   - expectedPods: Expected number of pods (should remain constant during drift)
-//   - timeout: Maximum time to wait for drift completion
+// The poller ticks every 5 s and the disruption controller requeues on a 10 s
+// polling period, so 6 samples is a 30 s window covering at least three
+// controller loops.
+const quiescenceConfirmations = 6
+
+// convergenceFromSamples reads, out of the series the poller already collected,
+// when the controller first reported nothing left to disrupt. It measures rather
+// than waits: monitorConsolidationRounds is still the phase's convergence test,
+// and this reports how much of that window was spent after the controller went
+// quiet.
 //
-// Returns a PerformanceReport with drift metrics and timing information.
+// Returns false when no sustained-zero window closed, in which case the duration
+// is the whole window and not a convergence time.
+func convergenceFromSamples(samples []common.ResourceSample, phaseStart time.Time) (bool, time.Duration) {
+	run := 0
+	for _, s := range samples {
+		if s.Disruption.EligibleNodesFound && s.Disruption.EligibleNodes == 0 {
+			run++
+			if run >= quiescenceConfirmations {
+				return true, s.Timestamp.Sub(phaseStart)
+			}
+			continue
+		}
+		run = 0
+	}
+	return false, 0
+}
+
+// applyResourceStats copies the poller's output onto the report. One function
+// rather than the three identical literals it replaces, so a field added to the
+// poller cannot reach one phase and miss another.
+func applyResourceStats(report *PerformanceReport, stats common.ResourceStats) {
+	report.KarpenterP95MemoryMB = stats.P95MemoryMB
+	report.KarpenterAvgMemoryMB = stats.AvgMemoryMB
+	report.KarpenterMaxMemoryMB = stats.MaxMemoryMB
+	report.KarpenterP95CPUCores = stats.P95CPUCores
+	report.KarpenterAvgCPUCores = stats.AvgCPUCores
+	report.KarpenterMaxCPUCores = stats.MaxCPUCores
+	report.MetricsSampleCount = stats.SampleCount
+	report.KarpenterCPUCoreLimit = stats.CPUCoreLimit
+	report.KarpenterCPUSaturatedPct = stats.CPUSaturatedFraction * 100
+	report.DisruptionDecisions = stats.DisruptionDecisions
+	report.DecisionEvalMeanSeconds = stats.DecisionEvalMeanSeconds
+	report.DecisionEvalCount = stats.DecisionEvalCount
+	report.ConsolidationTimeouts = stats.ConsolidationTimeouts
+	report.FailedValidations = stats.FailedValidations
+}
+
+// ReportDrift monitors node replacement during drift and reports the time taken
+// and the number of replacement rounds. expectedPods stays constant throughout.
 func ReportDrift(env *common.Environment, testName string, expectedPods int, timeout time.Duration) (*PerformanceReport, error) {
 	profiler := common.StartKarpenterProfiler(env)
 	metricsPoller := common.StartKarpenterMetricsPoller(env)
@@ -309,7 +347,7 @@ func ReportDrift(env *common.Environment, testName string, expectedPods int, tim
 		driftRounds = 1
 	}
 
-	return &PerformanceReport{
+	report := &PerformanceReport{
 		TestName:                testName,
 		TestType:                "drift",
 		TotalPods:               expectedPods,
@@ -323,16 +361,49 @@ func ReportDrift(env *common.Environment, testName string, expectedPods int, tim
 		PodsPerNode:             podsPerNode,
 		Rounds:                  driftRounds,
 		Timestamp:               time.Now(),
-		KarpenterP95MemoryMB:    stats.P95MemoryMB,
-		KarpenterAvgMemoryMB:    stats.AvgMemoryMB,
-		KarpenterMaxMemoryMB:    stats.MaxMemoryMB,
-		KarpenterP95CPUCores:    stats.P95CPUCores,
-		KarpenterAvgCPUCores:    stats.AvgCPUCores,
-		KarpenterMaxCPUCores:    stats.MaxCPUCores,
-		MetricsSampleCount:      stats.SampleCount,
-		MemoryProfileData:       memProfile,
-		CPUProfileData:          cpuProfile,
-	}, nil
+		// ReportDrift still uses the taint-polling loop below, which has the same
+		// aliasing defect as the consolidation monitor did. Switching it shifts the
+		// drift baselines, so it belongs in its own change; the disruption fields
+		// are populated here regardless, so that change can be made with both
+		// statistics measured on the same runs.
+		Converged:         true,
+		MemoryProfileData: memProfile,
+		CPUProfileData:    cpuProfile,
+	}
+	applyResourceStats(report, stats)
+	return report, nil
+}
+
+// Convenience functions for common monitoring patterns
+
+// ReportScaleOutWithOutput monitors scale-out and automatically outputs the report
+func ReportScaleOutWithOutput(env *common.Environment, testName string, expectedPods int, timeout time.Duration, filePrefix string) (*PerformanceReport, error) {
+	report, err := ReportScaleOut(env, testName, expectedPods, timeout)
+	if err != nil {
+		return nil, err
+	}
+	OutputPerformanceReport(report, filePrefix)
+	return report, nil
+}
+
+// ReportConsolidationWithOutput monitors consolidation and automatically outputs the report
+func ReportConsolidationWithOutput(env *common.Environment, testName string, initialPods, finalPods, initialNodes int, timeout time.Duration, filePrefix string) (*PerformanceReport, error) {
+	report, err := ReportConsolidation(env, testName, initialPods, finalPods, initialNodes, timeout)
+	if err != nil {
+		return nil, err
+	}
+	OutputPerformanceReport(report, filePrefix)
+	return report, nil
+}
+
+// ReportDriftWithOutput monitors drift and automatically outputs the report
+func ReportDriftWithOutput(env *common.Environment, testName string, expectedPods int, timeout time.Duration, filePrefix string) (*PerformanceReport, error) {
+	report, err := ReportDrift(env, testName, expectedPods, timeout)
+	if err != nil {
+		return nil, err
+	}
+	OutputPerformanceReport(report, filePrefix)
+	return report, nil
 }
 
 // monitorConsolidationRounds monitors node consolidation and returns consolidation rounds.
@@ -396,36 +467,4 @@ func monitorConsolidationRounds(env *common.Environment, timeout time.Duration) 
 	totalConsolidationTime := time.Since(consolidationStartTime)
 
 	return consolidationRounds, totalConsolidationTime
-}
-
-// Convenience functions for common monitoring patterns
-
-// ReportScaleOutWithOutput monitors scale-out and automatically outputs the report
-func ReportScaleOutWithOutput(env *common.Environment, testName string, expectedPods int, timeout time.Duration, filePrefix string) (*PerformanceReport, error) {
-	report, err := ReportScaleOut(env, testName, expectedPods, timeout)
-	if err != nil {
-		return nil, err
-	}
-	OutputPerformanceReport(report, filePrefix)
-	return report, nil
-}
-
-// ReportConsolidationWithOutput monitors consolidation and automatically outputs the report
-func ReportConsolidationWithOutput(env *common.Environment, testName string, initialPods, finalPods, initialNodes int, timeout time.Duration, filePrefix string) (*PerformanceReport, error) {
-	report, err := ReportConsolidation(env, testName, initialPods, finalPods, initialNodes, timeout)
-	if err != nil {
-		return nil, err
-	}
-	OutputPerformanceReport(report, filePrefix)
-	return report, nil
-}
-
-// ReportDriftWithOutput monitors drift and automatically outputs the report
-func ReportDriftWithOutput(env *common.Environment, testName string, expectedPods int, timeout time.Duration, filePrefix string) (*PerformanceReport, error) {
-	report, err := ReportDrift(env, testName, expectedPods, timeout)
-	if err != nil {
-		return nil, err
-	}
-	OutputPerformanceReport(report, filePrefix)
-	return report, nil
 }

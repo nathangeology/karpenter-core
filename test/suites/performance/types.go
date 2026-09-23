@@ -55,6 +55,39 @@ type PerformanceReport struct {
 	KarpenterMaxCPUCores float64 `json:"karpenter_max_cpu_cores"`
 	MetricsSampleCount   int     `json:"metrics_sample_count"`
 
+	// KarpenterCPUCoreLimit is the container's CPU limit in cores, and
+	// KarpenterCPUSaturatedPct the share of rate samples at or above 99% of it. A
+	// workload that saturates the limit has a CPU column that cannot move, so a
+	// real effect displaces into duration and the flat CPU reads as a pass.
+	KarpenterCPUCoreLimit    float64 `json:"karpenter_cpu_core_limit"`
+	KarpenterCPUSaturatedPct float64 `json:"karpenter_cpu_saturated_pct"`
+
+	// Disruption-controller metrics, read from the same scrape as CPU and memory.
+	// They replace Rounds, which counts poll iterations that caught a
+	// karpenter.sh/disrupted taint and so aliases the poll schedule rather than the
+	// controller's work. Rounds stays in the informational tier so the two can be
+	// compared on the same run.
+	DisruptionDecisions float64 `json:"disruption_decisions"`
+	// Mean per decision, not per second of wall clock. Upstream's metrics.Measure
+	// wraps the whole disrupt() call, so the span covers GetCandidatesWithTotals
+	// and ComputeCommands.
+	DecisionEvalMeanSeconds float64 `json:"decision_eval_mean_seconds"`
+	DecisionEvalCount       float64 `json:"decision_eval_count"`
+	// Non-zero when the multi-node or single-node search hit its own internal
+	// timeout, which makes the phase a different experiment.
+	ConsolidationTimeouts float64 `json:"consolidation_timeouts"`
+	FailedValidations     float64 `json:"failed_validations"`
+
+	// ConvergenceSeconds is how long the phase waited from its pod-count target
+	// being met to the controller reporting no eligible nodes for the confirmation
+	// window. It is the part of TotalTime that is a measurement rather than a
+	// schedule, and it is reported separately so the two are not conflated.
+	ConvergenceSeconds float64 `json:"convergence_seconds"`
+	// Converged is false when the confirmation window never closed, which means
+	// the phase ended on its timeout and ConvergenceSeconds is a censoring bound
+	// rather than a measurement.
+	Converged bool `json:"converged"`
+
 	// pprof debug artifacts (not used for assertions, saved for offline analysis)
 	MemoryProfileData []byte `json:"-"`
 	CPUProfileData    []byte `json:"-"`

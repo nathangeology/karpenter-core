@@ -60,6 +60,20 @@ var metrics = []metricSpec{
 	{"total_reserved_cpu_utilization", "CPU Utilization", "percent"},
 	{"total_reserved_memory_utilization", "Memory Utilization", "percent"},
 	{"rounds", "Consolidation Rounds", "rounds"},
+	// The disruption controller's own account of each phase, read off the same
+	// endpoint the poller already fetches. decision_eval_mean_seconds measures the
+	// controller's per-decision cost with no wall-clock window in the denominator,
+	// over a span that covers ComputeCommands.
+	{"decision_eval_mean_seconds", "Disruption Evaluation Mean", "seconds"},
+	{"decision_eval_count", "Disruption Evaluations", "count"},
+	{"disruption_decisions", "Disruption Decisions", "count"},
+	{"consolidation_timeouts", "Consolidation Timeouts", "count"},
+	{"failed_validations", "Failed Validations", "count"},
+	{"convergence_seconds", "Convergence", "seconds"},
+	// Share of the phase's controller CPU rate samples that sat at the container's
+	// CPU limit. A high share means the CPU statistics above describe the cgroup
+	// rather than the code.
+	{"karpenter_cpu_saturated_pct", "Controller CPU Saturation", "percent"},
 }
 
 type stats struct {

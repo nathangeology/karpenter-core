@@ -117,7 +117,7 @@ test-helpers: ## Run the cluster-free tests in the test/ module
 	# Every Ginkgo spec under test/ runs through a suite whose BeforeSuite builds a
 	# cluster, so `test` reaches none of them. The selector is TestUnit rather than
 	# a package path for that reason.
-	cd test && go test ./suites/... -race -run 'TestUnit'
+	cd test && go test ./... -race -run 'TestUnit'
 
 test-memory: ## Run memory usage tests for node overlay store
 	go test -v ./pkg/controllers/nodeoverlay/... -run TestMemoryUsage
