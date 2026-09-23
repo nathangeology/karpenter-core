@@ -19,18 +19,34 @@ package performance
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"strings"
 	"sync"
 	"time"
 )
 
-// Providers can override individual performance thresholds without patching the
-// tests, via per-test-case JSON in the KARPENTER_PERF_THRESHOLDS environment
-// variable, keyed by "<testCase>/<phase>", e.g.
-//   {"basic/scaleOut": {"memory_mb": 400, "cpu_cores": 1.2, "total_time_minutes": 3}}
-// An override wins for the metric it sets; otherwise the inline base default is
-// used.
+// Absolute per-sample thresholds are OPT-IN, per test case, through the
+// KARPENTER_PERF_THRESHOLDS environment variable, keyed by "<testCase>/<phase>".
+//
+// A test case named in the table is asserted. A metric the entry sets uses that
+// value; a metric it omits uses the inline base default at the call site. So
+//   {"basic/scaleOut": {}}                     assert basic/scaleOut at its inline defaults
+//   {"basic/scaleOut": {"memory_mb": 400}}     assert it, memory bound raised to 400 MB
+//
+// A test case ABSENT from the table is not asserted at all, and a batch with no
+// variable set asserts nothing. Upstream gates on the relative, multi-test
+// statistic in .github/scripts/perf-aggregate instead, which decides on a batch
+// median rather than on one sample. Providers that need a hard per-sample bound,
+// notably the downstream Hydra suites, opt in by naming their test cases here.
+//
+// Why opt-in. A one-sample absolute bound is a hypothesis test with n=1 whose
+// size is set by the bound's headroom over the clean median, not by any chosen
+// alpha. Measured on the Basic suite that headroom is +7.18 pct on scale-out p95
+// memory and +0.50 pct on consolidation p95 memory, so 4 of 10 clean legs tripped
+// it; and a tripped assertion deletes the whole iteration directory on retry, so
+// it destroys the sample the relative gate needed. See
+// drafts/2026-09-23/mde-unclamped/unclamped-mde.md.
 
 // thresholdOverride is the per-test-case, per-metric absolute override. A nil
 // field means "no override for this metric; use the inline base default".
@@ -79,36 +95,69 @@ func override(key string) (thresholdOverride, bool) {
 	return o, ok
 }
 
+// Sentinels an assertion cannot fail, returned for a test case that has not
+// opted in. The upper-bound helpers return +Inf and the lower-bound helpers
+// -Inf, so the Expect stays in the source, documenting the bound, without
+// deciding anything. neverSlower is the Duration equivalent of +Inf, about 292
+// years, because a Duration is an int64 of nanoseconds and cannot hold an
+// infinity.
+const neverSlower = time.Duration(math.MaxInt64)
+
+var (
+	neverAbove = math.Inf(1)
+	neverBelow = math.Inf(-1)
+)
+
 func MemoryThreshold(key string, base float64) float64 {
-	if o, ok := override(key); ok && o.MemoryMB != nil {
+	o, ok := override(key)
+	if !ok {
+		return neverAbove
+	}
+	if o.MemoryMB != nil {
 		return *o.MemoryMB
 	}
 	return base
 }
 
 func CPUThreshold(key string, base float64) float64 {
-	if o, ok := override(key); ok && o.CPUCores != nil {
+	o, ok := override(key)
+	if !ok {
+		return neverAbove
+	}
+	if o.CPUCores != nil {
 		return *o.CPUCores
 	}
 	return base
 }
 
 func TotalTimeThreshold(key string, base time.Duration) time.Duration {
-	if o, ok := override(key); ok && o.TotalTimeMinutes != nil {
+	o, ok := override(key)
+	if !ok {
+		return neverSlower
+	}
+	if o.TotalTimeMinutes != nil {
 		return time.Duration(*o.TotalTimeMinutes * float64(time.Minute))
 	}
 	return base
 }
 
 func CPUUtilThreshold(key string, base float64) float64 {
-	if o, ok := override(key); ok && o.CPUUtil != nil {
+	o, ok := override(key)
+	if !ok {
+		return neverBelow
+	}
+	if o.CPUUtil != nil {
 		return *o.CPUUtil
 	}
 	return base
 }
 
 func MemoryUtilThreshold(key string, base float64) float64 {
-	if o, ok := override(key); ok && o.MemoryUtil != nil {
+	o, ok := override(key)
+	if !ok {
+		return neverBelow
+	}
+	if o.MemoryUtil != nil {
 		return *o.MemoryUtil
 	}
 	return base
