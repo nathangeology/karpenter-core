@@ -85,12 +85,15 @@ jobs:
             "wide": ("Wide Deployments", "Wide Deployments"),
             "dnd": ("Do Not Disrupt Performance", "Do Not Disrupt Performance Test"),
         }
+        # Any single suite name from ALL is also a valid value, so a run can
+        # target one suite without editing this table.
         SETS = {
             "basic": ["basic"],
             "basic+hns": ["basic", "hns"],
             "xl": ["xl"],
             "all": list(ALL),
         }
+        SETS.update({k: [k] for k in ALL if k not in SETS})
         if which not in SETS:
             raise SystemExit("unknown suites value %r" % which)
         suites = [ALL[k] for k in SETS[which]]
