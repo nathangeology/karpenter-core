@@ -15,7 +15,7 @@ HELM_OPTS ?= --set logLevel=debug \
 help: ## Display help
 	@awk 'BEGIN {FS = ":.*##"; printf "Usage:\n  make \033[36m<target>\033[0m\n"} /^[a-zA-Z_0-9-]+:.*?##/ { printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
 
-presubmit: verify test licenses vulncheck ## Run all steps required for code to be checked in
+presubmit: verify test test-helpers licenses vulncheck ## Run all steps required for code to be checked in
 
 install-kwok: ## Install kwok provider
 	./hack/install-kwok.sh
@@ -113,6 +113,12 @@ test: ## Run tests
 	@# ./pkg/... above nor `go vet ./...` in verify reaches anything under .github.
 	go test ./.github/scripts/perf-aggregate/... -race -timeout 5m
 
+test-helpers: ## Run the cluster-free tests in the test/ module
+	# Every Ginkgo spec under test/ runs through a suite whose BeforeSuite builds a
+	# cluster, so `test` reaches none of them. The selector is TestUnit rather than
+	# a package path for that reason.
+	cd test && go test ./suites/... -race -run 'TestUnit'
+
 test-memory: ## Run memory usage tests for node overlay store
 	go test -v ./pkg/controllers/nodeoverlay/... -run TestMemoryUsage
 
@@ -190,4 +196,4 @@ download: ## Recursively "go mod download" on all directories where go.mod exist
 gen_instance_types:
 	go run kwok/tools/gen_instance_types.go > kwok/cloudprovider/instance_types.json
 
-.PHONY: help presubmit install-kwok uninstall-kwok build apply delete test test-memory test-dra e2etest-dra benchmark deflake vulncheck licenses verify download gen_instance_types setup-kind-dra delete-kind-dra apply-with-kind-dra
+.PHONY: help presubmit install-kwok uninstall-kwok build apply delete test test-helpers test-memory test-dra e2etest-dra benchmark deflake vulncheck licenses verify download gen_instance_types setup-kind-dra delete-kind-dra apply-with-kind-dra
