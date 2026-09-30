@@ -76,17 +76,42 @@ reconcile retries it a minute later.
 | Fault | Log | Event | Metric | Aborts cycle |
 |---|---|---|---|---|
 | `RankNodes` failure | `Error` | `PodDeletionCostDisabled` | — | yes |
-| Pod write failure | `Error` | `PodDeletionCostUpdateFailed` (pod-scoped) | `result="error"` | no |
-| Pod write conflict | `V(1)` | — | `result="error"` | no |
-| Third-party conflict | — | `PodDeletionCostThirdPartyConflict` | `result="skipped_customer_managed"` | no |
-| Sentinel removal failure | `Error` | — | `result="error"` | no |
-| Pod gone (`NotFound`) | `V(1)` | — | `result="skipped_customer_managed"` | no |
-| Node pod-list failure | `Error` | — | `result="error"` | no |
+| Pod write failure | `Error` | `PodDeletionCostUpdateFailed` (pod-scoped) | `pods_updated_total{result="error"}` | no |
+| Pod write conflict | `V(1)` | — | `pods_updated_total{result="error"}` | no |
+| Third-party conflict | — | `PodDeletionCostThirdPartyConflict` | `pods_updated_total{result="skipped_third_party_conflict"}` | no |
+| Sentinel removal failure | `Error` | — | `pods_updated_total{result="error"}` | no |
+| Pod gone (`NotFound`) | `V(1)` | — | `pods_updated_total{result="skipped_pod_deleted"}` | no |
+| Node pod-list failure | `Error` | — | `nodes_failed_total{reason="pod_list_failed"}` | no |
 
 The last row is a second guard on a fault the first row already covers. `partitionNodes` calls
 `node.Pods()` for every node before ranking completes, so a node whose pod list cannot be read has
 already failed the cycle through `RankNodes`. The guard in `UpdatePodDeletionCosts` catches only the
 transient case where the same list succeeds during ranking and fails moments later.
+
+## Metrics
+
+Node-scoped and pod-scoped outcomes are counted on separate metrics. `pods_updated_total` takes
+exactly one increment per pod. A node whose pod list cannot be read increments
+`nodes_failed_total` instead, because the pods lost to that fault cannot be counted: listing them
+is what failed. Folding it into the pod counter would report `1` for a node that cost 50 pods their
+annotations.
+
+| Metric | Label | Meaning |
+|---|---|---|
+| `pods_updated_total` | `result="success"` | Annotation written |
+| | `result="skipped_customer_managed"` | Customer set the annotation and holds it (no sentinel) |
+| | `result="skipped_third_party_conflict"` | A third party overwrote a Karpenter-managed value; management released |
+| | `result="skipped_pod_deleted"` | Pod deleted between the list and the write |
+| | `result="error"` | Write failed, conflicted, or the sentinel could not be removed |
+| `nodes_failed_total` | `reason="pod_list_failed"` | Node's pod list unreadable; every pod on it un-annotated |
+| `nodes_ranked_total` | — | Nodes ranked |
+| `skipped_no_changes_total` | — | Reconciles skipped on unchanged cluster state |
+
+`skipped_customer_managed` counts customer opt-out and nothing else. A pod that vanished mid-cycle
+is not an opt-out, and neither is a pod a third party took over, so both carry their own label.
+
+Every series is written on every pass, including with zero, so a result that has not happened yet
+scrapes as `0` rather than being absent and making `rate()` return no data.
 
 Errors are not returned for reporting alone. An error that the caller can only log and swallow is
 better raised where the failing object is still in scope, which is why the pod-scoped event carries
@@ -126,5 +151,5 @@ top-50 set, their pod annotations are cleaned up automatically.
 go test ./pkg/controllers/pod/deletioncost/...
 ```
 
-25 tests covering ranking, annotation management, change detection, third-party
-conflict detection, bounded labeling, and controller reconciliation.
+28 specs covering ranking, annotation management, change detection, third-party
+conflict detection, bounded labeling, metric result labels, and controller reconciliation.
