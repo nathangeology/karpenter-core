@@ -347,8 +347,7 @@ func (in *StateNode) RebootInProgress() bool {
 	if in.NodeClaim == nil {
 		return false
 	}
-	cond := in.NodeClaim.StatusConditions().Get(v1.ConditionTypeRebooting)
-	return cond != nil && cond.IsTrue()
+	return in.NodeClaim.StatusConditions().IsTrue(v1.ConditionTypeRebooting)
 }
 
 func (in *StateNode) Taints() []corev1.Taint {
@@ -491,7 +490,7 @@ func (in *StateNode) MarkedForDeletion() bool {
 }
 
 func (in *StateNode) Deleted() bool {
-	return (in.NodeClaim != nil && (!in.NodeClaim.DeletionTimestamp.IsZero() || in.NodeClaim.StatusConditions().Get(v1.ConditionTypeInstanceTerminating).IsTrue())) ||
+	return (in.NodeClaim != nil && (!in.NodeClaim.DeletionTimestamp.IsZero() || in.NodeClaim.StatusConditions().IsTrue(v1.ConditionTypeInstanceTerminating))) ||
 		(in.Node != nil && in.NodeClaim == nil && !in.Node.DeletionTimestamp.IsZero())
 }
 

@@ -80,7 +80,7 @@ func (c *Controller) Reconcile(ctx context.Context, nodePool *v1.NodePool) (reco
 	// If Karpenter restarts i.e. if the buffer for the nodePool is empty and the NodeRegistrationHealthy status condition
 	// is set to either true/false then we pre-hydrate the buffer with the existing state of the status condition
 	if c.npState.Status(nodePool.UID) == nodepoolhealth.StatusUnknown {
-		if nodePool.StatusConditions().Get(v1.ConditionTypeNodeRegistrationHealthy).IsTrue() {
+		if nodePool.StatusConditions().IsTrue(v1.ConditionTypeNodeRegistrationHealthy) {
 			c.npState.SetStatus(nodePool.UID, nodepoolhealth.StatusHealthy)
 		}
 		if nodePool.StatusConditions().Get(v1.ConditionTypeNodeRegistrationHealthy).IsFalse() {

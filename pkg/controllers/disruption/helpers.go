@@ -340,7 +340,7 @@ func BuildDisruptionBudgetMapping(ctx context.Context, cluster *state.Cluster, c
 		// Additionally, don't consider nodeclaims that have the terminating condition. A nodeclaim should have
 		// the Terminating condition only when the node is drained and cloudprovider.Delete() was successful
 		// on the underlying cloud provider machine.
-		if node.NodeClaim.StatusConditions().Get(v1.ConditionTypeInstanceTerminating).IsTrue() {
+		if node.NodeClaim.StatusConditions().IsTrue(v1.ConditionTypeInstanceTerminating) {
 			continue
 		}
 
