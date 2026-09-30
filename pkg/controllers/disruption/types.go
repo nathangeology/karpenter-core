@@ -140,10 +140,10 @@ func resolveNodePrice(node *state.StateNode, instanceType *cloudprovider.Instanc
 	return price
 }
 
-// PerNodeBaseDisruptionCost is the inherent cost of draining a node (cordon,
-// drain, API calls, replacement latency). Could become per-NodePool if GPU
-// nodes need higher weight. See designs/balanced-consolidation.md.
-const PerNodeBaseDisruptionCost = 1.0
+// PerNodeBaseDisruptionCost is defined in pkg/utils/disruption so that
+// pkg/controllers/state can reference the same constant. Aliased here because
+// this package is where the cost model is consumed.
+const PerNodeBaseDisruptionCost = disruptionutils.PerNodeBaseDisruptionCost
 
 func computeRescheduleDisruptionCost(ctx context.Context, reschedulablePods []*corev1.Pod) float64 {
 	cost := PerNodeBaseDisruptionCost

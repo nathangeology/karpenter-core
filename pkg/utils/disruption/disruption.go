@@ -30,6 +30,15 @@ import (
 	v1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 )
 
+// PerNodeBaseDisruptionCost is the inherent cost of draining a node (cordon,
+// drain, API calls, replacement latency). Could become per-NodePool if GPU
+// nodes need higher weight. See designs/balanced-consolidation.md.
+//
+// It lives here rather than in pkg/controllers/disruption so that
+// pkg/controllers/state can reference it too: disruption imports state, so
+// state cannot import disruption back.
+const PerNodeBaseDisruptionCost = 1.0
+
 // lifetimeRemaining calculates the fraction of node lifetime remaining in the range [0.0, 1.0].  If the ExpireAfter
 // is non-zero, we use it to scale down the disruption costs of candidates that are going to expire.  Just after creation, the
 // disruption cost is highest, and it approaches zero as the node ages towards its expiration time.
