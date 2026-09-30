@@ -74,8 +74,12 @@ const (
 	podResultError
 )
 
-// UpdatePodDeletionCosts updates pod deletion cost annotations for all pods on the ranked nodes
-func (a *AnnotationManager) UpdatePodDeletionCosts(ctx context.Context, nodeRanks []NodeRank) error {
+// UpdatePodDeletionCosts updates pod deletion cost annotations for all pods on the ranked nodes.
+// Failures are reported where they happen and never returned: a pod whose write fails is logged,
+// evented with its own identity, counted into PodsUpdatedTotal{result=error}, and skipped, while
+// the remaining pods are still annotated. See the package README, "Failure handling", for why a
+// partial failure does not abort the pass.
+func (a *AnnotationManager) UpdatePodDeletionCosts(ctx context.Context, nodeRanks []NodeRank) {
 	defer metrics.Measure(AnnotationDurationSeconds, map[string]string{})()
 
 	var successCount, skippedCount, errorCount int
@@ -106,8 +110,6 @@ func (a *AnnotationManager) UpdatePodDeletionCosts(ctx context.Context, nodeRank
 
 	a.cleanupStalePods(activePods)
 	a.recordMetrics(ctx, successCount, skippedCount, errorCount)
-
-	return nil
 }
 
 // cleanupStalePods removes tracking entries for pods no longer on any ranked node.

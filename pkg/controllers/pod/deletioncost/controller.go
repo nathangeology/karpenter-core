@@ -126,13 +126,12 @@ func (c *Controller) Reconcile(ctx context.Context) (reconciler.Result, error) {
 
 	activeRanks := c.boundAndCleanup(ctx, nodeRanks)
 
-	if err := c.annotationMgr.UpdatePodDeletionCosts(ctx, activeRanks); err != nil {
-		// Same reasoning as the ranking failure above: log and event, requeue on the
-		// fixed interval, do not hand controller-runtime a competing backoff.
-		log.FromContext(ctx).Error(err, "failed to update pod deletion costs")
-		c.recorder.Publish(DisabledEvent(fmt.Sprintf("failed to update pod deletion costs: %v", err)))
-		return reconciler.Result{RequeueAfter: reconcileInterval}, nil
-	}
+	// UpdatePodDeletionCosts does not return an error: a failed pod write is logged, evented
+	// against that pod, and counted into PodsUpdatedTotal{result=error} at the point of failure,
+	// and the pass continues with the remaining pods. One unwritable pod must not cost the other
+	// 49 nodes their annotations, and there is no cycle-wide outcome left for this call site to
+	// act on. A node-level list failure is already caught by RankNodes above, which does return.
+	c.annotationMgr.UpdatePodDeletionCosts(ctx, activeRanks)
 
 	log.FromContext(ctx).V(1).WithValues("nodeCount", len(activeRanks)).Info("updated pod deletion costs")
 

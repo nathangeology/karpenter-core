@@ -61,7 +61,7 @@ var _ = Describe("Annotation", func() {
 
 			mgr := deletioncost.NewAnnotationManager(env.Client, recorder)
 			nodeRanks := []deletioncost.NodeRank{{Node: stateNodes[0], Rank: -10, HasDoNotDisrupt: false}}
-			Expect(mgr.UpdatePodDeletionCosts(ctx, nodeRanks)).To(Succeed())
+			mgr.UpdatePodDeletionCosts(ctx, nodeRanks)
 
 			// Verify pod has both annotations
 			updatedPod := &corev1.Pod{}
@@ -98,7 +98,7 @@ var _ = Describe("Annotation", func() {
 
 			mgr := deletioncost.NewAnnotationManager(env.Client, recorder)
 			nodeRanks := []deletioncost.NodeRank{{Node: stateNodes[0], Rank: -10, HasDoNotDisrupt: false}}
-			Expect(mgr.UpdatePodDeletionCosts(ctx, nodeRanks)).To(Succeed())
+			mgr.UpdatePodDeletionCosts(ctx, nodeRanks)
 
 			// Verify pod still has original customer value
 			updatedPod := &corev1.Pod{}
@@ -136,7 +136,7 @@ var _ = Describe("Annotation", func() {
 
 			mgr := deletioncost.NewAnnotationManager(env.Client, recorder)
 			nodeRanks := []deletioncost.NodeRank{{Node: stateNodes[0], Rank: -20, HasDoNotDisrupt: false}}
-			Expect(mgr.UpdatePodDeletionCosts(ctx, nodeRanks)).To(Succeed())
+			mgr.UpdatePodDeletionCosts(ctx, nodeRanks)
 
 			// Verify pod was updated to new rank
 			updatedPod := &corev1.Pod{}
@@ -165,7 +165,7 @@ var _ = Describe("Annotation", func() {
 
 			mgr := deletioncost.NewAnnotationManager(env.Client, recorder)
 			nodeRanks := []deletioncost.NodeRank{{Node: stateNodes[0], Rank: -3, HasDoNotDisrupt: false}}
-			Expect(mgr.UpdatePodDeletionCosts(ctx, nodeRanks)).To(Succeed())
+			mgr.UpdatePodDeletionCosts(ctx, nodeRanks)
 
 			updatedPod := &corev1.Pod{}
 			Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(pod), updatedPod)).To(Succeed())
@@ -196,7 +196,7 @@ var _ = Describe("Annotation", func() {
 
 			mgr := deletioncost.NewAnnotationManager(env.Client, recorder)
 			nodeRanks := []deletioncost.NodeRank{{Node: stateNodes[0], Rank: -7, HasDoNotDisrupt: false}}
-			Expect(mgr.UpdatePodDeletionCosts(ctx, nodeRanks)).To(Succeed())
+			mgr.UpdatePodDeletionCosts(ctx, nodeRanks)
 
 			for _, pod := range pods {
 				updatedPod := &corev1.Pod{}
@@ -223,8 +223,12 @@ var _ = Describe("Annotation", func() {
 
 			mgr := deletioncost.NewAnnotationManager(env.Client, recorder)
 			nodeRanks := []deletioncost.NodeRank{{Node: stateNodes[0], Rank: -1, HasDoNotDisrupt: false}}
-			// Should not error even with no pods
-			Expect(mgr.UpdatePodDeletionCosts(ctx, nodeRanks)).To(Succeed())
+			mgr.UpdatePodDeletionCosts(ctx, nodeRanks)
+
+			// An empty pod list is not a failure: nothing is annotated, so nothing is
+			// evented. A conflict or update-failure event here would mean the empty
+			// list was walked as if it held pods.
+			Expect(recorder.Events()).To(BeEmpty())
 		})
 
 		It("should update pods across multiple ranked nodes", func() {
@@ -252,7 +256,7 @@ var _ = Describe("Annotation", func() {
 				{Node: stateNodes[0], Rank: -10, HasDoNotDisrupt: false},
 				{Node: stateNodes[1], Rank: -9, HasDoNotDisrupt: false},
 			}
-			Expect(mgr.UpdatePodDeletionCosts(ctx, nodeRanks)).To(Succeed())
+			mgr.UpdatePodDeletionCosts(ctx, nodeRanks)
 
 			// Both pods should have their respective node's rank
 			for _, sn := range stateNodes {
@@ -296,7 +300,7 @@ var _ = Describe("Annotation", func() {
 			nodeRanks := []deletioncost.NodeRank{{Node: stateNodes[0], Rank: -5, HasDoNotDisrupt: false}}
 
 			// First update — Karpenter sets the annotation
-			Expect(mgr.UpdatePodDeletionCosts(ctx, nodeRanks)).To(Succeed())
+			mgr.UpdatePodDeletionCosts(ctx, nodeRanks)
 			updatedPod := &corev1.Pod{}
 			Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(pod), updatedPod)).To(Succeed())
 			Expect(updatedPod.Annotations[deletioncost.PodDeletionCostAnnotation]).To(Equal("-5"))
@@ -306,7 +310,7 @@ var _ = Describe("Annotation", func() {
 			Expect(env.Client.Update(ctx, updatedPod)).To(Succeed())
 
 			// Second update — should detect conflict, remove sentinel, skip pod
-			Expect(mgr.UpdatePodDeletionCosts(ctx, nodeRanks)).To(Succeed())
+			mgr.UpdatePodDeletionCosts(ctx, nodeRanks)
 
 			finalPod := &corev1.Pod{}
 			Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(pod), finalPod)).To(Succeed())
