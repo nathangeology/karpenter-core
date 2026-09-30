@@ -370,6 +370,37 @@ var _ = Describe("Annotation", func() {
 			}))
 		})
 
+		It("should count a released third-party pod as customer-managed on every later pass", func() {
+			pod, nodeRanks := rankedNodeWithPod(nodePool, -5, test.PodOptions{})
+
+			mgr := deletioncost.NewAnnotationManager(env.Client, recorder)
+			mgr.UpdatePodDeletionCosts(ctx, nodeRanks)
+
+			managedPod := &corev1.Pod{}
+			Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(pod), managedPod)).To(Succeed())
+			managedPod.Annotations[deletioncost.PodDeletionCostAnnotation] = "999"
+			Expect(env.Client.Update(ctx, managedPod)).To(Succeed())
+
+			// Second pass releases management: the sentinel is deleted and the third party's cost
+			// is left in place.
+			mgr.UpdatePodDeletionCosts(ctx, nodeRanks)
+
+			before := snapshotPodResults()
+			mgr.UpdatePodDeletionCosts(ctx, nodeRanks)
+
+			// From here on the pod is cost-without-sentinel, which shouldUpdatePod cannot tell
+			// apart from a customer-set annotation. So skipped_third_party_conflict counts the
+			// release once and skipped_customer_managed counts the pod on every cycle after. The
+			// behavior is intended; the counter semantics are what this pins.
+			Expect(podResultsSince(before)).To(Equal(podResultCounts{
+				"success":                      0,
+				"skipped_customer_managed":     1,
+				"skipped_third_party_conflict": 0,
+				"skipped_pod_deleted":          0,
+				"error":                        0,
+			}))
+		})
+
 		It("should count a pod deleted mid-cycle under skipped_pod_deleted, not customer-managed", func() {
 			_, nodeRanks := rankedNodeWithPod(nodePool, -10, test.PodOptions{})
 

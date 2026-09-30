@@ -99,7 +99,7 @@ annotations.
 | Metric | Label | Meaning |
 |---|---|---|
 | `pods_updated_total` | `result="success"` | Annotation written |
-| | `result="skipped_customer_managed"` | Customer set the annotation and holds it (no sentinel) |
+| | `result="skipped_customer_managed"` | Cost annotation without the sentinel: customer opt-out, or a released third-party conflict on later cycles |
 | | `result="skipped_third_party_conflict"` | A third party overwrote a Karpenter-managed value; management released |
 | | `result="skipped_pod_deleted"` | Pod deleted between the list and the write |
 | | `result="error"` | Write failed, conflicted, or the sentinel could not be removed |
@@ -107,8 +107,19 @@ annotations.
 | `nodes_ranked_total` | — | Nodes ranked |
 | `skipped_no_changes_total` | — | Reconciles skipped on unchanged cluster state |
 
-`skipped_customer_managed` counts customer opt-out and nothing else. A pod that vanished mid-cycle
-is not an opt-out, and neither is a pod a third party took over, so both carry their own label.
+`skipped_customer_managed` counts every pod carrying a cost annotation without the sentinel.
+Customer opt-out is the main case and not the only one. Releasing management on a third-party
+conflict deletes the sentinel and leaves the third party's cost in place, so from the next cycle on
+that pod is cost-without-sentinel and `shouldUpdatePod` cannot tell it apart from a customer-set
+annotation. A conflicted pod therefore counts `skipped_third_party_conflict` on the cycle it is
+released and `skipped_customer_managed` on every cycle after.
+
+Two consequences for anyone reading these counters. On a cluster with conflicts,
+`skipped_customer_managed` is an upper bound on opt-out, not a measure of it. And
+`skipped_third_party_conflict` is the rate at which takeover happens, not a running count of
+conflicted pods.
+
+A pod deleted mid-cycle is in neither counter. It carries its own label.
 
 Every series is written on every pass, including with zero, so a result that has not happened yet
 scrapes as `0` rather than being absent and making `rate()` return no data.
@@ -151,5 +162,5 @@ top-50 set, their pod annotations are cleaned up automatically.
 go test ./pkg/controllers/pod/deletioncost/...
 ```
 
-28 specs covering ranking, annotation management, change detection, third-party
+29 specs covering ranking, annotation management, change detection, third-party
 conflict detection, bounded labeling, metric result labels, and controller reconciliation.
