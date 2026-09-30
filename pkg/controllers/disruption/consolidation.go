@@ -132,7 +132,7 @@ func (c *consolidation) ShouldDisrupt(ctx context.Context, cn *Candidate) bool {
 		c.recorder.Publish(disruptionevents.Unconsolidatable(cn.Node, cn.NodeClaim, fmt.Sprintf("NodePool %q has consolidation policy WhenEmpty, but node is not empty", cn.NodePool.Name))...)
 		return false
 	}
-	return cn.NodeClaim.StatusConditions().Get(v1.ConditionTypeConsolidatable).IsTrue()
+	return cn.NodeClaim.StatusConditions().IsTrue(v1.ConditionTypeConsolidatable)
 }
 
 // sortCandidates sorts candidates by price/disruption ratio descending.

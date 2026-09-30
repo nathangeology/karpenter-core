@@ -63,10 +63,10 @@ func (i *Initialization) Reconcile(ctx context.Context, nodeClaim *v1.NodeClaim)
 	// do not (re-)complete Initialized: the still-running pre-reboot node could otherwise satisfy the
 	// checks below and prematurely flip Initialized back to True. The reboot controller re-opens normal
 	// initialization once the Rebooting condition reaches a terminal outcome.
-	if cond := nodeClaim.StatusConditions().Get(v1.ConditionTypeRebooting); cond != nil && cond.IsTrue() {
+	if nodeClaim.StatusConditions().IsTrue(v1.ConditionTypeRebooting) {
 		return reconcile.Result{}, nil
 	}
-	if !nodeClaim.StatusConditions().Get(v1.ConditionTypeRegistered).IsTrue() {
+	if !nodeClaim.StatusConditions().IsTrue(v1.ConditionTypeRegistered) {
 		return reconcile.Result{}, nil
 	}
 	node, err := nodeclaimutils.NodeForNodeClaim(ctx, i.kubeClient, nodeClaim)
