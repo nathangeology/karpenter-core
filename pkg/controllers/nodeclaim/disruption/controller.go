@@ -41,6 +41,7 @@ import (
 	"sigs.k8s.io/karpenter/pkg/operator/injection"
 	utilscontroller "sigs.k8s.io/karpenter/pkg/utils/controller"
 	nodeclaimutils "sigs.k8s.io/karpenter/pkg/utils/nodeclaim"
+	nodepoolutils "sigs.k8s.io/karpenter/pkg/utils/nodepool"
 	"sigs.k8s.io/karpenter/pkg/utils/result"
 )
 
@@ -136,7 +137,7 @@ func (c *Controller) runReconcilers(
 ) ([]reconcile.Result, error) {
 	reconcilers := []nodeClaimReconciler{c.drift}
 	// NodeClaims belonging to static NodePools are never eligible for consolidation, so we shouldn't mark them as consolidatable
-	if np.Spec.Replicas == nil {
+	if !nodepoolutils.IsStatic(np) {
 		reconcilers = append(reconcilers, c.consolidation)
 	}
 	results := make([]reconcile.Result, 0, len(reconcilers))
