@@ -70,19 +70,39 @@ type podResult int
 
 const (
 	podResultSuccess podResult = iota
-	podResultSkipped
+	podResultCustomerManaged
+	podResultThirdPartyConflict
+	podResultPodDeleted
 	podResultError
 )
+
+// resultLabels maps each pod outcome to its pods_updated_total{result} value. One label per
+// outcome: a pod deleted between the list and the write is not a customer opt-out, and neither
+// is a pod whose annotation a third party took over. Folding either into
+// skipped_customer_managed reads pod churn and third-party interference into a counter people
+// use to size how many pods customers have opted out of.
+var resultLabels = map[podResult]string{
+	podResultSuccess:            "success",
+	podResultCustomerManaged:    "skipped_customer_managed",
+	podResultThirdPartyConflict: "skipped_third_party_conflict",
+	podResultPodDeleted:         "skipped_pod_deleted",
+	podResultError:              "error",
+}
 
 // UpdatePodDeletionCosts updates pod deletion cost annotations for all pods on the ranked nodes.
 // Failures are reported where they happen and never returned: a pod whose write fails is logged,
 // evented with its own identity, counted into PodsUpdatedTotal{result=error}, and skipped, while
 // the remaining pods are still annotated. See the package README, "Failure handling", for why a
 // partial failure does not abort the pass.
+//
+// The two scopes are counted separately. PodsUpdatedTotal takes one increment per pod;
+// NodesFailedTotal takes one per node whose pod list could not be read, since the pods lost to
+// that fault cannot be counted.
 func (a *AnnotationManager) UpdatePodDeletionCosts(ctx context.Context, nodeRanks []NodeRank) {
 	defer metrics.Measure(AnnotationDurationSeconds, map[string]string{})()
 
-	var successCount, skippedCount, errorCount int
+	podCounts := make(map[podResult]int, len(resultLabels))
+	var nodesFailed int
 
 	// Track which pod UIDs are still active for cleanup
 	activePods := make(map[types.UID]bool)
@@ -90,26 +110,22 @@ func (a *AnnotationManager) UpdatePodDeletionCosts(ctx context.Context, nodeRank
 	for _, nodeRank := range nodeRanks {
 		pods, err := nodeRank.Node.Pods(ctx, a.kubeClient)
 		if err != nil {
+			// Node-scoped: every pod on this node goes un-annotated, and how many that is cannot
+			// be known because listing them is what failed. Counted as one node rather than as a
+			// pod error, which would under-report the blast radius by the node's pod count.
 			log.FromContext(ctx).WithValues("node", nodeRank.Node.Name()).Error(err, "failed to list pods on node")
-			errorCount++
+			nodesFailed++
 			continue
 		}
 
 		for _, pod := range pods {
 			activePods[pod.UID] = true
-			switch a.processSinglePod(ctx, pod, nodeRank.Rank) {
-			case podResultSuccess:
-				successCount++
-			case podResultSkipped:
-				skippedCount++
-			case podResultError:
-				errorCount++
-			}
+			podCounts[a.processSinglePod(ctx, pod, nodeRank.Rank)]++
 		}
 	}
 
 	a.cleanupStalePods(activePods)
-	a.recordMetrics(ctx, successCount, skippedCount, errorCount)
+	a.recordMetrics(ctx, podCounts, nodesFailed)
 }
 
 // cleanupStalePods removes tracking entries for pods no longer on any ranked node.
@@ -123,17 +139,23 @@ func (a *AnnotationManager) cleanupStalePods(activePods map[types.UID]bool) {
 	}
 }
 
-// recordMetrics emits pod update metrics and logs the summary.
-func (a *AnnotationManager) recordMetrics(ctx context.Context, successCount, skippedCount, errorCount int) {
-	PodsUpdatedTotal.Add(float64(successCount), map[string]string{resultLabel: "success"})
-	PodsUpdatedTotal.Add(float64(skippedCount), map[string]string{resultLabel: "skipped_customer_managed"})
-	PodsUpdatedTotal.Add(float64(errorCount), map[string]string{resultLabel: "error"})
+// recordMetrics emits pod and node update metrics and logs the summary. Every series is added to
+// on every pass, including with zero, so a result that has not happened yet scrapes as 0 instead
+// of being absent and making rate() queries return nothing.
+func (a *AnnotationManager) recordMetrics(ctx context.Context, podCounts map[podResult]int, nodesFailed int) {
+	for result, label := range resultLabels {
+		PodsUpdatedTotal.Add(float64(podCounts[result]), map[string]string{resultLabel: label})
+	}
+	NodesFailedTotal.Add(float64(nodesFailed), map[string]string{reasonLabel: reasonPodListFailed})
 
-	if successCount > 0 || errorCount > 0 {
+	if podCounts[podResultSuccess] > 0 || podCounts[podResultError] > 0 || nodesFailed > 0 {
 		log.FromContext(ctx).WithValues(
-			"success", successCount,
-			"skipped", skippedCount,
-			"errors", errorCount,
+			"success", podCounts[podResultSuccess],
+			"skipped-customer-managed", podCounts[podResultCustomerManaged],
+			"skipped-third-party-conflict", podCounts[podResultThirdPartyConflict],
+			"skipped-pod-deleted", podCounts[podResultPodDeleted],
+			"errors", podCounts[podResultError],
+			"nodes-failed", nodesFailed,
 		).V(1).Info("pod deletion cost annotation update completed")
 	}
 }
@@ -149,11 +171,11 @@ func (a *AnnotationManager) processSinglePod(ctx context.Context, pod *corev1.Po
 		a.mu.Lock()
 		delete(a.lastAssignedValues, pod.UID)
 		a.mu.Unlock()
-		return podResultSkipped
+		return podResultThirdPartyConflict
 	}
 
 	if !shouldUpdatePod(pod) {
-		return podResultSkipped
+		return podResultCustomerManaged
 	}
 
 	podUpdate := PodUpdate{
@@ -164,7 +186,7 @@ func (a *AnnotationManager) processSinglePod(ctx context.Context, pod *corev1.Po
 	if err := a.updatePodAnnotation(ctx, podUpdate); err != nil {
 		if apierrors.IsNotFound(err) {
 			log.FromContext(ctx).V(1).WithValues("pod", klog.KObj(pod)).Info("pod not found, skipping annotation update")
-			return podResultSkipped
+			return podResultPodDeleted
 		}
 		if apierrors.IsConflict(err) {
 			log.FromContext(ctx).V(1).WithValues("pod", klog.KObj(pod)).Info("conflict updating pod annotation, will retry on next reconcile")

@@ -27,6 +27,11 @@ import (
 const (
 	podDeletionCostSubsystem = "pod_deletion_cost"
 	resultLabel              = "result"
+	reasonLabel              = "reason"
+
+	// reasonPodListFailed is the only node-scoped fault UpdatePodDeletionCosts can hit: the
+	// node's pod list could not be read, so every pod on it went un-annotated.
+	reasonPodListFailed = "pod_list_failed"
 )
 
 var (
@@ -40,13 +45,23 @@ var (
 		},
 		[]string{},
 	)
+	NodesFailedTotal = opmetrics.NewPrometheusCounter(
+		crmetrics.Registry,
+		prometheus.CounterOpts{
+			Namespace: metrics.Namespace,
+			Subsystem: podDeletionCostSubsystem,
+			Name:      "nodes_failed_total",
+			Help:      "Number of nodes the pod deletion cost controller could not annotate in total, labeled by reason (pod_list_failed). Node-scoped: one increment stands for every pod on that node, which is why it is not folded into pods_updated_total.",
+		},
+		[]string{reasonLabel},
+	)
 	PodsUpdatedTotal = opmetrics.NewPrometheusCounter(
 		crmetrics.Registry,
 		prometheus.CounterOpts{
 			Namespace: metrics.Namespace,
 			Subsystem: podDeletionCostSubsystem,
 			Name:      "pods_updated_total",
-			Help:      "Number of pod deletion cost annotations updated in total. Labeled by result (success, skipped_customer_managed, error).",
+			Help:      "Number of pods the deletion cost controller processed in total, one increment per pod, labeled by result (success, skipped_customer_managed, skipped_third_party_conflict, skipped_pod_deleted, error).",
 		},
 		[]string{resultLabel},
 	)
