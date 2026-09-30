@@ -139,8 +139,16 @@ func (c *Controller) Reconcile(ctx context.Context) (reconciler.Result, error) {
 }
 
 // shouldSkipUnchanged returns true if cluster state has not changed since the last reconcile.
-// Uses the same ConsolidationState timestamp that gates the disruption controller's consolidation
-// methods, ensuring this controller reacts to the same state changes that trigger consolidation.
+// It reads the same Cluster.ConsolidationState() timestamp that gates consolidation, so this
+// controller wakes on exactly the state changes that make consolidation reconsider a node.
+//
+// Mirrors consolidation.IsConsolidated and consolidation.markConsolidated
+// (disruption/consolidation.go:77-85), deliberately rather than sharing them: those are methods on
+// the disruption consolidation struct, and the cursor advances at a different point. Consolidation
+// splits the read from the write and calls markConsolidated after a pass it chose to act on. This
+// fuses both, advancing the cursor on the decision to proceed, before ranking and annotation run.
+// Consequence: a pass that then fails in RankNodes has already consumed the state change, so it is
+// not retried until the next one arrives. Tracked separately in kp-tdphno4.
 func (c *Controller) shouldSkipUnchanged(ctx context.Context) bool {
 	currentState := c.cluster.ConsolidationState()
 	if currentState.Equal(c.lastConsolidationState) {
