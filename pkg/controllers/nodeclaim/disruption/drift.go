@@ -56,7 +56,7 @@ func (d *Drift) Reconcile(ctx context.Context, nodePool *v1.NodePool, nodeClaim 
 
 	// From here there are three scenarios to handle:
 	// 1. If NodeClaim is not launched, remove the drift status condition
-	if !nodeClaim.StatusConditions().Get(v1.ConditionTypeLaunched).IsTrue() {
+	if !nodeClaim.StatusConditions().IsTrue(v1.ConditionTypeLaunched) {
 		_ = nodeClaim.StatusConditions(clockOpt).Clear(v1.ConditionTypeDrifted)
 		if hasDriftedCondition {
 			log.FromContext(ctx).V(1).Info("removing drift status condition, isn't launched")
