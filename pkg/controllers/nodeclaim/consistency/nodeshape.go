@@ -38,7 +38,7 @@ func (n *NodeShape) Check(_ context.Context, node *corev1.Node, nodeClaim *v1.No
 		return nil, nil
 	}
 	// and NodeClaims that haven't initialized yet
-	if !nodeClaim.StatusConditions().Get(v1.ConditionTypeInitialized).IsTrue() {
+	if !nodeClaim.StatusConditions().IsTrue(v1.ConditionTypeInitialized) {
 		return nil, nil
 	}
 	var issues []Issue

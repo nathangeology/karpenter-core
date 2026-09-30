@@ -210,7 +210,7 @@ func (c *Controller) finalize(ctx context.Context, nodeClaim *v1.NodeClaim) (rec
 	// may result in leaked leases due to a kubelet bug until k8s 1.29. The Node should be garbage collected after the
 	// instance is terminated by CCM.
 	// Upstream Kubelet Fix: https://github.com/kubernetes/kubernetes/pull/119661
-	if nodeClaim.StatusConditions().Get(v1.ConditionTypeRegistered).IsTrue() {
+	if nodeClaim.StatusConditions().IsTrue(v1.ConditionTypeRegistered) {
 		nodes, err := nodeclaimutils.AllNodesForNodeClaim(ctx, c.kubeClient, nodeClaim)
 		if err != nil {
 			return reconcile.Result{}, err

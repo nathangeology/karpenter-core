@@ -53,7 +53,7 @@ func NewStaticDrift(cluster *state.Cluster, provisioner *provisioning.Provisione
 
 // ShouldDisrupt is a predicate used to filter candidates
 func (d *StaticDrift) ShouldDisrupt(_ context.Context, c *Candidate) bool {
-	return c.OwnedByStaticNodePool() && c.NodeClaim.StatusConditions().Get(v1.ConditionTypeDrifted).IsTrue()
+	return c.OwnedByStaticNodePool() && c.NodeClaim.StatusConditions().IsTrue(v1.ConditionTypeDrifted)
 }
 
 func (d *StaticDrift) ComputeCommands(ctx context.Context, disruptionBudgetMapping map[string]int, candidates ...*Candidate) ([]Command, error) {
