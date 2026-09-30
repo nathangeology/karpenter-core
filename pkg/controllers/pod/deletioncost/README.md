@@ -59,6 +59,43 @@ If a third party modifies a Karpenter-managed pod's deletion cost annotation:
 - Skips the pod on future reconciles
 - Emits a `PodDeletionCostThirdPartyConflict` warning event
 
+## Failure Handling
+
+Two rules, by scope.
+
+**Cycle-wide faults return.** `RankNodes` returns its error. The controller logs it, emits
+`PodDeletionCostDisabled`, and requeues. Without a ranking there is nothing to annotate, so the
+cycle has no useful work left.
+
+**Per-pod faults report and continue.** `UpdatePodDeletionCosts` returns nothing. A pod whose
+write fails is logged, counted into `pods_updated_total{result="error"}`, evented as
+`PodDeletionCostUpdateFailed` against that pod, and skipped. The remaining pods are still
+annotated. One unwritable pod does not cost the other 49 nodes their annotations, and the next
+reconcile retries it a minute later.
+
+| Fault | Log | Event | Metric | Aborts cycle |
+|---|---|---|---|---|
+| `RankNodes` failure | `Error` | `PodDeletionCostDisabled` | — | yes |
+| Pod write failure | `Error` | `PodDeletionCostUpdateFailed` (pod-scoped) | `result="error"` | no |
+| Pod write conflict | `V(1)` | — | `result="error"` | no |
+| Third-party conflict | — | `PodDeletionCostThirdPartyConflict` | `result="skipped_customer_managed"` | no |
+| Sentinel removal failure | `Error` | — | `result="error"` | no |
+| Pod gone (`NotFound`) | `V(1)` | — | `result="skipped_customer_managed"` | no |
+| Node pod-list failure | `Error` | — | `result="error"` | no |
+
+The last row is a second guard on a fault the first row already covers. `partitionNodes` calls
+`node.Pods()` for every node before ranking completes, so a node whose pod list cannot be read has
+already failed the cycle through `RankNodes`. The guard in `UpdatePodDeletionCosts` catches only the
+transient case where the same list succeeds during ranking and fails moments later.
+
+Errors are not returned for reporting alone. An error that the caller can only log and swallow is
+better raised where the failing object is still in scope, which is why the pod-scoped event carries
+the pod and a cycle-wide `DisabledEvent` does not.
+
+Requeues stay on the fixed `reconcileInterval`. Returning a non-nil error alongside
+`reconciler.Result{RequeueAfter: ...}` makes controller-runtime race its exponential backoff
+against the explicit interval on a first-wins basis, so the cadence stops being predictable.
+
 ## Consolidation Priority Migration
 
 With this controller auto-managing `pod-deletion-cost` for RS coordination, users who
