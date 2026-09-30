@@ -17,6 +17,8 @@ limitations under the License.
 package deletioncost_test
 
 import (
+	"sync"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/samber/lo"
@@ -178,6 +180,79 @@ var _ = Describe("Controller", func() {
 				Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(pod), updatedPod)).To(Succeed())
 				Expect(updatedPod.Annotations).To(HaveKey(deletioncost.PodDeletionCostAnnotation))
 			}
+		})
+	})
+
+	Context("State snapshot safety", func() {
+		// Reconcile must not retain the *state.StateNode pointers that cluster.Nodes() yields:
+		// that iterator's read-lock is released when it finishes, and Cluster.cleanupNodeClaim
+		// and Cluster.cleanupNode then nil out NodeClaim and Node fields IN PLACE on the same
+		// objects. Ranking nil-checks both fields and dereferences them a line later, so a
+		// retained pointer turns a concurrent NodeClaim deletion into a nil-pointer panic.
+		// Reconcile takes a deep copy instead; these specs delete NodeClaims underneath a live
+		// Reconcile to exercise that. Run with -race to also catch the unsynchronized read.
+		It("should survive NodeClaim deletion concurrent with ranking", func() {
+			nodeClaims, nodes := test.NodeClaimsAndNodes(50, v1.NodeClaim{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{v1.NodePoolLabelKey: nodePool.Name}},
+				Status:     v1.NodeClaimStatus{Allocatable: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("4"), corev1.ResourceMemory: resource.MustParse("8Gi")}},
+			})
+			ExpectApplied(ctx, env.Client, nodePool)
+			for i := range nodeClaims {
+				ExpectApplied(ctx, env.Client, nodeClaims[i], nodes[i])
+				ExpectApplied(ctx, env.Client, test.Pod(test.PodOptions{NodeName: nodes[i].Name}))
+			}
+			ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, nodeStateController, nodeClaimStateController, nodes, nodeClaims)
+
+			controller := deletioncost.NewController(fakeClock, env.Client, cloudProvider, cluster, recorder)
+
+			var wg sync.WaitGroup
+			wg.Add(1)
+			go func() {
+				defer GinkgoRecover()
+				defer wg.Done()
+				// cleanupNodeClaim keeps the StateNode in the map and sets NodeClaim = nil on it,
+				// which is the in-place write a retained pointer would alias.
+				for i := range nodeClaims {
+					ExpectDeleted(ctx, env.Client, nodeClaims[i])
+					ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaims[i]))
+				}
+			}()
+
+			_, err := controller.Reconcile(ctx)
+			wg.Wait()
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("should survive Node deletion concurrent with ranking", func() {
+			nodeClaims, nodes := test.NodeClaimsAndNodes(50, v1.NodeClaim{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{v1.NodePoolLabelKey: nodePool.Name}},
+				Status:     v1.NodeClaimStatus{Allocatable: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("4"), corev1.ResourceMemory: resource.MustParse("8Gi")}},
+			})
+			ExpectApplied(ctx, env.Client, nodePool)
+			for i := range nodeClaims {
+				ExpectApplied(ctx, env.Client, nodeClaims[i], nodes[i])
+				ExpectApplied(ctx, env.Client, test.Pod(test.PodOptions{NodeName: nodes[i].Name}))
+			}
+			ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, nodeStateController, nodeClaimStateController, nodes, nodeClaims)
+
+			controller := deletioncost.NewController(fakeClock, env.Client, cloudProvider, cluster, recorder)
+
+			var wg sync.WaitGroup
+			wg.Add(1)
+			go func() {
+				defer GinkgoRecover()
+				defer wg.Done()
+				// cleanupNode is the Node-field mirror: the NodeClaim is still set, so the
+				// StateNode stays in the map with Node = nil written in place.
+				for i := range nodes {
+					ExpectDeleted(ctx, env.Client, nodes[i])
+					ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(nodes[i]))
+				}
+			}()
+
+			_, err := controller.Reconcile(ctx)
+			wg.Wait()
+			Expect(err).ToNot(HaveOccurred())
 		})
 	})
 })

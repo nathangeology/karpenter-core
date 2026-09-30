@@ -98,10 +98,10 @@ func (c *Controller) Reconcile(ctx context.Context) (reconciler.Result, error) {
 		return reconciler.Result{RequeueAfter: reconcileInterval}, nil
 	}
 
-	var nodes []*state.StateNode
-	for node := range c.cluster.Nodes() {
-		nodes = append(nodes, node)
-	}
+	// DeepCopyNodes rather than ranging over cluster.Nodes(): that iterator holds a read-lock
+	// released once it finishes, and its contract forbids retaining the StateNode pointers it
+	// yields. Ranking and annotation below both read the nodes after the iteration would end.
+	nodes := c.cluster.DeepCopyNodes()
 
 	if len(nodes) == 0 {
 		return reconciler.Result{RequeueAfter: reconcileInterval}, nil
