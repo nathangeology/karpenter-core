@@ -30,6 +30,7 @@ import (
 	"sigs.k8s.io/karpenter/pkg/apis/v1alpha1"
 	"sigs.k8s.io/karpenter/pkg/cloudprovider"
 	"sigs.k8s.io/karpenter/pkg/scheduling"
+	nodepoolutils "sigs.k8s.io/karpenter/pkg/utils/nodepool"
 )
 
 // DefaultTerminationGracePeriod is used as runtime defaulting for TerminationGracePeriod on the NodeClaim
@@ -70,7 +71,7 @@ func NewNodeClaimTemplate(nodePool *v1.NodePool) *NodeClaimTemplate {
 		NodePoolUUID:      nodePool.UID,
 		NodePoolWeight:    lo.FromPtr(nodePool.Spec.Weight),
 		Requirements:      scheduling.NewRequirements(),
-		IsStaticNodeClaim: nodePool.Spec.Replicas != nil,
+		IsStaticNodeClaim: nodepoolutils.IsStatic(nodePool),
 	}
 	nct.Annotations = lo.Assign(nct.Annotations, map[string]string{
 		v1.NodePoolHashAnnotationKey:        nodePool.Hash(),
