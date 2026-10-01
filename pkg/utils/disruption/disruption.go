@@ -127,6 +127,7 @@ func EvictionCost(ctx context.Context, p *corev1.Pod) float64 {
 		cost += float64(*p.Spec.Priority) / math.Pow(2, 25)
 	}
 
+	// overall we clamp the pod cost to the range [-10.0, 10.0] with the default being 1.0
 	return lo.Clamp(cost, -10.0, 10.0)
 }
 
