@@ -47,12 +47,20 @@ const (
 
 // Karpenter specific annotations
 const (
-	DoNotDisruptAnnotationKey                  = apis.Group + "/do-not-disrupt"
+	DoNotDisruptAnnotationKey = apis.Group + "/do-not-disrupt"
+	// DoNotRepairAnnotationKey vetoes voluntary node repair on a node, distinct from do-not-disrupt.
+	DoNotRepairAnnotationKey                   = apis.Group + "/do-not-repair"
 	ProviderCompatibilityAnnotationKey         = apis.CompatibilityGroup + "/provider"
 	NodePoolHashAnnotationKey                  = apis.Group + "/nodepool-hash"
 	NodePoolHashVersionAnnotationKey           = apis.Group + "/nodepool-hash-version"
 	NodeClaimTerminationTimestampAnnotationKey = apis.Group + "/nodeclaim-termination-timestamp"
 	NodeClaimMinValuesRelaxedAnnotationKey     = apis.Group + "/nodeclaim-min-values-relaxed"
+	RebootPreBootIDAnnotationKey               = apis.Group + "/reboot-pre-boot-id"
+	RebootTerminationGracePeriodAnnotationKey  = apis.Group + "/reboot-termination-grace-period"
+	// DRADriversAnnotationKey records the comma-separated set of DRA driver names whose devices were allocated to pods
+	// scheduled to this NodeClaim. The initialization controller can gate on these drivers having published their
+	// ResourceSlices before marking the node initialized.
+	DRADriversAnnotationKey = apis.Group + "/requested-dra-drivers"
 )
 
 // Karpenter specific finalizers
@@ -121,6 +129,13 @@ var (
 		v1.LabelInstanceType:            v1.LabelInstanceTypeStable,
 		v1.LabelFailureDomainBetaRegion: v1.LabelTopologyRegion,
 	}
+
+	// NormalizedLabelValues translates label values when a label key is normalized
+	// via NormalizedLabels. The map key is the normalized (target) label key, and
+	// the value is a map from original values to their normalized equivalents.
+	// For example, a CSI driver may use "" for non-zonal topology while the cloud
+	// provider uses "0" — this mapping bridges that gap.
+	NormalizedLabelValues = map[string]map[string]string{}
 )
 
 // IsRestrictedLabel returns an error if the label is restricted.

@@ -28,6 +28,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/samber/lo"
+	corev1 "k8s.io/api/core/v1"
 
 	"sigs.k8s.io/karpenter/pkg/operator/options"
 	"sigs.k8s.io/karpenter/pkg/test"
@@ -65,6 +66,7 @@ var _ = Describe("Options", func() {
 		"PREFERENCE_POLICY",
 		"MIN_VALUES_POLICY",
 		"FEATURE_GATES",
+		"SCHEDULER_CONFIG",
 	}
 
 	BeforeEach(func() {
@@ -126,8 +128,10 @@ var _ = Describe("Options", func() {
 					SpotToSpotConsolidation: new(false),
 					NodeOverlay:             new(false),
 					StaticCapacity:          new(false),
+					CapacityBuffer:          new(false),
 				},
 				IgnoreDRARequests: new(true),
+				SchedulerConfig:   nil,
 			}))
 		})
 
@@ -155,7 +159,8 @@ var _ = Describe("Options", func() {
 				"--batch-idle-duration", "5s",
 				"--preference-policy", "Ignore",
 				"--min-values-policy", "BestEffort",
-				"--feature-gates", "ReservedCapacity=false,SpotToSpotConsolidation=true,NodeRepair=true,NodeOverlay=true,StaticCapacity=true",
+				"--feature-gates", "ReservedCapacity=false,SpotToSpotConsolidation=true,NodeRepair=true,NodeOverlay=true,StaticCapacity=true,CapacityBuffer=true",
+				"--scheduler-config", `{"podTopologySpread":{"defaultConstraints":[{"maxSkew":1,"topologyKey":"topology.kubernetes.io/zone","whenUnsatisfiable":"ScheduleAnyway"}]}}`,
 			)
 			Expect(err).To(BeNil())
 			expectOptionsMatch(opts, test.Options(test.OptionsFields{
@@ -184,8 +189,18 @@ var _ = Describe("Options", func() {
 					SpotToSpotConsolidation: new(true),
 					NodeOverlay:             new(true),
 					StaticCapacity:          new(true),
+					CapacityBuffer:          new(true),
 				},
 				IgnoreDRARequests: new(true),
+				SchedulerConfig: &options.SchedulerConfiguration{
+					PodTopologySpread: &options.PodTopologySpreadConfig{
+						DefaultConstraints: []corev1.TopologySpreadConstraint{{
+							MaxSkew:           1,
+							TopologyKey:       "topology.kubernetes.io/zone",
+							WhenUnsatisfiable: corev1.ScheduleAnyway,
+						}},
+					},
+				},
 			}))
 		})
 
@@ -209,7 +224,8 @@ var _ = Describe("Options", func() {
 			os.Setenv("BATCH_IDLE_DURATION", "5s")
 			os.Setenv("PREFERENCE_POLICY", "Ignore")
 			os.Setenv("MIN_VALUES_POLICY", "BestEffort")
-			os.Setenv("FEATURE_GATES", "ReservedCapacity=false,SpotToSpotConsolidation=true,NodeRepair=true,NodeOverlay=true,StaticCapacity=true")
+			os.Setenv("FEATURE_GATES", "ReservedCapacity=false,SpotToSpotConsolidation=true,NodeRepair=true,NodeOverlay=true,StaticCapacity=true,CapacityBuffer=true")
+			os.Setenv("SCHEDULER_CONFIG", `{"podTopologySpread":{"defaultConstraints":[{"maxSkew":1,"topologyKey":"topology.kubernetes.io/zone","whenUnsatisfiable":"ScheduleAnyway"}]}}`)
 			fs = &options.FlagSet{
 				FlagSet: flag.NewFlagSet("karpenter", flag.ContinueOnError),
 			}
@@ -242,8 +258,18 @@ var _ = Describe("Options", func() {
 					SpotToSpotConsolidation: new(true),
 					NodeOverlay:             new(true),
 					StaticCapacity:          new(true),
+					CapacityBuffer:          new(true),
 				},
 				IgnoreDRARequests: new(true),
+				SchedulerConfig: &options.SchedulerConfiguration{
+					PodTopologySpread: &options.PodTopologySpreadConfig{
+						DefaultConstraints: []corev1.TopologySpreadConstraint{{
+							MaxSkew:           1,
+							TopologyKey:       "topology.kubernetes.io/zone",
+							WhenUnsatisfiable: corev1.ScheduleAnyway,
+						}},
+					},
+				},
 			}))
 		})
 
@@ -262,7 +288,7 @@ var _ = Describe("Options", func() {
 			os.Setenv("BATCH_IDLE_DURATION", "5s")
 			os.Setenv("PREFERENCE_POLICY", "Ignore")
 			os.Setenv("MIN_VALUES_POLICY", "BestEffort")
-			os.Setenv("FEATURE_GATES", "ReservedCapacity=false,SpotToSpotConsolidation=true,NodeRepair=true,NodeOverlay=true,StaticCapacity=true")
+			os.Setenv("FEATURE_GATES", "ReservedCapacity=false,SpotToSpotConsolidation=true,NodeRepair=true,NodeOverlay=true,StaticCapacity=true,CapacityBuffer=true")
 			fs = &options.FlagSet{
 				FlagSet: flag.NewFlagSet("karpenter", flag.ContinueOnError),
 			}
@@ -302,6 +328,7 @@ var _ = Describe("Options", func() {
 					SpotToSpotConsolidation: new(true),
 					NodeOverlay:             new(true),
 					StaticCapacity:          new(true),
+					CapacityBuffer:          new(true),
 				},
 				IgnoreDRARequests: new(true),
 			}))
@@ -335,6 +362,9 @@ var _ = Describe("Options", func() {
 			Entry("when SpotToSpotConsolidation is overridden", "SpotToSpotConsolidation"),
 			Entry("when NodeOverlay is overridden", "NodeOverlay"),
 			Entry("when StaticCapacity is overridden", "StaticCapacity"),
+			Entry("when CapacityBuffer is overridden", "CapacityBuffer"),
+			Entry("when TerminateFirstDrift is overridden", "TerminateFirstDrift"),
+			Entry("when TerminateFirstRepair is overridden", "TerminateFirstRepair"),
 		)
 	})
 
@@ -376,6 +406,150 @@ var _ = Describe("Options", func() {
 
 })
 
+var _ = Describe("SchedulerConfiguration", func() {
+	Context("ParseSchedulerConfiguration", func() {
+		It("should return a nil configuration for an empty value", func() {
+			cfg, err := options.ParseSchedulerConfiguration("")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(cfg).To(BeNil())
+		})
+		It("should parse a valid podTopologySpread.defaultConstraints document", func() {
+			cfg, err := options.ParseSchedulerConfiguration(`
+podTopologySpread:
+  defaultConstraints:
+    - maxSkew: 1
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: ScheduleAnyway
+    - maxSkew: 3
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: DoNotSchedule
+`)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(cfg).ToNot(BeNil())
+			Expect(cfg.PodTopologySpread).ToNot(BeNil())
+			Expect(cfg.PodTopologySpread.DefaultConstraints).To(HaveLen(2))
+			Expect(cfg.PodTopologySpread.DefaultConstraints[0].MaxSkew).To(BeEquivalentTo(1))
+			Expect(cfg.PodTopologySpread.DefaultConstraints[0].TopologyKey).To(Equal("topology.kubernetes.io/zone"))
+			Expect(cfg.PodTopologySpread.DefaultConstraints[0].WhenUnsatisfiable).To(Equal(corev1.ScheduleAnyway))
+			Expect(cfg.PodTopologySpread.DefaultConstraints[1].WhenUnsatisfiable).To(Equal(corev1.DoNotSchedule))
+		})
+		It("should parse an equivalent JSON document", func() {
+			cfg, err := options.ParseSchedulerConfiguration(`{"podTopologySpread":{"defaultConstraints":[{"maxSkew":1,"topologyKey":"topology.kubernetes.io/zone","whenUnsatisfiable":"ScheduleAnyway"}]}}`)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(cfg.PodTopologySpread.DefaultConstraints).To(HaveLen(1))
+		})
+		It("should fail fast on an unknown field", func() {
+			_, err := options.ParseSchedulerConfiguration(`
+podTopologySpread:
+  defaultConstraints:
+    - maxSkew: 1
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: ScheduleAnyway
+notARealField: true
+`)
+			Expect(err).To(HaveOccurred())
+		})
+		It("should fail on malformed YAML", func() {
+			_, err := options.ParseSchedulerConfiguration(`podTopologySpread: {`)
+			Expect(err).To(HaveOccurred())
+		})
+		It("should reject a non-positive maxSkew", func() {
+			_, err := options.ParseSchedulerConfiguration(`
+podTopologySpread:
+  defaultConstraints:
+    - maxSkew: 0
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: ScheduleAnyway
+`)
+			Expect(err).To(HaveOccurred())
+		})
+		It("should reject a missing topologyKey", func() {
+			_, err := options.ParseSchedulerConfiguration(`
+podTopologySpread:
+  defaultConstraints:
+    - maxSkew: 1
+      whenUnsatisfiable: ScheduleAnyway
+`)
+			Expect(err).To(HaveOccurred())
+		})
+		It("should reject a labelSelector", func() {
+			// Upstream forbids this because selectors are deduced per pod. Accepting one would silently diverge: a
+			// static selector matches an unrelated set of pods in every other workload.
+			_, err := options.ParseSchedulerConfiguration(`
+podTopologySpread:
+  defaultConstraints:
+    - maxSkew: 1
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: ScheduleAnyway
+      labelSelector:
+        matchLabels:
+          app: test
+`)
+			Expect(err).To(HaveOccurred())
+		})
+		It("should reject matchLabelKeys", func() {
+			// matchLabelKeys is inert upstream, since the deduced selector overwrites whatever it merged in.
+			_, err := options.ParseSchedulerConfiguration(`
+podTopologySpread:
+  defaultConstraints:
+    - maxSkew: 1
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: ScheduleAnyway
+      matchLabelKeys:
+        - pod-template-hash
+`)
+			Expect(err).To(HaveOccurred())
+		})
+		It("should reject a topologyKey that isn't a valid label name", func() {
+			_, err := options.ParseSchedulerConfiguration(`
+podTopologySpread:
+  defaultConstraints:
+    - maxSkew: 1
+      topologyKey: "not a valid label name"
+      whenUnsatisfiable: ScheduleAnyway
+`)
+			Expect(err).To(HaveOccurred())
+		})
+		It("should reject a duplicated topologyKey and whenUnsatisfiable pair", func() {
+			_, err := options.ParseSchedulerConfiguration(`
+podTopologySpread:
+  defaultConstraints:
+    - maxSkew: 1
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: ScheduleAnyway
+    - maxSkew: 3
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: ScheduleAnyway
+`)
+			Expect(err).To(HaveOccurred())
+		})
+		It("should allow the same topologyKey with a different whenUnsatisfiable", func() {
+			cfg, err := options.ParseSchedulerConfiguration(`
+podTopologySpread:
+  defaultConstraints:
+    - maxSkew: 1
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: ScheduleAnyway
+    - maxSkew: 3
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: DoNotSchedule
+`)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(cfg.PodTopologySpread.DefaultConstraints).To(HaveLen(2))
+		})
+		It("should reject an invalid whenUnsatisfiable", func() {
+			_, err := options.ParseSchedulerConfiguration(`
+podTopologySpread:
+  defaultConstraints:
+    - maxSkew: 1
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: Sometimes
+`)
+			Expect(err).To(HaveOccurred())
+		})
+	})
+})
+
 func expectOptionsMatch(optsA, optsB *options.Options) {
 	GinkgoHelper()
 	if optsA == nil && optsB == nil {
@@ -404,6 +578,10 @@ func expectOptionsMatch(optsA, optsB *options.Options) {
 	Expect(optsA.FeatureGates.NodeRepair).To(Equal(optsB.FeatureGates.NodeRepair))
 	Expect(optsA.FeatureGates.NodeOverlay).To(Equal(optsB.FeatureGates.NodeOverlay))
 	Expect(optsA.FeatureGates.StaticCapacity).To(Equal(optsB.FeatureGates.StaticCapacity))
+	Expect(optsA.FeatureGates.CapacityBuffer).To(Equal(optsB.FeatureGates.CapacityBuffer))
 	Expect(optsA.FeatureGates.SpotToSpotConsolidation).To(Equal(optsB.FeatureGates.SpotToSpotConsolidation))
+	Expect(optsA.FeatureGates.TerminateFirstDrift).To(Equal(optsB.FeatureGates.TerminateFirstDrift))
+	Expect(optsA.FeatureGates.TerminateFirstRepair).To(Equal(optsB.FeatureGates.TerminateFirstRepair))
 	Expect(optsA.IgnoreDRARequests).To(Equal(optsB.IgnoreDRARequests))
+	Expect(optsA.SchedulerConfig).To(Equal(optsB.SchedulerConfig))
 }

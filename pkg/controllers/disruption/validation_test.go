@@ -33,7 +33,7 @@ import (
 )
 
 func NewMethodsWithRealValidator() []disruption.Method {
-	return disruption.NewMethods(env.Clock, cluster, env.Client, prov, cloudProvider, recorder, queue)
+	return disruption.NewMethods(ctx, env.Clock, cluster, env.Client, prov, cloudProvider, recorder, queue)
 }
 
 type NopValidator struct{}
@@ -48,9 +48,9 @@ func NewMethodsWithNopValidator() []disruption.Method {
 	multiNodeConsolidation := disruption.NewMultiNodeConsolidation(c, disruption.WithValidator(NopValidator{}))
 	singleNodeConsolidation := disruption.NewSingleNodeConsolidation(c, disruption.WithValidator(NopValidator{}))
 	return []disruption.Method{
-		emptiness,
 		disruption.NewStaticDrift(cluster, prov, cloudProvider),
 		disruption.NewDrift(env.Client, cluster, prov, recorder, env.Clock),
+		emptiness,
 		multiNodeConsolidation,
 		singleNodeConsolidation,
 	}
