@@ -893,6 +893,34 @@ var _ = Describe("BuildDisruptionBudgetMapping", func() {
 		Expect(err).To(Succeed())
 		Expect(budgets[nodePool.Name]).To(Equal(8))
 	})
+	// BuildDisruptionBudgetMapping and NodePoolBudgetMap are the two entry points to
+	// the same allowed-minus-disrupting clamp: the disruption loop reaches it here,
+	// the pod-deletion-cost ranking reaches it through NodePoolBudgetMap. Pinning
+	// them to each other is what stops one from drifting, which is how they came to
+	// differ before (only one logged the clamp).
+	DescribeTable("should agree with NodePoolBudgetMap on the remaining budget",
+		func(budget string, expected int) {
+			nodePool.Spec.Disruption.Budgets = []v1.Budget{{Nodes: budget}}
+			ExpectApplied(ctx, env.Client, nodePool)
+			cluster.MarkForDeletion(nodeClaims[0].Status.ProviderID, nodeClaims[1].Status.ProviderID, nodeClaims[2].Status.ProviderID)
+
+			for _, reason := range allKnownDisruptionReasons {
+				numNodes, disrupting := disruption.NodePoolStats(cluster, reason)
+				Expect(disrupting[nodePool.Name]).To(Equal(3), "marked-for-deletion nodes count against every reason")
+
+				budgets, err := disruption.BuildDisruptionBudgetMapping(ctx, cluster, env.Clock, env.Client, cloudProvider, recorder, reason)
+				Expect(err).To(Succeed())
+				shared := disruption.NodePoolBudgetMap(ctx, env.Clock, map[string]*v1.NodePool{nodePool.Name: nodePool}, numNodes, disrupting, reason)
+
+				Expect(budgets[nodePool.Name]).To(Equal(expected))
+				Expect(shared[nodePool.Name]).To(Equal(budgets[nodePool.Name]), "both budget entry points must clamp identically for reason %s", reason)
+			}
+		},
+		// 10 nodes, 3 of them disrupting. 0 allowed goes negative and clamps; 50%
+		// allows 5 and leaves 2, so the unclamped arithmetic is pinned too.
+		Entry("exhausted budget clamps to zero", "0", 0),
+		Entry("partially consumed budget keeps the remainder", "50%", 2),
+	)
 })
 
 var _ = Describe("Pod Eviction Cost", func() {
