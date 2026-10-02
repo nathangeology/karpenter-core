@@ -50,6 +50,19 @@ func (c *pdbListFailingClient) List(ctx context.Context, list client.ObjectList,
 	return c.Client.List(ctx, list, opts...)
 }
 
+// BuildNodePoolMap runs before RankNodes, so a NodePool list failure aborts the
+// cycle ahead of the PDB list the other two clients break.
+type nodePoolListFailingClient struct {
+	client.Client
+}
+
+func (c *nodePoolListFailingClient) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	if _, ok := list.(*v1.NodePoolList); ok {
+		return errors.New("simulated NodePool list failure for test")
+	}
+	return c.Client.List(ctx, list, opts...)
+}
+
 type toggleablePDBListFailingClient struct {
 	client.Client
 	fail bool
@@ -360,6 +373,33 @@ var _ = Describe("Controller", func() {
 		Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(pod), afterSecond)).To(Succeed())
 		Expect(afterSecond.ResourceVersion).To(Equal(afterFirst.ResourceVersion),
 			"second reconcile should have taken the change-detection short-circuit and not enqueued the pod")
+	})
+
+	// The only pre-enqueue failure surface the suite covered was the PDB list
+	// inside RankNodes. BuildNodePoolMap runs first and its error is wrapped with a
+	// different message, so the assertion on the message is what distinguishes the
+	// two paths rather than just re-testing "Reconcile can fail".
+	It("should _Edge_ surface a NodePool list failure and annotate nothing", func() {
+		nodeClaims, nodes := test.NodeClaimsAndNodes(1, v1.NodeClaim{
+			ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{v1.NodePoolLabelKey: nodePool.Name}},
+			Status:     v1.NodeClaimStatus{Allocatable: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("4"), corev1.ResourceMemory: resource.MustParse("8Gi")}},
+		})
+		ExpectApplied(ctx, env.Client, nodePool)
+		ExpectApplied(ctx, env.Client, nodeClaims[0], nodes[0])
+		pod := rsOwnedPod(test.PodOptions{NodeName: nodes[0].Name})
+		ExpectApplied(ctx, env.Client, pod)
+		ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, env.Clock, nodeStateController, nodeClaimStateController, nodes, nodeClaims)
+
+		failing := &nodePoolListFailingClient{Client: env.Client}
+		controller := deletioncost.NewController(env.Clock, failing, cloudProvider, cluster, queue)
+		_, err := controller.Reconcile(ctx)
+		Expect(err).To(MatchError(ContainSubstring("building node pool map")),
+			"the NodePool list failure must surface from BuildNodePoolMap, not from the PDB list inside RankNodes")
+
+		Expect(queue.Has(pod)).To(BeFalse())
+		observed := &corev1.Pod{}
+		Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(pod), observed)).To(Succeed())
+		Expect(observed.Annotations).ToNot(HaveKey(corev1.PodDeletionCost))
 	})
 
 	// Cap-boundary cases live in ranking_test.go's "Bounded labeling" Context;
