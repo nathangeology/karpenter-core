@@ -50,6 +50,19 @@ func (c *pdbListFailingClient) List(ctx context.Context, list client.ObjectList,
 	return c.Client.List(ctx, list, opts...)
 }
 
+// BuildNodePoolMap runs before RankNodes, so a NodePool list failure aborts the
+// cycle ahead of the PDB list the other two clients break.
+type nodePoolListFailingClient struct {
+	client.Client
+}
+
+func (c *nodePoolListFailingClient) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	if _, ok := list.(*v1.NodePoolList); ok {
+		return errors.New("simulated NodePool list failure for test")
+	}
+	return c.Client.List(ctx, list, opts...)
+}
+
 type toggleablePDBListFailingClient struct {
 	client.Client
 	fail bool
@@ -360,6 +373,103 @@ var _ = Describe("Controller", func() {
 		Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(pod), afterSecond)).To(Succeed())
 		Expect(afterSecond.ResourceVersion).To(Equal(afterFirst.ResourceVersion),
 			"second reconcile should have taken the change-detection short-circuit and not enqueued the pod")
+	})
+
+	// The only pre-enqueue failure surface the suite covered was the PDB list
+	// inside RankNodes. BuildNodePoolMap runs first and its error is wrapped with a
+	// different message, so the assertion on the message is what distinguishes the
+	// two paths rather than just re-testing "Reconcile can fail".
+	It("should _Edge_ surface a NodePool list failure and annotate nothing", func() {
+		nodeClaims, nodes := test.NodeClaimsAndNodes(1, v1.NodeClaim{
+			ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{v1.NodePoolLabelKey: nodePool.Name}},
+			Status:     v1.NodeClaimStatus{Allocatable: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("4"), corev1.ResourceMemory: resource.MustParse("8Gi")}},
+		})
+		ExpectApplied(ctx, env.Client, nodePool)
+		ExpectApplied(ctx, env.Client, nodeClaims[0], nodes[0])
+		pod := rsOwnedPod(test.PodOptions{NodeName: nodes[0].Name})
+		ExpectApplied(ctx, env.Client, pod)
+		ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, env.Clock, nodeStateController, nodeClaimStateController, nodes, nodeClaims)
+
+		failing := &nodePoolListFailingClient{Client: env.Client}
+		controller := deletioncost.NewController(env.Clock, failing, cloudProvider, cluster, queue)
+		_, err := controller.Reconcile(ctx)
+		Expect(err).To(MatchError(ContainSubstring("building node pool map")),
+			"the NodePool list failure must surface from BuildNodePoolMap, not from the PDB list inside RankNodes")
+
+		Expect(queue.Has(pod)).To(BeFalse())
+		observed := &corev1.Pod{}
+		Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(pod), observed)).To(Succeed())
+		Expect(observed.Annotations).ToNot(HaveKey(corev1.PodDeletionCost))
+	})
+
+	// The Reset before the Set exists so a NodePool whose count fell to zero stops
+	// reporting its last non-zero value. One NodePool cannot observe it: with a
+	// single pool the stale series and the fresh one carry the same label set, so
+	// the Set overwrites what the Reset would have dropped. Two pools, one of which
+	// stops contributing, is the smallest fixture that can fail if the Reset goes.
+	It("should _Edge_ drop the gauge series for a NodePool that stops contributing", func() {
+		otherPool := test.NodePool()
+		otherPool.Name = "other-pool"
+		otherPool.Spec.Disruption.ConsolidateAfter = v1.MustParseNillableDuration("0s")
+		otherPool.Spec.Disruption.Budgets = []v1.Budget{{Nodes: "100%"}}
+		ExpectApplied(ctx, env.Client, nodePool, otherPool)
+
+		ncA, nodeA := test.NodeClaimAndNode(v1.NodeClaim{
+			ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{v1.NodePoolLabelKey: nodePool.Name}},
+			Status:     v1.NodeClaimStatus{Allocatable: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("4"), corev1.ResourceMemory: resource.MustParse("8Gi")}},
+		})
+		ncB, nodeB := test.NodeClaimAndNode(v1.NodeClaim{
+			ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{v1.NodePoolLabelKey: otherPool.Name}},
+			Status:     v1.NodeClaimStatus{Allocatable: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("4"), corev1.ResourceMemory: resource.MustParse("8Gi")}},
+		})
+		ExpectApplied(ctx, env.Client, ncA, nodeA, ncB, nodeB)
+		podA := rsOwnedPod(test.PodOptions{NodeName: nodeA.Name})
+		podB := rsOwnedPod(test.PodOptions{NodeName: nodeB.Name})
+		ExpectApplied(ctx, env.Client, podA, podB)
+		ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, env.Clock,
+			nodeStateController, nodeClaimStateController,
+			[]*corev1.Node{nodeA, nodeB}, []*v1.NodeClaim{ncA, ncB})
+
+		controller := deletioncost.NewController(env.Clock, env.Client, cloudProvider, cluster, queue)
+		_, err := controller.Reconcile(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(nodesWithPendingAnnotationWritesGauge(map[string]string{metrics.NodePoolLabel: nodePool.Name})).To(Equal(1.0))
+		Expect(nodesWithPendingAnnotationWritesGauge(map[string]string{metrics.NodePoolLabel: otherPool.Name})).To(Equal(1.0))
+		ExpectObjectReconciled(ctx, env.Client, queue, podA)
+		ExpectObjectReconciled(ctx, env.Client, queue, podB)
+
+		// Cluster.MarkUnconsolidated stamps ConsolidationState with clock.Now(), so
+		// under a fake clock a state change at the same instant is invisible to the
+		// controller's change detection and the second Reconcile short-circuits. One
+		// minute is enough to separate the stamps and stays under the 5-minute
+		// ConsolidationState refresh, so the deletion below is what has to move the
+		// cursor rather than that timer.
+		env.Clock.Step(time.Minute)
+
+		// Removing nodeB bumps ConsolidationState past the unchanged-state
+		// short-circuit and leaves otherPool with nothing to enqueue.
+		ExpectDeleted(ctx, env.Client, podB, nodeB, ncB)
+		ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(nodeB))
+		ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(ncB))
+
+		// Strips podA's annotation so nodePool re-enqueues whichever rank it drew in
+		// the first cycle. Without this the assertion depends on the rank shifting
+		// from -2 to -1, which holds only for one of the two node-name orderings.
+		storedA := &corev1.Pod{}
+		Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(podA), storedA)).To(Succeed())
+		delete(storedA.Annotations, corev1.PodDeletionCost)
+		Expect(env.Client.Update(ctx, storedA)).To(Succeed())
+
+		_, err = controller.Reconcile(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(nodesWithPendingAnnotationWritesGauge(map[string]string{metrics.NodePoolLabel: nodePool.Name})).To(Equal(1.0),
+			"the still-contributing NodePool must keep reporting its count")
+		_, found := FindMetricWithLabelValues(
+			"karpenter_pod_deletion_cost_nodes_with_pending_annotation_writes",
+			map[string]string{metrics.NodePoolLabel: otherPool.Name},
+		)
+		Expect(found).To(BeFalse(),
+			"the NodePool that stopped contributing must have its series dropped, not left at its last non-zero value")
 	})
 
 	// Cap-boundary cases live in ranking_test.go's "Bounded labeling" Context;
