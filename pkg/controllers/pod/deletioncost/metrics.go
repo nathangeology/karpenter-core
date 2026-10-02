@@ -82,3 +82,13 @@ var (
 		opmetrics.Alpha,
 	)
 )
+
+func init() {
+	// Initialize every result series to 0 so a rate() or ratio over an outcome
+	// that has not happened yet returns 0 instead of no-data. Queue.Reconcile
+	// increments all five, so all five are pre-initialized; compare
+	// disruption/metrics.go, which pre-initializes only the reachable subset.
+	for _, result := range Result.Values {
+		podAnnotationWritesTotal.Add(0, map[string]string{resultLabel: result.Name})
+	}
+}
