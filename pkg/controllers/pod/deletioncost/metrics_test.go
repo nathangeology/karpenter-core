@@ -58,6 +58,18 @@ var _ = Describe("Metrics", func() {
 		nodePool.Spec.Disruption.Budgets = []v1.Budget{{Nodes: "100%"}}
 	})
 
+	// Pins metrics.go's init(). Every other spec here increments a series as a side
+	// effect, and the process-global registry keeps it, so this only gates when run
+	// focused or first; it cannot produce a false red, since presence only grows.
+	It("should pre-initialize a pod_annotation_writes_total series for every declared result value", func() {
+		for _, result := range deletioncost.Result.Values {
+			_, ok := FindMetricWithLabelValues("karpenter_pod_deletion_cost_pod_annotation_writes_total",
+				map[string]string{deletioncost.Result.Name: result.Name})
+			Expect(ok).To(BeTrue(),
+				"result=%s must exist at 0 so a rate() or ratio over an outcome that has not happened yet returns 0, not no-data", result.Name)
+		}
+	})
+
 	It("should set nodes_with_pending_annotation_writes to the number of nodes enqueued in the last reconcile", func() {
 		nodeClaims, nodes := test.NodeClaimsAndNodes(3, v1.NodeClaim{
 			ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{v1.NodePoolLabelKey: nodePool.Name}},
