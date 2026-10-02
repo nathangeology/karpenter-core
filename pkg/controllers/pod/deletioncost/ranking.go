@@ -213,8 +213,14 @@ func isGoingAway(node *state.StateNode) bool {
 // isDrifted mirrors drift.ShouldDisrupt. Static-pool nodes are excluded because
 // StaticDrift acts on them separately.
 //
-// TODO: the drift-condition read and IsStatic gate are duplicated in
-// disruption/drift.go and disruption/staticdrift.go; dedupe in a follow-up.
+// The mirror is deliberate, not pending cleanup. drift.ShouldDisrupt and
+// StaticDrift.ShouldDisrupt gate on the same static test in opposite directions,
+// so there is no one composition all three sites could call; what they share are
+// the primitives, nodepoolutils.IsStatic for the gate and ConditionSet.IsTrue for
+// the condition read. Calling drift.ShouldDisrupt directly would need a
+// state.StateNode to *Candidate adapter, and disruption.NewCandidate publishes
+// Blocked events and consults the orchestration queue, neither of which a ranking
+// pass may do.
 func isDrifted(node *state.StateNode, nodePoolMap map[string]*v1.NodePool) bool {
 	if node.NodeClaim == nil {
 		return false
@@ -222,7 +228,7 @@ func isDrifted(node *state.StateNode, nodePoolMap map[string]*v1.NodePool) bool 
 	if np := nodePoolMap[node.Labels()[v1.NodePoolLabelKey]]; np != nil && nodepoolutils.IsStatic(np) {
 		return false
 	}
-	return node.NodeClaim.StatusConditions().Get(v1.ConditionTypeDrifted).IsTrue()
+	return node.NodeClaim.StatusConditions().IsTrue(v1.ConditionTypeDrifted)
 }
 
 // Controllers that replace a pod they own somewhere else in the cluster, so a
