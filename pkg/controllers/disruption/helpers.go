@@ -330,21 +330,37 @@ func NodePoolStats(cluster *state.Cluster, reason v1.DisruptionReason) (numNodes
 	return NodePoolStatsFromNodes(cluster.DeepCopyNodes(), reason)
 }
 
+// NodePoolBudget is one NodePool's disruption budget for one reason. Allowed is
+// what the NodePool grants; Remaining is what is left after the nodes already
+// disrupting against that reason, clamped at zero. BuildDisruptionBudgetMapping
+// needs both, the pod-deletion-cost ranking needs only Remaining.
+type NodePoolBudget struct {
+	Allowed   int
+	Remaining int
+}
+
+// nodePoolBudget is the single definition of the allowed-minus-disrupting clamp.
+// Both NodePoolBudgetMap and BuildDisruptionBudgetMapping go through it so the
+// clamp and its log cannot drift apart.
+func nodePoolBudget(ctx context.Context, clk clock.Clock, np *v1.NodePool, numNodes, disrupting int, reason v1.DisruptionReason) NodePoolBudget {
+	allowed := np.MustGetAllowedDisruptions(clk, numNodes, reason)
+	remaining := allowed - disrupting
+	if remaining < 0 {
+		log.FromContext(ctx).V(1).WithValues(
+			"nodePool", np.Name,
+			"reason", string(reason),
+			"allowed", allowed,
+			"disrupting", disrupting,
+		).Info("disruption budget already exhausted; clamping to 0")
+		remaining = 0
+	}
+	return NodePoolBudget{Allowed: allowed, Remaining: remaining}
+}
+
 func NodePoolBudgetMap(ctx context.Context, clk clock.Clock, nodePools map[string]*v1.NodePool, numNodes, disrupting map[string]int, reason v1.DisruptionReason) map[string]int {
 	out := map[string]int{}
 	for name, np := range nodePools {
-		allowed := np.MustGetAllowedDisruptions(clk, numNodes[name], reason)
-		remaining := allowed - disrupting[name]
-		if remaining < 0 {
-			log.FromContext(ctx).V(1).WithValues(
-				"nodePool", name,
-				"reason", string(reason),
-				"allowed", allowed,
-				"disrupting", disrupting[name],
-			).Info("disruption budget already exhausted; clamping to 0")
-			remaining = 0
-		}
-		out[name] = remaining
+		out[name] = nodePoolBudget(ctx, clk, np, numNodes[name], disrupting[name], reason).Remaining
 	}
 	return out
 }
@@ -401,15 +417,15 @@ func BuildDisruptionBudgetMapping(ctx context.Context, cluster *state.Cluster, c
 		return disruptionBudgetMapping, fmt.Errorf("listing node pools, %w", err)
 	}
 	for _, nodePool := range nodePools {
-		allowedDisruptions := nodePool.MustGetAllowedDisruptions(clk, numNodes[nodePool.Name], reason)
-		disruptionBudgetMapping[nodePool.Name] = lo.Max([]int{allowedDisruptions - disrupting[nodePool.Name], 0})
-		NodePoolAllowedDisruptions.Set(float64(allowedDisruptions), map[string]string{
+		budget := nodePoolBudget(ctx, clk, nodePool, numNodes[nodePool.Name], disrupting[nodePool.Name], reason)
+		disruptionBudgetMapping[nodePool.Name] = budget.Remaining
+		NodePoolAllowedDisruptions.Set(float64(budget.Allowed), map[string]string{
 			metrics.NodePoolLabel: nodePool.Name, metrics.ReasonLabel: strings.ToLower(string(reason)),
 		})
 		NodePoolNodesConsumingBudgets.Set(float64(disrupting[nodePool.Name]), map[string]string{
 			metrics.NodePoolLabel: nodePool.Name, metrics.ReasonLabel: strings.ToLower(string(reason)),
 		})
-		if numNodes[nodePool.Name] != 0 && allowedDisruptions == 0 {
+		if numNodes[nodePool.Name] != 0 && budget.Allowed == 0 {
 			recorder.Publish(disruptionevents.NodePoolBlockedForDisruptionReason(nodePool, reason))
 		}
 	}
