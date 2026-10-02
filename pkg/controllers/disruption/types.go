@@ -43,6 +43,7 @@ import (
 	"sigs.k8s.io/karpenter/pkg/events"
 	"sigs.k8s.io/karpenter/pkg/metrics"
 	disruptionutils "sigs.k8s.io/karpenter/pkg/utils/disruption"
+	nodepoolutils "sigs.k8s.io/karpenter/pkg/utils/nodepool"
 	"sigs.k8s.io/karpenter/pkg/utils/pdb"
 	"sigs.k8s.io/karpenter/pkg/utils/pod"
 )
@@ -132,8 +133,11 @@ func (c *Candidate) SavingsRatio() float64 {
 	return disruptionutils.SavingsRatio(c.Price, c.RescheduleDisruptionCost)
 }
 
+// OwnedByStaticNodePool delegates to nodepoolutils.IsStatic so the Drift and
+// StaticDrift predicates and the pod-deletion-cost ranking read the same static
+// test.
 func (c *Candidate) OwnedByStaticNodePool() bool {
-	return c.NodePool.Spec.Replicas != nil
+	return nodepoolutils.IsStatic(c.NodePool)
 }
 
 // IsEmpty reports that no pod contributes positive reschedule disruption cost.
