@@ -386,6 +386,73 @@ var _ = Describe("Ranking", func() {
 		})
 	})
 
+	// The deletion-timestamp route into Group A is covered by the Group A
+	// context above. isGoingAway has a second route, the disrupted taint, and
+	// an unmanaged node that takes neither still reaches Group D, which clears.
+	// Both write to pods on a node Karpenter does not own.
+	Context("Unmanaged nodes", func() {
+		It("should not rank pods on an unmanaged node carrying the disrupted taint", func() {
+			nodeClaims, nodes := test.NodeClaimsAndNodes(1, v1.NodeClaim{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{v1.NodePoolLabelKey: nodePool.Name}},
+				Status:     v1.NodeClaimStatus{Allocatable: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("4"), corev1.ResourceMemory: resource.MustParse("8Gi")}},
+			})
+			unmanaged := test.Node(test.NodeOptions{
+				Taints:      []corev1.Taint{v1.DisruptedNoScheduleTaint},
+				Allocatable: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("4"), corev1.ResourceMemory: resource.MustParse("8Gi")},
+			})
+			ExpectApplied(ctx, env.Client, nodePool, nodeClaims[0], nodes[0], unmanaged)
+
+			unmanagedPod := rsOwnedPod(test.PodOptions{NodeName: unmanaged.Name})
+			// Managed contrast node, so the spec proves the filter is selective
+			// rather than a blanket no-op.
+			managedPod := rsOwnedPod(test.PodOptions{NodeName: nodes[0].Name})
+			ExpectApplied(ctx, env.Client, unmanagedPod, managedPod)
+			ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, env.Clock, nodeStateController, nodeClaimStateController, append(nodes, unmanaged), nodeClaims)
+
+			controller := deletioncost.NewController(env.Clock, env.Client, cloudProvider, cluster, queue)
+			_, err := controller.Reconcile(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			Expect(queue.Has(unmanagedPod)).To(BeFalse(), "pod on an unmanaged node should never be enqueued")
+			expectPodAnnotationCleared(unmanagedPod)
+			Expect(expectPodRank(managedPod)).To(BeNumerically("<", 0))
+		})
+
+		It("should not clear a third-party pod-deletion-cost on an unmanaged node", func() {
+			// Without the managed filter the node fails ValidateNodeDisruptable
+			// with "node isn't managed by karpenter" and lands in Group D, whose
+			// semantics are to delete the annotation. That clobbers a value PDC
+			// did not write.
+			nodeClaims, nodes := test.NodeClaimsAndNodes(1, v1.NodeClaim{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{v1.NodePoolLabelKey: nodePool.Name}},
+				Status:     v1.NodeClaimStatus{Allocatable: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("4"), corev1.ResourceMemory: resource.MustParse("8Gi")}},
+			})
+			unmanaged := test.Node(test.NodeOptions{
+				Allocatable: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("4"), corev1.ResourceMemory: resource.MustParse("8Gi")},
+			})
+			ExpectApplied(ctx, env.Client, nodePool, nodeClaims[0], nodes[0], unmanaged)
+
+			const thirdPartyCost = "-7"
+			unmanagedPod := rsOwnedPod(test.PodOptions{
+				ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{corev1.PodDeletionCost: thirdPartyCost}},
+				NodeName:   unmanaged.Name,
+			})
+			managedPod := rsOwnedPod(test.PodOptions{NodeName: nodes[0].Name})
+			ExpectApplied(ctx, env.Client, unmanagedPod, managedPod)
+			ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, env.Clock, nodeStateController, nodeClaimStateController, append(nodes, unmanaged), nodeClaims)
+
+			controller := deletioncost.NewController(env.Clock, env.Client, cloudProvider, cluster, queue)
+			_, err := controller.Reconcile(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			Expect(queue.Has(unmanagedPod)).To(BeFalse(), "pod on an unmanaged node should never be enqueued")
+			updated := &corev1.Pod{}
+			Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(unmanagedPod), updated)).To(Succeed())
+			Expect(updated.Annotations).To(HaveKeyWithValue(corev1.PodDeletionCost, thirdPartyCost))
+			Expect(expectPodRank(managedPod)).To(BeNumerically("<", 0))
+		})
+	})
+
 	Context("Per-NodePool budgets", func() {
 		It("should respect per-NodePool consolidation budgets across multiple pools", func() {
 			poolA := test.NodePool()
