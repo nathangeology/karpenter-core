@@ -17,6 +17,8 @@ limitations under the License.
 package deletioncost_test
 
 import (
+	"context"
+	"errors"
 	"math"
 	"strconv"
 
@@ -68,6 +70,30 @@ func expectPodAnnotationCleared(pod *corev1.Pod) {
 	Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(pod), updated)).To(Succeed())
 	Expect(updated.Annotations).ToNot(HaveKey(corev1.PodDeletionCost),
 		"pod %s should not carry pod-deletion-cost", pod.Name)
+}
+
+// podListFailOnceClient fails the first pod list scoped to nodeName and serves
+// every later one. sortBySavingsRatio is the first thing in RankNodes that lists
+// a node's pods, so one failure lands there and leaves the partitioning step,
+// which lists the same pods again, on a healthy client.
+type podListFailOnceClient struct {
+	client.Client
+	nodeName string
+	failed   bool
+}
+
+func (c *podListFailOnceClient) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	if _, ok := list.(*corev1.PodList); ok && !c.failed {
+		listOpts := &client.ListOptions{}
+		for _, o := range opts {
+			o.ApplyToList(listOpts)
+		}
+		if listOpts.FieldSelector != nil && listOpts.FieldSelector.String() == "spec.nodeName="+c.nodeName {
+			c.failed = true
+			return errors.New("simulated pod list failure for test")
+		}
+	}
+	return c.Client.List(ctx, list, opts...)
 }
 
 var _ = Describe("Ranking", func() {
@@ -958,6 +984,27 @@ var _ = Describe("Ranking", func() {
 				&metav1.OwnerReference{APIVersion: "apps/v1", Kind: "DaemonSet", Name: "ds", UID: types.UID("ds-uid"), Controller: lo.ToPtr(true), BlockOwnerDeletion: lo.ToPtr(true)},
 				false,
 			),
+			// ReplicationController recreates its pods, so it would qualify for
+			// recreatingControllers on the merits, and is absent from it. A CronJob
+			// never controls a pod directly, the Job it creates does, so a CronJob
+			// controller reference is a shape the kubelet does not produce. Both pin
+			// their host today. Pinned here so widening recreatingControllers has to
+			// be a deliberate edit.
+			Entry("ReplicationController-owned pod routes to Group D",
+				&metav1.OwnerReference{APIVersion: "v1", Kind: "ReplicationController", Name: "rc", UID: types.UID("rc-uid"), Controller: lo.ToPtr(true), BlockOwnerDeletion: lo.ToPtr(true)},
+				true,
+			),
+			Entry("CronJob-owned pod routes to Group D",
+				&metav1.OwnerReference{APIVersion: "batch/v1", Kind: "CronJob", Name: "cj", UID: types.UID("cj-uid"), Controller: lo.ToPtr(true), BlockOwnerDeletion: lo.ToPtr(true)},
+				true,
+			),
+			// A static pod's controller reference is the Node. Outside kube-system
+			// nothing recreates it elsewhere, so it pins. The kube-system variant is
+			// the carve-out, covered separately below.
+			Entry("Node-owned static pod outside kube-system routes to Group D",
+				&metav1.OwnerReference{APIVersion: "v1", Kind: "Node", Name: "some-node", UID: types.UID("some-node-uid"), Controller: lo.ToPtr(true), BlockOwnerDeletion: lo.ToPtr(true)},
+				true,
+			),
 		)
 
 		// isUnpriceable has two branches that return true and the suite covered
@@ -1167,6 +1214,184 @@ var _ = Describe("Ranking", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(totalRanked(groupA, groupBC, groupD)).To(Equal(2))
 			Expect(groupA).To(BeEmpty(), "kube-system bare pods must not push a node to Group A")
+		})
+
+		// hasPinningPods reads the controller reference, not any owner reference.
+		// Both halves are needed: the first fails if the check is widened to
+		// IsOwnedBy, which would find the non-controller ReplicaSet and stop pinning;
+		// the second fails if it is narrowed to reject pods carrying more than one
+		// owner, which would start pinning on the extra StatefulSet reference.
+		It("should _Edge_ read the controller reference and ignore additional owner references", func() {
+			nodeClaims, nodes := test.NodeClaimsAndNodes(2, v1.NodeClaim{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{v1.NodePoolLabelKey: nodePool.Name}},
+				Status:     v1.NodeClaimStatus{Allocatable: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("4"), corev1.ResourceMemory: resource.MustParse("8Gi")}},
+			})
+			ExpectApplied(ctx, env.Client, nodePool)
+			for i := range nodeClaims {
+				ExpectApplied(ctx, env.Client, nodeClaims[i], nodes[i])
+			}
+
+			rsRef := metav1.OwnerReference{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "rs", UID: types.UID("rs-uid")}
+			stsRef := metav1.OwnerReference{APIVersion: "apps/v1", Kind: "StatefulSet", Name: "sts", UID: types.UID("sts-uid")}
+			asController := func(ref metav1.OwnerReference) metav1.OwnerReference {
+				ref.Controller = lo.ToPtr(true)
+				ref.BlockOwnerDeletion = lo.ToPtr(true)
+				return ref
+			}
+
+			// Controlled by a StatefulSet, additionally owned by a ReplicaSet.
+			ExpectApplied(ctx, env.Client, test.Pod(test.PodOptions{
+				NodeName:   nodes[0].Name,
+				ObjectMeta: metav1.ObjectMeta{OwnerReferences: []metav1.OwnerReference{asController(stsRef), rsRef}},
+			}))
+			// Controlled by a ReplicaSet, additionally owned by a StatefulSet.
+			ExpectApplied(ctx, env.Client, test.Pod(test.PodOptions{
+				NodeName:   nodes[1].Name,
+				ObjectMeta: metav1.ObjectMeta{OwnerReferences: []metav1.OwnerReference{asController(rsRef), stsRef}},
+			}))
+
+			ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, env.Clock, nodeStateController, nodeClaimStateController, nodes, nodeClaims)
+
+			var stateNodes []*state.StateNode
+			for n := range cluster.Nodes() {
+				stateNodes = append(stateNodes, n)
+			}
+
+			groupA, groupBC, groupD, err := deletioncost.RankNodes(ctx, env.Client, env.Clock, stateNodes, map[string]*v1.NodePool{nodePool.Name: nodePool}, nil)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(totalRanked(groupA, groupBC, groupD)).To(Equal(2))
+
+			info0 := rankInfoFor(nodes[0].Name, groupA, groupBC, groupD)
+			info1 := rankInfoFor(nodes[1].Name, groupA, groupBC, groupD)
+			Expect(info0.found).To(BeTrue())
+			Expect(info1.found).To(BeTrue())
+			Expect(info0.cleanup).To(BeTrue(),
+				"a StatefulSet-controlled pod pins its host even though it also carries a ReplicaSet owner reference")
+			Expect(info1.cleanup).To(BeFalse(),
+				"a ReplicaSet-controlled pod does not pin its host even though it also carries a StatefulSet owner reference")
+			Expect(info1.rank).To(BeNumerically(">", math.MinInt32))
+		})
+
+		// The kube-system carve-out keys on namespace alone, so it covers a
+		// Node-controlled static pod as well as the bare pod covered above. Without
+		// it, every node running a static kube-system pod would route to Group D and
+		// never rank.
+		It("should _Edge_ exclude kube-system static pods from Group D", func() {
+			nodeClaims, nodes := test.NodeClaimsAndNodes(2, v1.NodeClaim{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{v1.NodePoolLabelKey: nodePool.Name}},
+				Status:     v1.NodeClaimStatus{Allocatable: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("4"), corev1.ResourceMemory: resource.MustParse("8Gi")}},
+			})
+			ExpectApplied(ctx, env.Client, nodePool)
+			for i := range nodeClaims {
+				ExpectApplied(ctx, env.Client, nodeClaims[i], nodes[i])
+			}
+
+			ExpectApplied(ctx, env.Client, test.Pod(test.PodOptions{
+				NodeName: nodes[0].Name,
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace:   "kube-system",
+					Annotations: map[string]string{"kubernetes.io/config.mirror": "static-pod-hash"},
+					OwnerReferences: []metav1.OwnerReference{{
+						APIVersion: "v1", Kind: "Node", Name: nodes[0].Name, UID: nodes[0].UID,
+						Controller: lo.ToPtr(true), BlockOwnerDeletion: lo.ToPtr(true),
+					}},
+				},
+			}))
+			ExpectApplied(ctx, env.Client, rsOwnedPod(test.PodOptions{NodeName: nodes[1].Name}))
+
+			ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, env.Clock, nodeStateController, nodeClaimStateController, nodes, nodeClaims)
+
+			var stateNodes []*state.StateNode
+			for n := range cluster.Nodes() {
+				stateNodes = append(stateNodes, n)
+			}
+
+			groupA, groupBC, groupD, err := deletioncost.RankNodes(ctx, env.Client, env.Clock, stateNodes, map[string]*v1.NodePool{nodePool.Name: nodePool}, nil)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(totalRanked(groupA, groupBC, groupD)).To(Equal(2))
+
+			info0 := rankInfoFor(nodes[0].Name, groupA, groupBC, groupD)
+			Expect(info0.found).To(BeTrue())
+			Expect(info0.cleanup).To(BeFalse(), "a kube-system static pod must not push its host to Group D")
+			Expect(info0.rank).To(BeNumerically(">", math.MinInt32))
+		})
+
+		// sortBySavingsRatio swallows the pod-list error and falls back to the
+		// base-cost floor, which is the LOWEST reschedule cost any node can have and
+		// therefore the HIGHEST savings ratio. A transient cache miss on one node
+		// moves it to the front of the sort and gives it the deepest rank, so the
+		// pod Karpenter knows least about is evicted first. Documents the current
+		// behavior; a deliberate change here should update the spec.
+		It("should _Edge_ give a node whose pod list fails the deepest rank via the base-cost fallback", func() {
+			const it, zone, ct = "test-it", "test-zone-1", v1.CapacityTypeOnDemand
+			nodeLabels := map[string]string{
+				v1.NodePoolLabelKey:            nodePool.Name,
+				corev1.LabelInstanceTypeStable: it,
+				corev1.LabelTopologyZone:       zone,
+				v1.CapacityTypeLabelKey:        ct,
+			}
+			nodeClaims, nodes := test.NodeClaimsAndNodes(2, v1.NodeClaim{
+				ObjectMeta: metav1.ObjectMeta{Labels: nodeLabels},
+				Status:     v1.NodeClaimStatus{Allocatable: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("4"), corev1.ResourceMemory: resource.MustParse("8Gi")}},
+			})
+			ExpectApplied(ctx, env.Client, nodePool)
+			for i := range nodeClaims {
+				ExpectApplied(ctx, env.Client, nodeClaims[i], nodes[i])
+			}
+			// One live reschedulable pod each, so both nodes price and cost
+			// identically and the sort falls to the node-name tie-break.
+			ExpectApplied(ctx, env.Client, rsOwnedPod(test.PodOptions{NodeName: nodes[0].Name}))
+			ExpectApplied(ctx, env.Client, rsOwnedPod(test.PodOptions{NodeName: nodes[1].Name}))
+			ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, env.Clock, nodeStateController, nodeClaimStateController, nodes, nodeClaims)
+
+			// A positive price keeps both ratios non-zero; at price 0 every ratio
+			// collapses to 0 and the fallback would be unobservable.
+			itMap := map[string]map[string]*cloudprovider.InstanceType{
+				nodePool.Name: {it: &cloudprovider.InstanceType{
+					Name: it,
+					Offerings: cloudprovider.Offerings{{
+						Available: true,
+						Requirements: scheduling.NewLabelRequirements(map[string]string{
+							v1.CapacityTypeLabelKey:  ct,
+							corev1.LabelTopologyZone: zone,
+						}),
+						Price: 1.0,
+					}},
+				}},
+			}
+			collectStateNodes := func() []*state.StateNode {
+				var out []*state.StateNode
+				for n := range cluster.Nodes() {
+					out = append(out, n)
+				}
+				return out
+			}
+
+			// Whichever node sorts last on the name tie-break is the one the failure
+			// has to move to the front, so the assertion cannot pass by accident.
+			lastByName := nodes[0]
+			if nodes[1].Name > lastByName.Name {
+				lastByName = nodes[1]
+			}
+			otherNode := lo.Ternary(lastByName.Name == nodes[0].Name, nodes[1], nodes[0])
+
+			// Control: on a healthy client the ratios tie and the names decide.
+			groupA, groupBC, groupD, err := deletioncost.RankNodes(ctx, env.Client, env.Clock, collectStateNodes(), map[string]*v1.NodePool{nodePool.Name: nodePool}, itMap)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(rankInfoFor(otherNode.Name, groupA, groupBC, groupD).rank).
+				To(BeNumerically("<", rankInfoFor(lastByName.Name, groupA, groupBC, groupD).rank),
+					"control: with equal savings ratios the earlier node name must take the deeper rank")
+
+			// One failed pod list for lastByName floors its cost at
+			// PerNodeBaseDisruptionCost, raising its ratio above the other node's.
+			failing := &podListFailOnceClient{Client: env.Client, nodeName: lastByName.Name}
+			groupA, groupBC, groupD, err = deletioncost.RankNodes(ctx, failing, env.Clock, collectStateNodes(), map[string]*v1.NodePool{nodePool.Name: nodePool}, itMap)
+			Expect(err).ToNot(HaveOccurred(), "the pod-list error is swallowed, not surfaced")
+			Expect(failing.failed).To(BeTrue(), "the simulated pod-list failure must have fired")
+			Expect(totalRanked(groupA, groupBC, groupD)).To(Equal(2))
+			Expect(rankInfoFor(lastByName.Name, groupA, groupBC, groupD).rank).
+				To(BeNumerically("<", rankInfoFor(otherNode.Name, groupA, groupBC, groupD).rank),
+					"the node whose pod list failed falls back to the base cost, gains the highest savings ratio and takes the deepest rank")
 		})
 	})
 
