@@ -159,7 +159,7 @@ var _ = Describe("Options", func() {
 				"--batch-idle-duration", "5s",
 				"--preference-policy", "Ignore",
 				"--min-values-policy", "BestEffort",
-				"--feature-gates", "ReservedCapacity=false,SpotToSpotConsolidation=true,NodeRepair=true,NodeOverlay=true,StaticCapacity=true,CapacityBuffer=true",
+				"--feature-gates", "ReservedCapacity=false,SpotToSpotConsolidation=true,NodeRepair=true,NodeOverlay=true,StaticCapacity=true,CapacityBuffer=true,PodDeletionCostManagement=true",
 				"--scheduler-config", `{"podTopologySpread":{"defaultConstraints":[{"maxSkew":1,"topologyKey":"topology.kubernetes.io/zone","whenUnsatisfiable":"ScheduleAnyway"}]}}`,
 			)
 			Expect(err).To(BeNil())
@@ -184,12 +184,13 @@ var _ = Describe("Options", func() {
 				PreferencePolicy:                 lo.ToPtr(options.PreferencePolicyIgnore),
 				MinValuesPolicy:                  lo.ToPtr(options.MinValuesPolicyBestEffort),
 				FeatureGates: test.FeatureGates{
-					ReservedCapacity:        new(false),
-					NodeRepair:              new(true),
-					SpotToSpotConsolidation: new(true),
-					NodeOverlay:             new(true),
-					StaticCapacity:          new(true),
-					CapacityBuffer:          new(true),
+					ReservedCapacity:          new(false),
+					NodeRepair:                new(true),
+					SpotToSpotConsolidation:   new(true),
+					NodeOverlay:               new(true),
+					StaticCapacity:            new(true),
+					CapacityBuffer:            new(true),
+					PodDeletionCostManagement: new(true),
 				},
 				IgnoreDRARequests: new(true),
 				SchedulerConfig: &options.SchedulerConfiguration{
@@ -224,7 +225,7 @@ var _ = Describe("Options", func() {
 			os.Setenv("BATCH_IDLE_DURATION", "5s")
 			os.Setenv("PREFERENCE_POLICY", "Ignore")
 			os.Setenv("MIN_VALUES_POLICY", "BestEffort")
-			os.Setenv("FEATURE_GATES", "ReservedCapacity=false,SpotToSpotConsolidation=true,NodeRepair=true,NodeOverlay=true,StaticCapacity=true,CapacityBuffer=true")
+			os.Setenv("FEATURE_GATES", "ReservedCapacity=false,SpotToSpotConsolidation=true,NodeRepair=true,NodeOverlay=true,StaticCapacity=true,CapacityBuffer=true,PodDeletionCostManagement=true")
 			os.Setenv("SCHEDULER_CONFIG", `{"podTopologySpread":{"defaultConstraints":[{"maxSkew":1,"topologyKey":"topology.kubernetes.io/zone","whenUnsatisfiable":"ScheduleAnyway"}]}}`)
 			fs = &options.FlagSet{
 				FlagSet: flag.NewFlagSet("karpenter", flag.ContinueOnError),
@@ -253,12 +254,13 @@ var _ = Describe("Options", func() {
 				PreferencePolicy:                 lo.ToPtr(options.PreferencePolicyIgnore),
 				MinValuesPolicy:                  lo.ToPtr(options.MinValuesPolicyBestEffort),
 				FeatureGates: test.FeatureGates{
-					ReservedCapacity:        new(false),
-					NodeRepair:              new(true),
-					SpotToSpotConsolidation: new(true),
-					NodeOverlay:             new(true),
-					StaticCapacity:          new(true),
-					CapacityBuffer:          new(true),
+					ReservedCapacity:          new(false),
+					NodeRepair:                new(true),
+					SpotToSpotConsolidation:   new(true),
+					NodeOverlay:               new(true),
+					StaticCapacity:            new(true),
+					CapacityBuffer:            new(true),
+					PodDeletionCostManagement: new(true),
 				},
 				IgnoreDRARequests: new(true),
 				SchedulerConfig: &options.SchedulerConfiguration{
@@ -288,7 +290,7 @@ var _ = Describe("Options", func() {
 			os.Setenv("BATCH_IDLE_DURATION", "5s")
 			os.Setenv("PREFERENCE_POLICY", "Ignore")
 			os.Setenv("MIN_VALUES_POLICY", "BestEffort")
-			os.Setenv("FEATURE_GATES", "ReservedCapacity=false,SpotToSpotConsolidation=true,NodeRepair=true,NodeOverlay=true,StaticCapacity=true,CapacityBuffer=true")
+			os.Setenv("FEATURE_GATES", "ReservedCapacity=false,SpotToSpotConsolidation=true,NodeRepair=true,NodeOverlay=true,StaticCapacity=true,CapacityBuffer=true,PodDeletionCostManagement=true")
 			fs = &options.FlagSet{
 				FlagSet: flag.NewFlagSet("karpenter", flag.ContinueOnError),
 			}
@@ -323,12 +325,13 @@ var _ = Describe("Options", func() {
 				PreferencePolicy:                 lo.ToPtr(options.PreferencePolicyRespect),
 				MinValuesPolicy:                  lo.ToPtr(options.MinValuesPolicyStrict),
 				FeatureGates: test.FeatureGates{
-					ReservedCapacity:        new(false),
-					NodeRepair:              new(true),
-					SpotToSpotConsolidation: new(true),
-					NodeOverlay:             new(true),
-					StaticCapacity:          new(true),
-					CapacityBuffer:          new(true),
+					ReservedCapacity:          new(false),
+					NodeRepair:                new(true),
+					SpotToSpotConsolidation:   new(true),
+					NodeOverlay:               new(true),
+					StaticCapacity:            new(true),
+					CapacityBuffer:            new(true),
+					PodDeletionCostManagement: new(true),
 				},
 				IgnoreDRARequests: new(true),
 			}))
@@ -582,6 +585,7 @@ func expectOptionsMatch(optsA, optsB *options.Options) {
 	Expect(optsA.FeatureGates.SpotToSpotConsolidation).To(Equal(optsB.FeatureGates.SpotToSpotConsolidation))
 	Expect(optsA.FeatureGates.TerminateFirstDrift).To(Equal(optsB.FeatureGates.TerminateFirstDrift))
 	Expect(optsA.FeatureGates.TerminateFirstRepair).To(Equal(optsB.FeatureGates.TerminateFirstRepair))
+	Expect(optsA.FeatureGates.PodDeletionCostManagement).To(Equal(optsB.FeatureGates.PodDeletionCostManagement))
 	Expect(optsA.IgnoreDRARequests).To(Equal(optsB.IgnoreDRARequests))
 	Expect(optsA.SchedulerConfig).To(Equal(optsB.SchedulerConfig))
 }
