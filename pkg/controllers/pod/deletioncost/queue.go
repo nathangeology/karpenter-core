@@ -96,18 +96,18 @@ func (q *Queue) Register(ctx context.Context, m manager.Manager) error {
 		Complete(reconcile.AsReconciler(m.GetClient(), q))
 }
 
-// Add is last-writer-wins on the desired state, and pushes to the channel only
-// on first insertion so repeated Adds for one pod do not fan out.
+// Add is last-writer-wins on the desired state and always pushes to the
+// channel. Repeated Adds for one pod still collapse into a single reconcile:
+// the request carries only the pod key, so the workqueue dedups it while the
+// pod sits pending. Pushing unconditionally is what makes an Add that lands
+// during an in-flight reconcile re-deliver instead of being dropped, since
+// the workqueue marks a processing item dirty and re-queues it on Done.
 func (q *Queue) Add(pod *corev1.Pod, rank int, clear bool) {
 	q.Lock()
 	defer q.Unlock()
 
-	qk := terminator.NewQueueKey(pod)
-	_, enqueued := q.items[qk]
-	q.items[qk] = queueItem{rank: rank, clear: clear}
-	if !enqueued {
-		q.source <- event.TypedGenericEvent[*corev1.Pod]{Object: pod}
-	}
+	q.items[terminator.NewQueueKey(pod)] = queueItem{rank: rank, clear: clear}
+	q.source <- event.TypedGenericEvent[*corev1.Pod]{Object: pod}
 }
 
 func (q *Queue) Has(pod *corev1.Pod) bool {
@@ -117,10 +117,16 @@ func (q *Queue) Has(pod *corev1.Pod) bool {
 	return ok
 }
 
-func (q *Queue) complete(qk terminator.QueueKey) {
+// completeIfUnchanged drops the item only when acted is still the desired
+// state. An Add that lands while the reconcile is in flight replaces the
+// value, and deleting it there would discard a desired state nothing has
+// written yet; leaving it enqueued lets the re-delivered request pick it up.
+func (q *Queue) completeIfUnchanged(qk terminator.QueueKey, acted queueItem) {
 	q.Lock()
 	defer q.Unlock()
-	delete(q.items, qk)
+	if current, ok := q.items[qk]; ok && current == acted {
+		delete(q.items, qk)
+	}
 }
 
 func (q *Queue) Reconcile(ctx context.Context, pod *corev1.Pod) (reconcile.Result, error) {
@@ -136,7 +142,7 @@ func (q *Queue) Reconcile(ctx context.Context, pod *corev1.Pod) (reconcile.Resul
 	}
 
 	if q.matchesDesired(pod, item) {
-		q.complete(qk)
+		q.completeIfUnchanged(qk, item)
 		podAnnotationWritesTotal.Inc(map[string]string{resultLabel: ResultSkippedUnchanged.Name})
 		return reconcile.Result{}, nil
 	}
@@ -149,19 +155,19 @@ func (q *Queue) Reconcile(ctx context.Context, pod *corev1.Pod) (reconcile.Resul
 	}
 	if err == nil {
 		podAnnotationWritesTotal.Inc(map[string]string{resultLabel: ResultUpdated.Name})
-		q.complete(qk)
+		q.completeIfUnchanged(qk, item)
 		return reconcile.Result{}, nil
 	}
 	if apierrors.IsNotFound(err) {
 		log.FromContext(ctx).V(1).WithValues("pod", klog.KObj(pod)).Info("skipping pod annotation update, target not found")
 		podAnnotationWritesTotal.Inc(map[string]string{resultLabel: ResultSkippedNotFound.Name})
-		q.complete(qk)
+		q.completeIfUnchanged(qk, item)
 		return reconcile.Result{}, nil
 	}
 	if apierrors.IsConflict(err) {
 		log.FromContext(ctx).V(1).WithValues("pod", klog.KObj(pod)).Info("skipping pod annotation update, write raced")
 		podAnnotationWritesTotal.Inc(map[string]string{resultLabel: ResultSkippedConflict.Name})
-		q.complete(qk)
+		q.completeIfUnchanged(qk, item)
 		return reconcile.Result{}, nil
 	}
 	podAnnotationWritesTotal.Inc(map[string]string{resultLabel: ResultError.Name})
