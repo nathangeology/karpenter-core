@@ -36,6 +36,9 @@ import (
 // disrupt. See designs/balanced-consolidation.md.
 const PerNodeBaseDisruptionCost = 1.0
 
+// ResolveOfferingPrice returns the price of the instance type's offering matching
+// the zone and capacity-type labels. A nil instance type, no matching offering, or
+// a NaN price all yield 0, which callers read as unpriceable rather than free.
 func ResolveOfferingPrice(labels map[string]string, instanceType *cloudprovider.InstanceType) float64 {
 	if instanceType == nil {
 		return 0
