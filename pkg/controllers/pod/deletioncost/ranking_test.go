@@ -1166,7 +1166,17 @@ var _ = Describe("Ranking", func() {
 			groupA, groupBC, groupD, err := deletioncost.RankNodes(ctx, env.Client, env.Clock, stateNodes, map[string]*v1.NodePool{nodePool.Name: nodePool}, nil)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(totalRanked(groupA, groupBC, groupD)).To(Equal(2))
-			Expect(groupA).To(BeEmpty(), "kube-system bare pods must not push a node to Group A")
+
+			// Read Group D per node, not groupA emptiness. The carve-out lives in
+			// hasPinningPods, which only ever routes to Group D, so Group A is empty
+			// here for an unrelated reason: neither node is deleted or
+			// disrupted-tainted, which is all isGoingAway reads.
+			info0 := rankInfoFor(nodes[0].Name, groupA, groupBC, groupD)
+			info1 := rankInfoFor(nodes[1].Name, groupA, groupBC, groupD)
+			Expect(info0.found).To(BeTrue())
+			Expect(info1.found).To(BeTrue())
+			Expect(info0.cleanup).To(BeFalse(), "a kube-system bare pod must not push its host to Group D")
+			Expect(info1.cleanup).To(BeFalse(), "control: the RS-owned node is recreatable and stays out of Group D")
 		})
 	})
 
