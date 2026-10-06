@@ -142,9 +142,12 @@ func NewEnvironment(options ...option.Function[EnvironmentOptions]) *Environment
 	opts := option.Resolve(options...)
 	ctx, cancel := context.WithCancel(context.Background())
 
-	version := version.MustParseSemantic(strings.ReplaceAll(env.WithDefaultString("K8S_VERSION", "1.36.x"), ".x", ".0"))
+	// declaredVersion is the control plane version the suite asks for. It has to be resolved before
+	// Start because the apiserver feature gates below are only settable at launch. It is not
+	// necessarily the version that comes up: KUBEBUILDER_ASSETS decides which binaries envtest runs.
+	declaredVersion := version.MustParseSemantic(strings.ReplaceAll(env.WithDefaultString("K8S_VERSION", "1.36.x"), ".x", ".0"))
 	environment := envtest.Environment{Scheme: scheme.Scheme, CRDs: opts.crds}
-	if version.Minor() >= 21 && version.Minor() < 32 {
+	if declaredVersion.Minor() >= 21 && declaredVersion.Minor() < 32 {
 		// PodAffinityNamespaceSelector is used for label selectors in pod affinities.  If the feature-gate is turned off,
 		// the api-server just clears out the label selector so we never see it.  If we turn it on, the label selectors
 		// are passed to us and we handle them. This feature is alpha in apiextensionsv1.21, beta in apiextensionsv1.22 and will be GA in 1.24. See
@@ -152,7 +155,7 @@ func NewEnvironment(options ...option.Function[EnvironmentOptions]) *Environment
 		environment.ControlPlane.GetAPIServer().Configure().Set("feature-gates", "PodAffinityNamespaceSelector=true")
 	}
 	//MinDomains got promoted to stable in 1.32
-	if version.Minor() >= 24 && version.Minor() < 32 {
+	if declaredVersion.Minor() >= 24 && declaredVersion.Minor() < 32 {
 		// MinDomainsInPodTopologySpread enforces a minimum number of eligible node domains for pod scheduling
 		// See https://kubernetes.io/docs/concepts/scheduling-eviction/topology-spread-constraints/#spread-constraint-definition
 		// Ref: https://github.com/aws/karpenter-core/pull/330
@@ -189,12 +192,18 @@ func NewEnvironment(options ...option.Function[EnvironmentOptions]) *Environment
 	} else {
 		c = lo.Must(client.New(environment.Config, client.Options{Scheme: scheme.Scheme}))
 	}
+	kubernetesInterface := kubernetes.NewForConfigOrDie(environment.Config)
+	// Report the version of the apiserver that actually came up rather than the one K8S_VERSION
+	// declared. When KUBEBUILDER_ASSETS resolves to a different minor, a version-gated spec that
+	// reads the declared version does not skip, and then asserts against a server that never serves
+	// the field under test. That reads as a product failure instead of a missing control plane.
+	serverVersion := lo.Must(kubernetesInterface.Discovery().ServerVersion())
 	return &Environment{
 		Environment:         environment,
 		Client:              c,
 		Clock:               clocktesting.NewFakeClock(time.Now()),
-		KubernetesInterface: kubernetes.NewForConfigOrDie(environment.Config),
-		Version:             version,
+		KubernetesInterface: kubernetesInterface,
+		Version:             version.MustParseGeneric(serverVersion.GitVersion),
 		Done:                make(chan struct{}),
 		Cancel:              cancel,
 	}
