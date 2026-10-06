@@ -69,24 +69,32 @@ func (m *Monitor) Reset() {
 	m.nodesAtReset = deepCopyMap(st.nodes)
 }
 
-// RestartCount returns the containers and number of restarts for that container for all containers in the pods in the
-// given namespace
-func (m *Monitor) RestartCount(namespace string) map[string]int {
+// ContainerStatuses returns the status of every container in the pods in the given namespace, keyed by
+// "<pod>/<container>". Callers that only need restart counts should use RestartCount; this returns the full status so a
+// failing assertion can report why a container restarted (LastTerminationState) and not just that it did.
+func (m *Monitor) ContainerStatuses(namespace string) map[string]corev1.ContainerStatus {
 	st := m.poll()
 
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	restarts := map[string]int{}
+	statuses := map[string]corev1.ContainerStatus{}
 	for _, pod := range st.pods.Items {
 		if pod.Namespace != namespace {
 			continue
 		}
 		for _, cs := range pod.Status.ContainerStatuses {
-			name := fmt.Sprintf("%s/%s", pod.Name, cs.Name)
-			restarts[name] = int(cs.RestartCount)
+			statuses[fmt.Sprintf("%s/%s", pod.Name, cs.Name)] = cs
 		}
 	}
-	return restarts
+	return statuses
+}
+
+// RestartCount returns the containers and number of restarts for that container for all containers in the pods in the
+// given namespace
+func (m *Monitor) RestartCount(namespace string) map[string]int {
+	return lo.MapValues(m.ContainerStatuses(namespace), func(cs corev1.ContainerStatus, _ string) int {
+		return int(cs.RestartCount)
+	})
 }
 
 // NodeCount returns the current number of nodes

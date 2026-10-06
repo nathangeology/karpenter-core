@@ -26,6 +26,7 @@ import (
 	"math"
 	"net/http"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -1120,12 +1121,27 @@ func (env *Environment) GetNode(nodeName string) corev1.Node {
 	return node
 }
 
+// ExpectNoCrashes fails if any karpenter container has restarted, naming every restarted container with its restart
+// count and the exit code and reason of its last termination. The cluster is torn down immediately after this runs, so
+// anything not in the failure message is unrecoverable: an OOMKill, a panic and a killed liveness probe all have to be
+// told apart from the message alone.
 func (env *Environment) ExpectNoCrashes() {
 	GinkgoHelper()
-	for k, v := range env.Monitor.RestartCount("kube-system") {
-		if strings.Contains(k, "karpenter") && v > 0 {
-			Fail("expected karpenter containers to not crash")
+	var crashed []string
+	for name, cs := range env.Monitor.ContainerStatuses("kube-system") {
+		if !strings.Contains(name, "karpenter") || cs.RestartCount == 0 {
+			continue
 		}
+		detail := fmt.Sprintf("%s restarted %d time(s)", name, cs.RestartCount)
+		if t := cs.LastTerminationState.Terminated; t != nil {
+			detail += fmt.Sprintf(", last terminated with exit code %d, reason %q, signal %d, at %s",
+				t.ExitCode, t.Reason, t.Signal, t.FinishedAt.UTC().Format(time.RFC3339))
+		}
+		crashed = append(crashed, detail)
+	}
+	if len(crashed) > 0 {
+		slices.Sort(crashed)
+		Fail(fmt.Sprintf("expected karpenter containers to not crash: %s", strings.Join(crashed, "; ")))
 	}
 }
 
