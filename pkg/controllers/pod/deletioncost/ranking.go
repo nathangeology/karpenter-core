@@ -213,8 +213,11 @@ func isGoingAway(node *state.StateNode) bool {
 // isDrifted mirrors drift.ShouldDisrupt. Static-pool nodes are excluded because
 // StaticDrift acts on them separately.
 //
-// TODO: the drift-condition read and IsStatic gate are duplicated in
-// disruption/drift.go and disruption/staticdrift.go; dedupe in a follow-up.
+// The composed predicate stays duplicated rather than shared with
+// disruption/drift.go: a Candidate always carries a non-nil NodePool, so
+// OwnedByStaticNodePool can call nodepoolutils.IsStatic unguarded, whereas a
+// StateNode's pool is resolved through a map that can miss. The nil check below
+// is load-bearing, since IsStatic dereferences its argument.
 func isDrifted(node *state.StateNode, nodePoolMap map[string]*v1.NodePool) bool {
 	if node.NodeClaim == nil {
 		return false
@@ -222,7 +225,7 @@ func isDrifted(node *state.StateNode, nodePoolMap map[string]*v1.NodePool) bool 
 	if np := nodePoolMap[node.Labels()[v1.NodePoolLabelKey]]; np != nil && nodepoolutils.IsStatic(np) {
 		return false
 	}
-	return node.NodeClaim.StatusConditions().Get(v1.ConditionTypeDrifted).IsTrue()
+	return node.NodeClaim.StatusConditions().IsTrue(v1.ConditionTypeDrifted)
 }
 
 // Controllers that replace a pod they own somewhere else in the cluster, so a
