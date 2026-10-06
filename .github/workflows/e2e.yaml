@@ -73,9 +73,15 @@ jobs:
       uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
       with:
         python-version: "3.10"
+    # No cache writes once git_ref is set. git_ref is only non-empty when a
+    # workflow_run caller passed a pull request's commit, and the checkout above has
+    # already put that tree on disk, so every cache this step would write is a write
+    # into the default branch's scope from code the branch does not own. Empty git_ref
+    # is the push and workflow_dispatch case, which keeps caching.
     - uses: ./.github/actions/install-deps
       with:
           k8sVersion: ${{ inputs.k8s_version }}
+          cache: ${{ inputs.git_ref == '' }}
     - name: Kind Cluster
       uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
     - name: check kind cluster and taint nodes

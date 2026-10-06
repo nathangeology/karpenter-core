@@ -4,6 +4,15 @@ inputs:
   k8sVersion:
     description: Kubernetes version to use when installing envtest binaries
     default: "1.36.x"
+  cache:
+    description: >-
+      Whether this action may write caches. Pass "false" when the caller has
+      checked out a ref it does not control. A workflow_run job's cache scope is
+      the default branch, so a cache written after checking out a pull request's
+      tree is a write into main's scope, and anything that later restores it runs
+      what that tree produced. Defaults to "true", which keeps the push,
+      presubmit, codeql and workflow_dispatch paths cached as before.
+    default: "true"
 runs:
   using: "composite"
   steps:
@@ -13,10 +22,16 @@ runs:
         go-version-file: go.mod
         check-latest: true
         cache-dependency-path: "**/go.sum"
+        cache: ${{ inputs.cache }}
     # Root path permission workaround for caching https://github.com/actions/cache/issues/845#issuecomment-1252594999
     - run: sudo chown "$USER" /usr/local
       shell: bash
-    - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+    # Skipped rather than made read-only when cache is "false": actions/cache saves in a
+    # post step, and there is no input that keeps the restore while dropping the save.
+    # Skipping it leaves cache-hit unset, so the install step below runs and downloads
+    # envtest. That costs seconds on the one path this affects.
+    - if: ${{ inputs.cache == 'true' }}
+      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
       id: cache-envtest
       with:
         path: /usr/local/kubebuilder/bin
