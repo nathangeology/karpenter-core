@@ -137,15 +137,30 @@ spec:
             - name: http
               containerPort: {{ .Values.controller.healthProbe.port }}
               protocol: TCP
+          # A kubelet prober worker is serial: pkg/kubelet/prober/worker.go runs doProbe synchronously inside the
+          # period ticker, so the effective interval is max(periodSeconds, probe duration) and a timeoutSeconds above
+          # periodSeconds does not overlap probes, it stretches detection. Both budgets below are therefore spelled
+          # out rather than inherited from the Kubernetes defaults of periodSeconds 10 and failureThreshold 3.
+          #
+          # Liveness restarts the container, so its budget is set to roughly the 70s it already took: /healthz is
+          # healthz.Ping alone, which needs milliseconds, but an aggressive budget would turn a GC pause or CPU
+          # throttling into a restart. 3 failures at 30s apart.
           livenessProbe:
             initialDelaySeconds: 30
-            timeoutSeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
             httpGet:
               path: /healthz
               port: http
+          # Readiness only removes the pod from endpoints, so it can afford to react faster. /readyz blocks on
+          # WaitForCacheSync, and reporting not-ready while the cache is still syncing is the intended semantics, so a
+          # timeout under the period is correct here and does not need the long liveness-style grace.
           readinessProbe:
             initialDelaySeconds: 5
-            timeoutSeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
             httpGet:
               path: /readyz
               port: http
