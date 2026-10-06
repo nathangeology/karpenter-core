@@ -44,8 +44,8 @@ import (
 var ctx context.Context
 var env *test.Environment
 var cluster *state.Cluster
-var nodeController *informer.NodeController
-var nodeClaimController *informer.NodeClaimController
+var nodeStateController *informer.NodeController
+var nodeClaimStateController *informer.NodeClaimController
 var metricsStateController *node.Controller
 var cloudProvider *fake.CloudProvider
 
@@ -63,8 +63,8 @@ var _ = BeforeSuite(func() {
 	cloudProvider.InstanceTypes = fake.InstanceTypesAssorted()
 	cluster = state.NewCluster(env.Clock, env.Client, cloudProvider)
 	clusterCost := cost.NewClusterCost(ctx, cloudProvider, env.Client)
-	nodeController = informer.NewNodeController(env.Client, cluster)
-	nodeClaimController = informer.NewNodeClaimController(env.Client, cloudProvider, cluster, clusterCost)
+	nodeStateController = informer.NewNodeController(env.Client, cluster)
+	nodeClaimStateController = informer.NewNodeClaimController(env.Client, cloudProvider, cluster, clusterCost)
 	metricsStateController = node.NewController(cluster)
 })
 
@@ -87,7 +87,7 @@ var _ = Describe("Node Metrics", func() {
 	})
 	It("should update the allocatable metric", func() {
 		ExpectApplied(ctx, env.Client, node)
-		ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+		ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 		ExpectSingletonReconciled(ctx, metricsStateController)
 
 		for k, v := range resources {
@@ -114,7 +114,7 @@ var _ = Describe("Node Metrics", func() {
 		})
 
 		ExpectApplied(ctx, env.Client, managedNode, nodeClaim)
-		ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, env.Clock, nodeController, nodeClaimController, []*corev1.Node{managedNode}, []*v1.NodeClaim{nodeClaim})
+		ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, env.Clock, nodeStateController, nodeClaimStateController, []*corev1.Node{managedNode}, []*v1.NodeClaim{nodeClaim})
 		ExpectSingletonReconciled(ctx, metricsStateController)
 
 		for k, v := range resources {
@@ -130,7 +130,7 @@ var _ = Describe("Node Metrics", func() {
 	It("should update the node lifetime and cluster utilization metrics", func() {
 
 		ExpectApplied(ctx, env.Client, node)
-		ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+		ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 		ExpectSingletonReconciled(ctx, metricsStateController)
 
 		metric, found := FindMetricWithLabelValues("karpenter_nodes_current_lifetime_seconds", map[string]string{
@@ -150,7 +150,7 @@ var _ = Describe("Node Metrics", func() {
 	})
 	It("should remove the node metric gauge when the node is deleted", func() {
 		ExpectApplied(ctx, env.Client, node)
-		ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+		ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 		ExpectSingletonReconciled(ctx, metricsStateController)
 
 		_, found := FindMetricWithLabelValues("karpenter_nodes_allocatable", map[string]string{
@@ -159,7 +159,7 @@ var _ = Describe("Node Metrics", func() {
 		Expect(found).To(BeTrue())
 
 		ExpectDeleted(ctx, env.Client, node)
-		ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+		ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 		ExpectSingletonReconciled(ctx, metricsStateController)
 
 		_, found = FindMetricWithLabelValues("karpenter_nodes_allocatable", map[string]string{

@@ -61,7 +61,7 @@ import (
 var (
 	ctx                 context.Context
 	cluster             *state.Cluster
-	nodeController      *informer.NodeController
+	nodeStateController *informer.NodeController
 	daemonsetController *informer.DaemonSetController
 	cloudProvider       *fake.CloudProvider
 	prov                *provisioning.Provisioner
@@ -80,7 +80,7 @@ var _ = BeforeSuite(func() {
 	ctx = options.ToContext(ctx, test.Options())
 	cloudProvider = fake.NewCloudProvider()
 	cluster = state.NewCluster(env.Clock, env.Client, cloudProvider)
-	nodeController = informer.NewNodeController(env.Client, cluster)
+	nodeStateController = informer.NewNodeController(env.Client, cluster)
 	prov = provisioning.NewProvisioner(env.Client, events.NewRecorder(&record.FakeRecorder{}), cloudProvider, cluster, env.Clock, deviceallocation.NewController(env.Client), virtualpods.NewVirtualPodCache(env.Client))
 	daemonsetController = informer.NewDaemonSetController(env.Client, cluster)
 	instanceTypes, _ := cloudProvider.GetInstanceTypes(ctx, nil)
@@ -504,7 +504,7 @@ var _ = Describe("Provisioning", func() {
 		},
 		)
 		ExpectApplied(ctx, env.Client, node, nodePool)
-		ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+		ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 
 		// Schedule 3 pods to the node that currently exists
 		for range 3 {
@@ -515,7 +515,7 @@ var _ = Describe("Provisioning", func() {
 
 		// Node shouldn't fully delete since it has a finalizer
 		Expect(env.Client.Delete(ctx, node)).To(Succeed())
-		ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+		ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 
 		// Provision without a binding since some pods will already be bound
 		// Should all schedule to the new node, ignoring the old node

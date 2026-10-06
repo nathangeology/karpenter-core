@@ -40,13 +40,13 @@ import (
 )
 
 var (
-	ctx                 context.Context
-	env                 *test.Environment
-	cluster             *state.Cluster
-	clusterCost         *cost.ClusterCost
-	cloudProvider       *fake.CloudProvider
-	gcController        *nodeclaimgc.Controller
-	nodeClaimController *informer.NodeClaimController
+	ctx                      context.Context
+	env                      *test.Environment
+	cluster                  *state.Cluster
+	clusterCost              *cost.ClusterCost
+	cloudProvider            *fake.CloudProvider
+	gcController             *nodeclaimgc.Controller
+	nodeClaimStateController *informer.NodeClaimController
 )
 
 func TestAPIs(t *testing.T) {
@@ -62,7 +62,7 @@ var _ = BeforeSuite(func() {
 	cluster = state.NewCluster(env.Clock, env.Client, cloudProvider)
 	clusterCost = cost.NewClusterCost(ctx, cloudProvider, env.Client)
 	gcController = nodeclaimgc.NewController(env.Client, cluster)
-	nodeClaimController = informer.NewNodeClaimController(env.Client, cloudProvider, cluster, clusterCost)
+	nodeClaimStateController = informer.NewNodeClaimController(env.Client, cloudProvider, cluster, clusterCost)
 })
 
 var _ = AfterSuite(func() {
@@ -88,7 +88,7 @@ var _ = Describe("NodeClaim Cluster State GC", func() {
 		nodeClaim.Status.ProviderID = ""
 
 		// Informer delete cleanup runs first against a NodeClaim that doesn't exist -> no-op.
-		ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
+		ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
 		// The provisioner's post-create seed lands afterwards, stranding the ghost entry.
 		cluster.UpdateNodeClaim(nodeClaim)
 		Expect(cluster.Synced(ctx)).To(BeFalse())

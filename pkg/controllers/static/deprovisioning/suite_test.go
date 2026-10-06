@@ -49,7 +49,7 @@ import (
 var (
 	ctx                      context.Context
 	cluster                  *state.Cluster
-	nodeController           *informer.NodeController
+	nodeStateController      *informer.NodeController
 	daemonsetController      *informer.DaemonSetController
 	cloudProvider            *fake.CloudProvider
 	controller               *static.Controller
@@ -82,7 +82,7 @@ var _ = BeforeSuite(func() {
 	cloudProvider = fake.NewCloudProvider()
 	clusterCost = cost.NewClusterCost(ctx, cloudProvider, env.Client)
 	cluster = state.NewCluster(env.Clock, env.Client, cloudProvider)
-	nodeController = informer.NewNodeController(env.Client, cluster)
+	nodeStateController = informer.NewNodeController(env.Client, cluster)
 	daemonsetController = informer.NewDaemonSetController(env.Client, cluster)
 	recorder = test.NewEventRecorder()
 	controller = static.NewController(env.Client, cluster, cloudProvider, env.Clock, recorder)
@@ -182,7 +182,7 @@ var _ = Describe("Static Deprovisioning Controller", func() {
 			ExpectDeletionTimestampSet(ctx, env.Client, nodePool)
 
 			// Update cluster state to track the nodes
-			ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, env.Clock, nodeController, nodeClaimStateController, []*corev1.Node{nodes[0], nodes[1]}, []*v1.NodeClaim{nodeClaims[0], nodeClaims[1]})
+			ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, env.Clock, nodeStateController, nodeClaimStateController, []*corev1.Node{nodes[0], nodes[1]}, []*v1.NodeClaim{nodeClaims[0], nodeClaims[1]})
 			Expect(cluster.Nodes()).To(HaveLen(2))
 			ExpectStateNodePoolCount(cluster, nodePool.Name, 2, 0, 0)
 
@@ -218,7 +218,7 @@ var _ = Describe("Static Deprovisioning Controller", func() {
 			ExpectApplied(ctx, env.Client, nodePool, nodeClaims[0], nodeClaims[1], nodes[0], nodes[1])
 
 			// Update cluster state to track the nodes
-			ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, env.Clock, nodeController, nodeClaimStateController, []*corev1.Node{nodes[0], nodes[1]}, []*v1.NodeClaim{nodeClaims[0], nodeClaims[1]})
+			ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, env.Clock, nodeStateController, nodeClaimStateController, []*corev1.Node{nodes[0], nodes[1]}, []*v1.NodeClaim{nodeClaims[0], nodeClaims[1]})
 			Expect(cluster.Nodes()).To(HaveLen(2))
 			// Verify StateNodePool Has been updated
 			ExpectStateNodePoolCount(cluster, nodePool.Name, 2, 0, 0)
@@ -257,7 +257,7 @@ var _ = Describe("Static Deprovisioning Controller", func() {
 			}
 
 			// Update cluster state to track the nodes
-			ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, env.Clock, nodeController, nodeClaimStateController, nodes, nodeClaims)
+			ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, env.Clock, nodeStateController, nodeClaimStateController, nodes, nodeClaims)
 			Expect(cluster.Nodes()).To(HaveLen(4))
 
 			// Verify StateNodePool Has been updated
@@ -305,7 +305,7 @@ var _ = Describe("Static Deprovisioning Controller", func() {
 				ExpectApplied(ctx, env.Client, nodeClaims[i], nodes[i])
 			}
 			// Update cluster state to track the nodes
-			ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, env.Clock, nodeController, nodeClaimStateController, nodes, nodeClaims)
+			ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, env.Clock, nodeStateController, nodeClaimStateController, nodes, nodeClaims)
 			Expect(cluster.Nodes()).To(HaveLen(4))
 			// Verify StateNodePool Has been updated
 			ExpectStateNodePoolCount(cluster, nodePool.Name, 4, 0, 0)
@@ -345,7 +345,7 @@ var _ = Describe("Static Deprovisioning Controller", func() {
 				ExpectApplied(ctx, env.Client, nodeClaims[i], nodes[i])
 			}
 			// Update cluster state to track the nodes
-			ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, env.Clock, nodeController, nodeClaimStateController, nodes, nodeClaims)
+			ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, env.Clock, nodeStateController, nodeClaimStateController, nodes, nodeClaims)
 			Expect(cluster.Nodes()).To(HaveLen(3))
 			// Verify StateNodePool Has been updated
 			ExpectStateNodePoolCount(cluster, nodePool.Name, 3, 0, 0)
@@ -372,7 +372,7 @@ var _ = Describe("Static Deprovisioning Controller", func() {
 			ExpectApplied(ctx, env.Client, nodePool)
 
 			// Update cluster state with no nodes
-			ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, env.Clock, nodeController, nodeClaimStateController, []*corev1.Node{}, []*v1.NodeClaim{})
+			ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, env.Clock, nodeStateController, nodeClaimStateController, []*corev1.Node{}, []*v1.NodeClaim{})
 
 			result := ExpectObjectReconciled(ctx, env.Client, controller, nodePool)
 			Expect(result.RequeueAfter).To(BeNumerically("~", time.Minute*1, time.Second))
@@ -412,7 +412,7 @@ var _ = Describe("Static Deprovisioning Controller", func() {
 				}
 
 				// Update cluster state to track the nodes
-				ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, env.Clock, nodeController, nodeClaimStateController, nodes, nodeClaims)
+				ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, env.Clock, nodeStateController, nodeClaimStateController, nodes, nodeClaims)
 				Expect(cluster.Nodes()).To(HaveLen(3))
 
 				// Verify StateNodePool Has been updated
@@ -483,7 +483,7 @@ var _ = Describe("Static Deprovisioning Controller", func() {
 				cluster.UpdateNodeClaim(unresolvedNodeClaim1)
 				cluster.UpdateNodeClaim(unresolvedNodeClaim2)
 
-				ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, env.Clock, nodeController, nodeClaimStateController, nodes, nodeClaims)
+				ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, env.Clock, nodeStateController, nodeClaimStateController, nodes, nodeClaims)
 				Expect(cluster.Nodes()).To(HaveLen(2))
 
 				ncCount := &v1.NodeClaimList{}
@@ -552,7 +552,7 @@ var _ = Describe("Static Deprovisioning Controller", func() {
 				}
 
 				// Update cluster state to track the nodes
-				ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, env.Clock, nodeController, nodeClaimStateController, nodes, nodeClaims)
+				ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, env.Clock, nodeStateController, nodeClaimStateController, nodes, nodeClaims)
 				Expect(cluster.Nodes()).To(HaveLen(4))
 
 				// Verify StateNodePool Has been updated
@@ -612,7 +612,7 @@ var _ = Describe("Static Deprovisioning Controller", func() {
 				ExpectApplied(ctx, env.Client, pod1, pod2)
 
 				// Update cluster state to track the nodes
-				ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, env.Clock, nodeController, nodeClaimStateController, nodes, nodeClaims)
+				ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, env.Clock, nodeStateController, nodeClaimStateController, nodes, nodeClaims)
 				Expect(cluster.Nodes()).To(HaveLen(4))
 				ExpectStateNodePoolCount(cluster, nodePool.Name, 4, 0, 0)
 
@@ -739,7 +739,7 @@ var _ = Describe("Static Deprovisioning Controller", func() {
 					}
 
 					ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(
-						ctx, env.Client, env.Clock, nodeController, nodeClaimStateController, nodes, nodeClaims,
+						ctx, env.Client, env.Clock, nodeStateController, nodeClaimStateController, nodes, nodeClaims,
 					)
 					Expect(cluster.Nodes()).To(HaveLen(8))
 				})

@@ -173,7 +173,7 @@ var _ = Describe("Dynamic Resource Allocation", func() {
 			ExpectMakeNodesInitialized(ctx, env.Client, env.Clock, node)
 		}
 		node = ExpectExists(ctx, env.Client, node)
-		ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+		ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 		return node
 	}
 
@@ -428,7 +428,7 @@ var _ = Describe("Dynamic Resource Allocation", func() {
 			// Initialize nodeA so its published in-cluster ResourceSlice (rather than templates) is gathered, and its
 			// allocated device is tracked by the deviceallocation controller as in-use.
 			ExpectMakeNodesInitialized(ctx, env.Client, env.Clock, nodeA)
-			ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(nodeA))
+			ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(nodeA))
 
 			// Run 2: a second pod must not reuse the device already published+allocated on nodeA; it provisions a new node.
 			podB := draPod("gpu", "claim-b")
@@ -803,12 +803,12 @@ var _ = Describe("Dynamic Resource Allocation", func() {
 			consumerPod := test.Pod(test.PodOptions{ObjectMeta: metav1.ObjectMeta{Name: "consumer-pod"}})
 			ExpectApplied(ctx, env.Client, consumerPod)
 			ExpectManualBinding(ctx, env.Client, consumerPod, deletingNode)
-			ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(deletingNode))
+			ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(deletingNode))
 			ExpectApplied(ctx, env.Client, allocatedClusterWideClaim("held-claim", "shared-gpu-pool", gpuDriver, "shared-gpu-0", podConsumer(consumerPod)))
 
 			// Mark the node for deletion; its pod becomes a deleting-node pod that the provisioner reschedules.
 			Expect(env.Client.Delete(ctx, deletingNode)).To(Succeed())
-			ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(deletingNode))
+			ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(deletingNode))
 
 			newClaim := test.ResourceClaimForRequests("new-claim", test.ExactDeviceRequest("req", "gpu", 1))
 			ExpectApplied(ctx, env.Client, newClaim)
@@ -911,7 +911,7 @@ var _ = Describe("Dynamic Resource Allocation", func() {
 
 			// Initialize the node so its published slice becomes authoritative for subsequent runs.
 			ExpectMakeNodesInitialized(ctx, env.Client, env.Clock, node)
-			ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+			ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 
 			// Run 2 (initialized): the node's published device is now its single device. A second claim that requires the
 			// node's device must not double-count — since run 1 consumed the node's only template device via a separate
@@ -1020,12 +1020,12 @@ var _ = Describe("Dynamic Resource Allocation", func() {
 			deletingPod := test.Pod(test.PodOptions{ObjectMeta: metav1.ObjectMeta{Name: "deleting-pod"}})
 			ExpectApplied(ctx, env.Client, deletingPod)
 			ExpectManualBinding(ctx, env.Client, deletingPod, deletingNode)
-			ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(deletingNode))
+			ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(deletingNode))
 			ExpectApplied(ctx, env.Client, allocatedSharedClaim("deleting-claim", "shared-gpu-pool", gpuDriver, "shared-gpu-0", capacity("10Gi"), podConsumer(deletingPod)))
 
 			// Mark the node for deletion so its pod's 10Gi share is freed.
 			Expect(env.Client.Delete(ctx, deletingNode)).To(Succeed())
-			ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(deletingNode))
+			ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(deletingNode))
 
 			// A new 10Gi claim only fits if the deleting pod's share was reclaimed (16 - 4 live = 12Gi available).
 			ExpectApplied(ctx, env.Client, test.ResourceClaim(resourcev1.ResourceClaim{

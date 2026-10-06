@@ -57,8 +57,8 @@ var ctx context.Context
 var env *test.Environment
 var cluster *state.Cluster
 var clusterCost *cost.ClusterCost
-var nodeClaimController *informer.NodeClaimController
-var nodeController *informer.NodeController
+var nodeClaimStateController *informer.NodeClaimController
+var nodeStateController *informer.NodeController
 var podController *informer.PodController
 var nodePoolController *informer.NodePoolController
 var daemonsetController *informer.DaemonSetController
@@ -84,8 +84,8 @@ var _ = BeforeSuite(func() {
 	cloudProvider = fake.NewCloudProvider()
 	cluster = state.NewCluster(env.Clock, env.Client, cloudProvider)
 	clusterCost = cost.NewClusterCost(ctx, cloudProvider, env.Client)
-	nodeClaimController = informer.NewNodeClaimController(env.Client, cloudProvider, cluster, clusterCost)
-	nodeController = informer.NewNodeController(env.Client, cluster)
+	nodeClaimStateController = informer.NewNodeClaimController(env.Client, cloudProvider, cluster, clusterCost)
+	nodeStateController = informer.NewNodeController(env.Client, cluster)
 	podController = informer.NewPodController(env.Client, cluster)
 	nodePoolController = informer.NewNodePoolController(env.Client, cloudProvider, cluster, clusterCost)
 	nodeOverlayStore = nodeoverlay.NewInstanceTypeStore()
@@ -271,7 +271,7 @@ var _ = Describe("Volume Usage/Limits", func() {
 			ExpectApplied(ctx, env.Client, pvc, pod)
 			ExpectManualBinding(ctx, env.Client, pod, node)
 		}
-		ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+		ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 		ExpectStateNodeCount("==", 1)
 		stateNode := ExpectStateNodeExists(cluster, node)
 
@@ -284,7 +284,7 @@ var _ = Describe("Volume Usage/Limits", func() {
 		func(allocatable *storagev1.VolumeNodeResources) {
 			csiNode.Spec.Drivers[0].Allocatable = allocatable
 			ExpectApplied(ctx, env.Client, node, csiNode)
-			ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+			ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 
 			volumeUsage := ExpectStateNodeExists(cluster, node).VolumeUsage()
 			volumeUsage.AddFallbackLimit(csiProvider, 1)
@@ -307,8 +307,8 @@ var _ = Describe("Volume Usage/Limits", func() {
 			ExpectApplied(ctx, env.Client, pvc, pod)
 			ExpectManualBinding(ctx, env.Client, pod, node)
 		}
-		ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
-		ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+		ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
+		ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 		ExpectStateNodeCount("==", 1)
 		stateNode := ExpectStateNodeExists(cluster, node)
 
@@ -318,7 +318,7 @@ var _ = Describe("Volume Usage/Limits", func() {
 		})).ToNot(BeNil())
 
 		// Reconcile the nodeclaim one more time to ensure that we maintain our volume usage state
-		ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
+		ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
 
 		// Ensure that we still consider adding another volume to the node breaching our volume limits
 		Expect(stateNode.VolumeUsage().ExceedsLimits(scheduling.Volumes{
@@ -339,8 +339,8 @@ var _ = Describe("Volume Usage/Limits", func() {
 			ExpectApplied(ctx, env.Client, pvc, pod)
 			ExpectManualBinding(ctx, env.Client, pod, node)
 		}
-		ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
-		ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+		ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
+		ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 		ExpectStateNodeCount("==", 1)
 		stateNode := ExpectStateNodeExists(cluster, node)
 
@@ -368,7 +368,7 @@ var _ = Describe("HostPort Usage", func() {
 	})
 	It("should hydrate the HostPort usage on a Node update", func() {
 		ExpectApplied(ctx, env.Client, node)
-		ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+		ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 		for i := range 10 {
 			pod := test.Pod(test.PodOptions{
 				HostPorts: []int32{int32(i)},
@@ -376,7 +376,7 @@ var _ = Describe("HostPort Usage", func() {
 			ExpectApplied(ctx, env.Client, pod)
 			ExpectManualBinding(ctx, env.Client, pod, node)
 		}
-		ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+		ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 		ExpectStateNodeCount("==", 1)
 		stateNode := ExpectStateNodeExists(cluster, node)
 
@@ -391,7 +391,7 @@ var _ = Describe("HostPort Usage", func() {
 	})
 	It("should maintain the host port usage state when receiving NodeClaim updates", func() {
 		ExpectApplied(ctx, env.Client, node)
-		ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+		ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 		for i := range 10 {
 			pod := test.Pod(test.PodOptions{
 				HostPorts: []int32{int32(i)},
@@ -399,8 +399,8 @@ var _ = Describe("HostPort Usage", func() {
 			ExpectApplied(ctx, env.Client, pod)
 			ExpectManualBinding(ctx, env.Client, pod, node)
 		}
-		ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
-		ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+		ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
+		ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 		ExpectStateNodeCount("==", 1)
 		stateNode := ExpectStateNodeExists(cluster, node)
 
@@ -414,7 +414,7 @@ var _ = Describe("HostPort Usage", func() {
 		})).ToNot(BeNil())
 
 		// Reconcile the nodeclaim one more time to ensure that we maintain our volume usage state
-		ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
+		ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
 
 		// Ensure that we still consider the host port usage addition an error
 		Expect(stateNode.HostPortUsage().Conflicts(test.Pod(), []scheduling.HostPort{
@@ -427,7 +427,7 @@ var _ = Describe("HostPort Usage", func() {
 	})
 	It("should ignore the host port usage conflict if the pod update is for an already tracked pod", func() {
 		ExpectApplied(ctx, env.Client, node)
-		ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+		ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 		var pods []*corev1.Pod
 		for i := range 10 {
 			pod := test.Pod(test.PodOptions{
@@ -437,8 +437,8 @@ var _ = Describe("HostPort Usage", func() {
 			ExpectApplied(ctx, env.Client, pod)
 			ExpectManualBinding(ctx, env.Client, pod, node)
 		}
-		ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
-		ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+		ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
+		ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 		ExpectStateNodeCount("==", 1)
 		stateNode := ExpectStateNodeExists(cluster, node)
 
@@ -466,17 +466,17 @@ var _ = Describe("Node Deletion", func() {
 		node.Name = nodeClaim.Name
 
 		ExpectApplied(ctx, env.Client, nodeClaim, node)
-		ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
-		ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+		ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
+		ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 
 		ExpectStateNodeCount("==", 1)
 
 		// Expect that the node isn't leaked due to names matching
 		ExpectDeleted(ctx, env.Client, nodeClaim)
-		ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
+		ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
 		ExpectStateNodeCount("==", 1)
 		ExpectDeleted(ctx, env.Client, node)
-		ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+		ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 		ExpectStateNodeCount("==", 0)
 	})
 })
@@ -508,7 +508,7 @@ var _ = Describe("Node Resource Level", func() {
 		ExpectApplied(ctx, env.Client, pod1, pod2)
 		ExpectApplied(ctx, env.Client, node)
 
-		ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+		ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 		ExpectReconcileSucceeded(ctx, podController, client.ObjectKeyFromObject(pod1))
 		ExpectReconcileSucceeded(ctx, podController, client.ObjectKeyFromObject(pod2))
 
@@ -541,7 +541,7 @@ var _ = Describe("Node Resource Level", func() {
 		ExpectApplied(ctx, env.Client, pod1, pod2)
 		ExpectApplied(ctx, env.Client, node)
 
-		ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+		ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 		ExpectReconcileSucceeded(ctx, podController, client.ObjectKeyFromObject(pod1))
 		ExpectReconcileSucceeded(ctx, podController, client.ObjectKeyFromObject(pod2))
 
@@ -586,7 +586,7 @@ var _ = Describe("Node Resource Level", func() {
 		ExpectManualBinding(ctx, env.Client, pod2, node)
 
 		// that we just noticed
-		ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+		ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 		ExpectResources(corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("3.5")}, ExpectStateNodeExists(cluster, node).PodRequests())
 	})
 	It("should subtract requests if the pod is deleted", func() {
@@ -615,7 +615,7 @@ var _ = Describe("Node Resource Level", func() {
 		ExpectApplied(ctx, env.Client, pod1, pod2)
 		ExpectApplied(ctx, env.Client, node)
 
-		ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+		ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 		ExpectReconcileSucceeded(ctx, podController, client.ObjectKeyFromObject(pod1))
 		ExpectReconcileSucceeded(ctx, podController, client.ObjectKeyFromObject(pod2))
 
@@ -663,7 +663,7 @@ var _ = Describe("Node Resource Level", func() {
 		ExpectApplied(ctx, env.Client, pod1, pod2)
 		ExpectApplied(ctx, env.Client, node)
 
-		ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+		ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 		ExpectReconcileSucceeded(ctx, podController, client.ObjectKeyFromObject(pod1))
 		ExpectReconcileSucceeded(ctx, podController, client.ObjectKeyFromObject(pod2))
 
@@ -694,7 +694,7 @@ var _ = Describe("Node Resource Level", func() {
 		ExpectApplied(ctx, env.Client, pod1)
 		ExpectApplied(ctx, env.Client, node)
 
-		ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+		ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 		ExpectReconcileSucceeded(ctx, podController, client.ObjectKeyFromObject(pod1))
 
 		ExpectManualBinding(ctx, env.Client, pod1, node)
@@ -707,7 +707,7 @@ var _ = Describe("Node Resource Level", func() {
 
 		// delete the node and the internal state should disappear as well
 		ExpectDeleted(ctx, env.Client, node)
-		ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+		ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 		for range cluster.Nodes() {
 			Fail("shouldn't be called as the node was deleted")
 		}
@@ -732,7 +732,7 @@ var _ = Describe("Node Resource Level", func() {
 			ProviderID: test.RandomProviderID(),
 		})
 		ExpectApplied(ctx, env.Client, pod1, node1)
-		ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node1))
+		ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node1))
 		ExpectReconcileSucceeded(ctx, podController, client.ObjectKeyFromObject(pod1))
 
 		ExpectManualBinding(ctx, env.Client, pod1, node1)
@@ -770,7 +770,7 @@ var _ = Describe("Node Resource Level", func() {
 		ExpectManualBinding(ctx, env.Client, pod2, node2)
 		// deleted the pod and then recreated it, but simulated only receiving an event on the new pod after it has
 		// bound and not getting the new node event entirely
-		ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node2))
+		ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node2))
 		ExpectReconcileSucceeded(ctx, podController, client.ObjectKeyFromObject(pod2))
 
 		for n := range cluster.Nodes() {
@@ -808,12 +808,12 @@ var _ = Describe("Node Resource Level", func() {
 			ProviderID: test.RandomProviderID(),
 		})
 		ExpectApplied(ctx, env.Client, node)
-		ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+		ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 		ExpectResources(corev1.ResourceList{
 			corev1.ResourceCPU:  resource.MustParse("0"),
 			corev1.ResourcePods: resource.MustParse("0"),
 		}, ExpectStateNodeExists(cluster, node).PodRequests())
-		ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+		ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 
 		sum := 0.0
 		podCount := 0
@@ -899,10 +899,10 @@ var _ = Describe("Node Resource Level", func() {
 			ProviderID: test.RandomProviderID(),
 		})
 		ExpectApplied(ctx, env.Client, pod1, node)
-		ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+		ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 
 		ExpectManualBinding(ctx, env.Client, pod1, node)
-		ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+		ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 		ExpectReconcileSucceeded(ctx, podController, client.ObjectKeyFromObject(pod1))
 
 		// daemonset pod isn't bound yet
@@ -946,12 +946,12 @@ var _ = Describe("Node Resource Level", func() {
 		})
 		ExpectApplied(ctx, env.Client, node)
 
-		ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+		ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 		ExpectStateNodeCount("==", 1)
 
 		Expect(env.Client.Delete(ctx, node)).To(Succeed())
 
-		ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+		ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 		ExpectNodeExists(ctx, env.Client, node.Name)
 		Expect(ExpectStateNodeExists(cluster, node).MarkedForDeletion()).To(BeTrue())
 	})
@@ -999,12 +999,12 @@ var _ = Describe("Node Resource Level", func() {
 		})
 		node := test.NodeClaimLinkedNode(nodeClaim)
 		ExpectApplied(ctx, env.Client, nodeClaim, node)
-		ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
-		ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+		ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
+		ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 		ExpectStateNodeCount("==", 1)
 
 		Expect(env.Client.Delete(ctx, nodeClaim)).To(Succeed())
-		ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
+		ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
 		ExpectExists(ctx, env.Client, nodeClaim)
 
 		Expect(ExpectStateNodeExistsForNodeClaim(cluster, nodeClaim).MarkedForDeletion()).To(BeTrue())
@@ -1025,7 +1025,7 @@ var _ = Describe("Node Resource Level", func() {
 			ProviderID: test.RandomProviderID(),
 		})
 		ExpectApplied(ctx, env.Client, node)
-		ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+		ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 
 		cluster.NominateNodeForPod(ctx, node.Spec.ProviderID)
 
@@ -1039,7 +1039,7 @@ var _ = Describe("Node Resource Level", func() {
 	It("should handle a node changing from no providerID to registering a providerID", func() {
 		node := test.Node()
 		ExpectApplied(ctx, env.Client, node)
-		ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+		ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 
 		ExpectStateNodeCount("==", 1)
 		ExpectStateNodeExists(cluster, node)
@@ -1047,7 +1047,7 @@ var _ = Describe("Node Resource Level", func() {
 		// Change the providerID; this mocks CCM adding the providerID onto the node after registration
 		node.Spec.ProviderID = fmt.Sprintf("fake://%s", node.Name)
 		ExpectApplied(ctx, env.Client, node)
-		ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+		ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 
 		ExpectStateNodeCount("==", 1)
 		ExpectStateNodeExists(cluster, node)
@@ -1086,7 +1086,7 @@ var _ = Describe("Pod Anti-Affinity", func() {
 		ExpectApplied(ctx, env.Client, node)
 		ExpectManualBinding(ctx, env.Client, pod, node)
 
-		ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+		ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 		ExpectReconcileSucceeded(ctx, podController, client.ObjectKeyFromObject(pod))
 		foundPodCount := 0
 		cluster.ForPodsWithAntiAffinity(func(p *corev1.Pod, n *corev1.Node) bool {
@@ -1130,7 +1130,7 @@ var _ = Describe("Pod Anti-Affinity", func() {
 		ExpectApplied(ctx, env.Client, node)
 		ExpectManualBinding(ctx, env.Client, pod, node)
 
-		ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+		ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 		ExpectReconcileSucceeded(ctx, podController, client.ObjectKeyFromObject(pod))
 		foundPodCount := 0
 		cluster.ForPodsWithAntiAffinity(func(p *corev1.Pod, n *corev1.Node) bool {
@@ -1171,7 +1171,7 @@ var _ = Describe("Pod Anti-Affinity", func() {
 		ExpectApplied(ctx, env.Client, node)
 		ExpectManualBinding(ctx, env.Client, pod, node)
 
-		ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+		ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 		ExpectReconcileSucceeded(ctx, podController, client.ObjectKeyFromObject(pod))
 		foundPodCount := 0
 		cluster.ForPodsWithAntiAffinity(func(p *corev1.Pod, n *corev1.Node) bool {
@@ -1222,12 +1222,12 @@ var _ = Describe("Pod Anti-Affinity", func() {
 		ExpectApplied(ctx, env.Client, node)
 		ExpectManualBinding(ctx, env.Client, pod, node)
 
-		ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+		ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 		ExpectReconcileSucceeded(ctx, podController, client.ObjectKeyFromObject(pod))
 
 		// simulate receiving the node deletion before the pod deletion
 		ExpectDeleted(ctx, env.Client, node)
-		ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+		ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 
 		foundPodCount := 0
 		cluster.ForPodsWithAntiAffinity(func(p *corev1.Pod, n *corev1.Node) bool {
@@ -1251,7 +1251,7 @@ var _ = Describe("Cluster State Sync", func() {
 					ProviderID: test.RandomProviderID(),
 				})
 				ExpectApplied(ctx, env.Client, node)
-				ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+				ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 			}()
 		}
 		wg.Wait()
@@ -1271,11 +1271,11 @@ var _ = Describe("Cluster State Sync", func() {
 		})
 		nodeClaim.Status.ProviderID = ""
 		ExpectApplied(ctx, env.Client, nodeClaim)
-		ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
+		ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
 		Expect(cluster.Synced(ctx)).To(BeFalse())
 
 		env.Clock.Step(2 * time.Minute)
-		ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
+		ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
 		Expect(cluster.Synced(ctx)).To(BeFalse())
 		metric, found := FindMetricWithLabelValues("karpenter_cluster_state_unsynced_time_seconds", map[string]string{})
 		Expect(found).To(BeTrue())
@@ -1291,7 +1291,7 @@ var _ = Describe("Cluster State Sync", func() {
 				defer wg.Done()
 				node := test.Node()
 				ExpectApplied(ctx, env.Client, node)
-				ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+				ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 			}()
 		}
 		wg.Wait()
@@ -1311,7 +1311,7 @@ var _ = Describe("Cluster State Sync", func() {
 				defer wg.Done()
 				node := test.Node()
 				ExpectApplied(ctx, env.Client, node)
-				ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+				ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 				nodes[index] = node
 			}(i)
 		}
@@ -1325,7 +1325,7 @@ var _ = Describe("Cluster State Sync", func() {
 				defer wg.Done()
 				nodes[index].Spec.ProviderID = test.RandomProviderID()
 				ExpectApplied(ctx, env.Client, nodes[index])
-				ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(nodes[index]))
+				ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(nodes[index]))
 			}(i)
 		}
 		wg.Wait()
@@ -1347,7 +1347,7 @@ var _ = Describe("Cluster State Sync", func() {
 					},
 				})
 				ExpectApplied(ctx, env.Client, nodeClaim)
-				ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
+				ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
 			}()
 		}
 		wg.Wait()
@@ -1370,8 +1370,8 @@ var _ = Describe("Cluster State Sync", func() {
 					},
 				})
 				ExpectApplied(ctx, env.Client, nodeClaim, node)
-				ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
-				ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
+				ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
+				ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
 			}()
 		}
 		wg.Wait()
@@ -1385,7 +1385,7 @@ var _ = Describe("Cluster State Sync", func() {
 					ProviderID: test.RandomProviderID(),
 				})
 				ExpectApplied(ctx, env.Client, node)
-				ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+				ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 			}()
 		}
 		wg.Wait()
@@ -1401,7 +1401,7 @@ var _ = Describe("Cluster State Sync", func() {
 					},
 				})
 				ExpectApplied(ctx, env.Client, nodeClaim)
-				ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
+				ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
 			}()
 		}
 		wg.Wait()
@@ -1424,8 +1424,8 @@ var _ = Describe("Cluster State Sync", func() {
 					ProviderID: nodeClaim.Status.ProviderID,
 				})
 				ExpectApplied(ctx, env.Client, nodeClaim, node)
-				ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
-				ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+				ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
+				ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 			}()
 		}
 		wg.Wait()
@@ -1449,7 +1449,7 @@ var _ = Describe("Cluster State Sync", func() {
 					nodeClaim.Status.ProviderID = ""
 				}
 				ExpectApplied(ctx, env.Client, nodeClaim)
-				ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
+				ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
 			}(i)
 		}
 		wg.Wait()
@@ -1472,7 +1472,7 @@ var _ = Describe("Cluster State Sync", func() {
 
 				// One of them doesn't get synced with the reconciliation
 				if i != 900 {
-					ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
+					ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
 				}
 			}()
 		}
@@ -1494,7 +1494,7 @@ var _ = Describe("Cluster State Sync", func() {
 
 				// One of them doesn't get synced with the reconciliation
 				if i != 900 {
-					ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+					ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 				}
 			}()
 		}
@@ -1518,12 +1518,12 @@ var _ = Describe("Cluster State Sync", func() {
 		ExpectMetricGaugeValue(state.ClusterStateSynced, 0, nil)
 
 		ExpectApplied(ctx, env.Client, nodeClaim)
-		ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
+		ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
 		Expect(cluster.Synced(ctx)).To(BeFalse())
 		ExpectMetricGaugeValue(state.ClusterStateSynced, 0, nil)
 
 		ExpectDeleted(ctx, env.Client, nodeClaim)
-		ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
+		ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
 		Expect(cluster.Synced(ctx)).To(BeTrue())
 		ExpectMetricGaugeValue(state.ClusterStateSynced, 1, nil)
 	})
@@ -1545,8 +1545,8 @@ var _ = Describe("Cluster State Sync", func() {
 					},
 				})
 				ExpectApplied(ctx, env.Client, node, nodeClaim)
-				ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
-				ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
+				ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
+				ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
 			}()
 		}
 		wg.Wait()
@@ -1560,7 +1560,7 @@ var _ = Describe("Cluster State Sync", func() {
 					ProviderID: test.RandomProviderID(),
 				})
 				ExpectApplied(ctx, env.Client, node)
-				ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+				ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 			}()
 		}
 		wg.Wait()
@@ -1781,7 +1781,7 @@ var _ = Describe("Data Races", func() {
 				ProviderID: test.RandomProviderID(),
 			})
 			ExpectApplied(ctx, env.Client, node)
-			ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+			ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 		}
 	})
 	It("should ensure that calling Synced() is valid while making updates to NodeClaims", func() {
@@ -1806,7 +1806,7 @@ var _ = Describe("Data Races", func() {
 				},
 			})
 			ExpectApplied(ctx, env.Client, nodeClaim)
-			ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
+			ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
 		}
 	})
 })
@@ -1834,8 +1834,8 @@ var _ = Describe("Taints", func() {
 				{Key: cloudproviderapi.TaintExternalCloudProvider, Effect: corev1.TaintEffectNoSchedule, Value: "true"},
 			}
 			ExpectApplied(ctx, env.Client, nodeClaim, node)
-			ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
-			ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+			ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
+			ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 
 			stateNode := ExpectStateNodeExists(cluster, node)
 			Expect(stateNode.Taints()).To(HaveLen(0))
@@ -1846,8 +1846,8 @@ var _ = Describe("Taints", func() {
 				{Key: "readiness.k8s.io/another-rule", Effect: corev1.TaintEffectNoExecute},
 			}
 			ExpectApplied(ctx, env.Client, nodeClaim, node)
-			ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
-			ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+			ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
+			ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 
 			stateNode := ExpectStateNodeExists(cluster, node)
 			Expect(stateNode.Taints()).To(HaveLen(0))
@@ -1866,8 +1866,8 @@ var _ = Describe("Taints", func() {
 			}
 			ExpectApplied(ctx, env.Client, node)
 
-			ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
-			ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+			ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
+			ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 
 			stateNode := ExpectStateNodeExists(cluster, node)
 			Expect(stateNode.Taints()).To(HaveLen(4))
@@ -1888,8 +1888,8 @@ var _ = Describe("Taints", func() {
 				{Key: "taint-key2", Value: "taint-value2", Effect: corev1.TaintEffectNoExecute},
 			}
 			ExpectApplied(ctx, env.Client, nodeClaim, node)
-			ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
-			ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+			ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
+			ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 
 			stateNode := ExpectStateNodeExists(cluster, node)
 			Expect(stateNode.Taints()).To(HaveLen(0))
@@ -1907,8 +1907,8 @@ var _ = Describe("Taints", func() {
 			ExpectMakeNodesInitialized(ctx, env.Client, env.Clock, node)
 			ExpectMakeNodeClaimsInitialized(ctx, env.Client, env.Clock, nodeClaim)
 
-			ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
-			ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+			ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
+			ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 
 			stateNode := ExpectStateNodeExists(cluster, node)
 			Expect(stateNode.Taints()).To(HaveLen(2))
@@ -1927,7 +1927,7 @@ var _ = Describe("Taints", func() {
 				{Key: cloudproviderapi.TaintExternalCloudProvider, Effect: corev1.TaintEffectNoSchedule, Value: "true"},
 			}
 			ExpectApplied(ctx, env.Client, node)
-			ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+			ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 
 			stateNode := ExpectStateNodeExists(cluster, node)
 			Expect(stateNode.Taints()).To(HaveLen(4))
@@ -1951,7 +1951,7 @@ var _ = Describe("Taints", func() {
 			}
 
 			ExpectApplied(ctx, env.Client, node)
-			ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+			ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 
 			stateNode := ExpectStateNodeExists(cluster, node)
 			Expect(stateNode.Taints()).To(HaveLen(4))
@@ -2504,7 +2504,7 @@ var _ = Describe("NodePoolState Tracking", func() {
 		Context("New NodeClaim gets added", func() {
 			It("should track NodeClaim in running state when created with ProviderID", func() {
 				ExpectApplied(ctx, env.Client, nodeClaim)
-				ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
+				ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
 
 				running, deleting, pendingdisruption := cluster.NodePoolState.GetNodeCount(nodePool.Name)
 				Expect(running).To(Equal(1))
@@ -2526,7 +2526,7 @@ var _ = Describe("NodePoolState Tracking", func() {
 				})
 
 				ExpectApplied(ctx, env.Client, nodeClaimWithoutProvider)
-				ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaimWithoutProvider))
+				ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaimWithoutProvider))
 
 				running, deleting, pendingdisruption := cluster.NodePoolState.GetNodeCount(nodePool.Name)
 				Expect(running).To(Equal(1))
@@ -2546,7 +2546,7 @@ var _ = Describe("NodePoolState Tracking", func() {
 					}})
 
 				ExpectApplied(ctx, env.Client, nodeClaimWithoutNodePool)
-				ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaimWithoutNodePool))
+				ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaimWithoutNodePool))
 
 				running, deleting, pendingdisruption := cluster.NodePoolState.GetNodeCount("")
 				Expect(running).To(Equal(0))
@@ -2570,8 +2570,8 @@ var _ = Describe("NodePoolState Tracking", func() {
 				})
 
 				ExpectApplied(ctx, env.Client, nodeClaim, nodeClaim3)
-				ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
-				ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim3))
+				ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
+				ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim3))
 
 				running, deleting, pendingdisruption := cluster.NodePoolState.GetNodeCount(nodePool.Name)
 				Expect(running).To(Equal(2))
@@ -2581,8 +2581,8 @@ var _ = Describe("NodePoolState Tracking", func() {
 
 			It("should track NodeClaims across different NodePools", func() {
 				ExpectApplied(ctx, env.Client, nodeClaim, nodeClaim2)
-				ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
-				ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim2))
+				ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
+				ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim2))
 
 				running1, deleting1, pendingdisruption1 := cluster.NodePoolState.GetNodeCount(nodePool.Name)
 				running2, deleting2, pendingdisruption2 := cluster.NodePoolState.GetNodeCount(nodePool2.Name)
@@ -2601,7 +2601,7 @@ var _ = Describe("NodePoolState Tracking", func() {
 		Context("Updates to existing NodeClaim", func() {
 			BeforeEach(func() {
 				ExpectApplied(ctx, env.Client, nodeClaim)
-				ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
+				ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
 			})
 
 			It("should be a no-op when NodeClaim is already tracked and no state change", func() {
@@ -2614,7 +2614,7 @@ var _ = Describe("NodePoolState Tracking", func() {
 				// Update NodeClaim with annotation change (no state change)
 				nodeClaim.Annotations = map[string]string{"test": "annotation"}
 				ExpectApplied(ctx, env.Client, nodeClaim)
-				ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
+				ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
 
 				// State should remain the same
 				running, deleting, pendingdisruption = cluster.NodePoolState.GetNodeCount(nodePool.Name)
@@ -2635,7 +2635,7 @@ var _ = Describe("NodePoolState Tracking", func() {
 				newProviderID := test.RandomProviderID()
 				nodeClaim.Status.ProviderID = newProviderID
 				ExpectApplied(ctx, env.Client, nodeClaim)
-				ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
+				ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
 
 				// Should still track the NodeClaim correctly
 				running, deleting, pendingdisruption = cluster.NodePoolState.GetNodeCount(nodePool.Name)
@@ -2671,7 +2671,7 @@ var _ = Describe("NodePoolState Tracking", func() {
 				// Update NodeClaim - should detect it's marked for deletion
 				nodeClaim.Annotations = map[string]string{"updated": "true"}
 				ExpectApplied(ctx, env.Client, nodeClaim)
-				ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
+				ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
 
 				// Should be in deleting state
 				running, deleting, pendingdisruption = cluster.NodePoolState.GetNodeCount(nodePool.Name)
@@ -2682,7 +2682,7 @@ var _ = Describe("NodePoolState Tracking", func() {
 
 			It("should handle NodeClaim cleanup correctly", func() {
 				ExpectApplied(ctx, env.Client, nodeClaim)
-				ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
+				ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
 
 				running, deleting, pendingdisruption := cluster.NodePoolState.GetNodeCount(nodePool.Name)
 				Expect(running).To(Equal(1))
@@ -2691,7 +2691,7 @@ var _ = Describe("NodePoolState Tracking", func() {
 
 				// Delete the NodeClaim
 				ExpectDeleted(ctx, env.Client, nodeClaim)
-				ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
+				ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
 
 				running, deleting, pendingdisruption = cluster.NodePoolState.GetNodeCount(nodePool.Name)
 				Expect(running).To(Equal(0))
@@ -2703,7 +2703,7 @@ var _ = Describe("NodePoolState Tracking", func() {
 		Context("Mark NodeClaims pendingdisruption", func() {
 			BeforeEach(func() {
 				ExpectApplied(ctx, env.Client, nodeClaim)
-				ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
+				ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
 			})
 
 			It("should handle marking multiple NodeClaims", func() {
@@ -2720,7 +2720,7 @@ var _ = Describe("NodePoolState Tracking", func() {
 				})
 
 				ExpectApplied(ctx, env.Client, nodeClaim2)
-				ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim2))
+				ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim2))
 
 				running, deleting, pendingdisruption := cluster.NodePoolState.GetNodeCount(nodePool.Name)
 
@@ -2747,7 +2747,7 @@ var _ = Describe("NodePoolState Tracking", func() {
 		Context("DeleteNodeClaim", func() {
 			BeforeEach(func() {
 				ExpectApplied(ctx, env.Client, nodeClaim)
-				ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
+				ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
 			})
 
 			It("should remove NodeClaim from nodepool state", func() {
@@ -2758,7 +2758,7 @@ var _ = Describe("NodePoolState Tracking", func() {
 				Expect(cluster.NodeClaimExists(nodeClaim.Name)).To(BeTrue())
 
 				ExpectDeleted(ctx, env.Client, nodeClaim)
-				ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
+				ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
 
 				running, deleting, pendingdisruption = cluster.NodePoolState.GetNodeCount(nodePool.Name)
 				Expect(running).To(Equal(0))
@@ -2772,7 +2772,7 @@ var _ = Describe("NodePoolState Tracking", func() {
 		Context("MarkForDeletion", func() {
 			BeforeEach(func() {
 				ExpectApplied(ctx, env.Client, nodeClaim)
-				ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
+				ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
 			})
 
 			It("should handle marking multiple NodeClaims for deletion", func() {
@@ -2789,7 +2789,7 @@ var _ = Describe("NodePoolState Tracking", func() {
 				})
 
 				ExpectApplied(ctx, env.Client, nodeClaim2)
-				ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim2))
+				ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim2))
 
 				running, deleting, pendingdisruption := cluster.NodePoolState.GetNodeCount(nodePool.Name)
 
@@ -2825,7 +2825,7 @@ var _ = Describe("NodePoolState Tracking", func() {
 	Context("UnmarkForDeletion", func() {
 		BeforeEach(func() {
 			ExpectApplied(ctx, env.Client, nodeClaim)
-			ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
+			ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
 			cluster.MarkForDeletion(nodeClaim.Status.ProviderID)
 		})
 
@@ -2858,7 +2858,7 @@ var _ = Describe("NodePoolState Tracking", func() {
 			})
 
 			ExpectApplied(ctx, env.Client, nodeClaim2)
-			ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim2))
+			ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim2))
 
 			cluster.MarkForDeletion(nodeClaim2.Status.ProviderID)
 			running, deleting, pendingdisruption := cluster.NodePoolState.GetNodeCount(nodePool.Name)
@@ -2891,7 +2891,7 @@ var _ = Describe("NodePoolState Tracking", func() {
 			})
 
 			ExpectApplied(ctx, env.Client, nodeClaim)
-			ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
+			ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
 
 			var wg sync.WaitGroup
 			numOperations := 50
@@ -2939,8 +2939,8 @@ var _ = Describe("StateNode Capacity", func() {
 		ExpectApplied(ctx, env.Client, nodeClaim, node)
 		ExpectMakeNodesInitialized(ctx, env.Client, env.Clock, node)
 		ExpectMakeNodeClaimsInitialized(ctx, env.Client, env.Clock, nodeClaim)
-		ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
-		ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+		ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
+		ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 
 		stateNode := ExpectStateNodeExists(cluster, node)
 		capacity := stateNode.Capacity()
@@ -2961,7 +2961,7 @@ var _ = Describe("StateNode Capacity", func() {
 			},
 		})
 		ExpectApplied(ctx, env.Client, nodeClaim)
-		ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
+		ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
 
 		stateNode := ExpectStateNodeExistsForNodeClaim(cluster, nodeClaim)
 		capacity := stateNode.Capacity()
@@ -2983,8 +2983,8 @@ var _ = Describe("StateNode Capacity", func() {
 		})
 		// Don't initialize - leave as uninitialized
 		ExpectApplied(ctx, env.Client, nodeClaim, node)
-		ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
-		ExpectReconcileSucceeded(ctx, nodeController, client.ObjectKeyFromObject(node))
+		ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
+		ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
 
 		stateNode := ExpectStateNodeExists(cluster, node)
 		capacity := stateNode.Capacity()

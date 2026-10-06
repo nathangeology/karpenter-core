@@ -82,7 +82,7 @@ var _ = Describe("NodePoolState", func() {
 		It("should account for running NodeClaims", func() {
 			// Add a running NodeClaim
 			ExpectApplied(ctx, env.Client, nodeClaim)
-			ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
+			ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
 
 			// Should have 4 slots available (5 limit - 1 running)
 			granted := cluster.NodePoolState.ReserveNodeCount(nodePool.Name, 5, 4)
@@ -96,7 +96,7 @@ var _ = Describe("NodePoolState", func() {
 		It("should account for deleting NodeClaims", func() {
 			// Add and mark NodeClaim for deletion
 			ExpectApplied(ctx, env.Client, nodeClaim)
-			ExpectReconcileSucceeded(ctx, nodeClaimController, client.ObjectKeyFromObject(nodeClaim))
+			ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaim))
 			cluster.MarkForDeletion(nodeClaim.Status.ProviderID)
 
 			// Should have 4 slots available (5 limit - 1 deleting)
