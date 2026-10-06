@@ -1122,9 +1122,9 @@ func (env *Environment) GetNode(nodeName string) corev1.Node {
 }
 
 // ExpectNoCrashes fails if any karpenter container has restarted, naming every restarted container with its restart
-// count and the exit code and reason of its last termination. The cluster is torn down immediately after this runs, so
-// anything not in the failure message is unrecoverable: an OOMKill, a panic and a killed liveness probe all have to be
-// told apart from the message alone.
+// count and the exit code and reason of its last termination, and printing the tail of the dead container's log. The
+// cluster is torn down immediately after this runs, so anything not emitted here is unrecoverable: an OOMKill, a panic
+// and a killed liveness probe all have to be told apart from this output alone.
 func (env *Environment) ExpectNoCrashes() {
 	GinkgoHelper()
 	var crashed []string
@@ -1141,7 +1141,54 @@ func (env *Environment) ExpectNoCrashes() {
 	}
 	if len(crashed) > 0 {
 		slices.Sort(crashed)
+		env.printPreviousControllerLogs()
 		Fail(fmt.Sprintf("expected karpenter containers to not crash: %s", strings.Join(crashed, "; ")))
+	}
+}
+
+// previousLogTailLines bounds the per-pod dump from printPreviousControllerLogs. A panic stack sits at the end of the
+// dead container's log, so a tail is the right shape, and an XL performance run logs far too much to print whole.
+const previousLogTailLines = 500
+
+// printPreviousControllerLogs prints the tail of the previous container's log for every karpenter pod that has
+// restarted. ExpectNoCrashes calls it before failing because this is the only chance to capture that log: the cluster
+// is torn down later in the same AfterEach, and the dump in env.AfterEach never runs, since Fail unwinds the whole
+// AfterEach node and env.Cleanup runs first. Exit code and reason tell a panic apart from an OOMKill, but only this
+// log says where the panic was.
+//
+// Nothing here asserts. It runs on the way to a Fail that carries the exit code, and an assertion would replace that
+// message with its own.
+func (env *Environment) printPreviousControllerLogs() {
+	fmt.Println("------- START PREVIOUS CONTROLLER LOGS -------")
+	defer fmt.Println("------- END PREVIOUS CONTROLLER LOGS -------")
+
+	podList := &corev1.PodList{}
+	if err := env.Client.List(env.Context, podList, client.MatchingLabels{"app.kubernetes.io/instance": "karpenter"}); err != nil {
+		fmt.Printf("failed listing karpenter pods: %s\n", err)
+		return
+	}
+	for _, pod := range podList.Items {
+		if !lo.ContainsBy(pod.Status.ContainerStatuses, func(cs corev1.ContainerStatus) bool { return cs.RestartCount > 0 }) {
+			continue
+		}
+		fmt.Printf("------- pod/%s [PREVIOUS CONTAINER] -------\n", pod.Name)
+		stream, err := env.KubeClient.CoreV1().Pods(pod.Namespace).GetLogs(pod.Name, &corev1.PodLogOptions{
+			Container: "controller",
+			Previous:  true,
+			TailLines: lo.ToPtr(int64(previousLogTailLines)),
+		}).Stream(env.Context)
+		if err != nil {
+			fmt.Printf("failed fetching previous logs for pod/%s: %s\n", pod.Name, err)
+			continue
+		}
+		raw := &bytes.Buffer{}
+		_, err = io.Copy(raw, stream)
+		stream.Close()
+		if err != nil {
+			fmt.Printf("failed reading previous logs for pod/%s: %s\n", pod.Name, err)
+			continue
+		}
+		fmt.Println(raw.String())
 	}
 }
 
