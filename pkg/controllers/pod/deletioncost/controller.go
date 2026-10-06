@@ -103,12 +103,13 @@ func (c *Controller) Reconcile(ctx context.Context) (reconciler.Result, error) {
 		return reconciler.Result{RequeueAfter: reconcileInterval}, nil
 	}
 
-	// Pointer aliases, not deep copies. Torn reads are acceptable: the writes are
-	// best-effort and the next reconcile picks up any drift.
-	var nodes []*state.StateNode
-	for n := range c.cluster.Nodes() {
-		nodes = append(nodes, n)
-	}
+	// DeepCopyNodes rather than ranging over cluster.Nodes(): that iterator holds a read-lock
+	// released once it finishes, and its contract forbids retaining the StateNode pointers it
+	// yields. The writes it races are in place rather than a map swap, so a retained pointer
+	// aliases them: cleanupNode and cleanupNodeClaim nil out Node and NodeClaim on the object
+	// the snapshot holds, and classifyNode nil-checks each field then dereferences it a line
+	// later. A deletion landing in that window is a nil-pointer dereference, not a stale read.
+	nodes := c.cluster.DeepCopyNodes()
 	if len(nodes) == 0 {
 		return reconciler.Result{RequeueAfter: reconcileInterval}, nil
 	}
