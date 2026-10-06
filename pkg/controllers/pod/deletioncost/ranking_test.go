@@ -904,8 +904,11 @@ var _ = Describe("Ranking", func() {
 			Expect(info2.rank).To(BeNumerically(">", math.MinInt32))
 		})
 
-		// Bare and StatefulSet pods route the node to Group D; Job, DaemonSet and
-		// kube-system pods fall through to Group C.
+		// Bare and StatefulSet pods route the node to Group D; Job and DaemonSet pods
+		// fall through to Group C. Only the controller reference varies here, and the
+		// pod is built without a Namespace, so no Entry can reach the kube-system
+		// carve-out in hasPinningPods. That branch belongs to "should _Edge_ exclude
+		// kube-system bare pods from Group D" below.
 		DescribeTable("should _Edge_ classify non-RS-owned pods as Group D (not disruptable)",
 			func(ownerRef *metav1.OwnerReference, expectGroupD bool) {
 				nodeClaims, nodes := test.NodeClaimsAndNodes(2, v1.NodeClaim{
@@ -941,8 +944,8 @@ var _ = Describe("Ranking", func() {
 				if expectGroupD {
 					Expect(info0.cleanup).To(BeTrue(), "non-RS-owned pod should route its host to Group D")
 				} else {
-					Expect(info0.cleanup).To(BeFalse(), "Job/DaemonSet-owned or system pods must not push their host to Group D")
-					Expect(info0.rank).To(BeNumerically(">", math.MinInt32), "expected Group B/C rank for RS/Job/DaemonSet-owned or system pod")
+					Expect(info0.cleanup).To(BeFalse(), "Job/DaemonSet-owned pods must not push their host to Group D")
+					Expect(info0.rank).To(BeNumerically(">", math.MinInt32), "expected Group B/C rank for RS/Job/DaemonSet-owned pod")
 				}
 			},
 			Entry("bare pod (no owner references) routes to Group D", (*metav1.OwnerReference)(nil), true),
