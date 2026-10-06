@@ -48,6 +48,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apimachinery/pkg/util/version"
 	"k8s.io/client-go/tools/portforward"
 	"k8s.io/client-go/transport"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -922,9 +923,9 @@ func (env *Environment) EventuallyExpectDrifted(nodeClaims ...*v1.NodeClaim) {
 func (env *Environment) ExpectBlockNodeRegistration() {
 	GinkgoHelper()
 
-	version, err := env.KubeClient.Discovery().ServerVersion()
+	serverVersion, err := env.KubeClient.Discovery().ServerVersion()
 	Expect(err).To(BeNil())
-	if version.Minor < "28" {
+	if version.MustParseGeneric(serverVersion.GitVersion).Minor() < 28 {
 		Skip("This test is only valid for K8s >= 1.28")
 	}
 
@@ -1004,9 +1005,9 @@ func (env *Environment) ExpectBlockNodeRegistration() {
 func (env *Environment) ExpectBlockNodeClassStatus(nodeClass *unstructured.Unstructured) {
 	GinkgoHelper()
 
-	version, err := env.KubeClient.Discovery().ServerVersion()
+	serverVersion, err := env.KubeClient.Discovery().ServerVersion()
 	Expect(err).To(BeNil())
-	if version.Minor < "28" {
+	if version.MustParseGeneric(serverVersion.GitVersion).Minor() < 28 {
 		Skip("This test is only valid for K8s >= 1.28")
 	}
 

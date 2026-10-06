@@ -33,6 +33,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/util/version"
 	"k8s.io/client-go/util/workqueue"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
@@ -158,10 +159,11 @@ func (env *Environment) PrintCluster() {
 func (env *Environment) CleanupObjects(cleanableObjects ...client.Object) {
 	time.Sleep(time.Second) // wait one second to let the caches get up-to-date for deletion
 	wg := sync.WaitGroup{}
-	version, err := env.KubeClient.Discovery().ServerVersion()
+	serverVersion, err := env.KubeClient.Discovery().ServerVersion()
 	Expect(err).To(BeNil())
+	minor := version.MustParseGeneric(serverVersion.GitVersion).Minor()
 	for _, obj := range append(cleanableObjects, env.DefaultNodeClass.DeepCopy()) {
-		if version.Minor < "30" &&
+		if minor < 30 &&
 			obj.GetObjectKind().GroupVersionKind().Kind == "ValidatingAdmissionPolicy" &&
 			obj.GetObjectKind().GroupVersionKind().Kind == "ValidatingAdmissionPolicyBinding" {
 			continue
