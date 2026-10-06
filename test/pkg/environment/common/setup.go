@@ -163,20 +163,23 @@ func (env *Environment) CleanupObjects(cleanableObjects ...client.Object) {
 	Expect(err).To(BeNil())
 	minor := version.MustParseGeneric(serverVersion.GitVersion).Minor()
 	for _, obj := range append(cleanableObjects, env.DefaultNodeClass.DeepCopy()) {
-		if minor < 30 &&
-			obj.GetObjectKind().GroupVersionKind().Kind == "ValidatingAdmissionPolicy" &&
-			obj.GetObjectKind().GroupVersionKind().Kind == "ValidatingAdmissionPolicyBinding" {
+		gvk := lo.Must(apiutil.GVKForObject(obj, env.Client.Scheme()))
+		// ValidatingAdmissionPolicy and ValidatingAdmissionPolicyBinding only reached
+		// admissionregistration.k8s.io/v1 in 1.30, so against an older server there is no v1 API to
+		// list or delete them through. The Kind has to come from the scheme: the cleanable objects are
+		// bare Go literals, so their TypeMeta is empty.
+		if minor < 30 && (gvk.Kind == "ValidatingAdmissionPolicy" || gvk.Kind == "ValidatingAdmissionPolicyBinding") {
 			continue
 		}
 
 		wg.Add(1)
-		go func(obj client.Object) {
+		go func() {
 			defer wg.Done()
 			defer GinkgoRecover()
 			Eventually(func(g Gomega) {
 				// This only gets the metadata for the objects since we don't need all the details of the objects
 				metaList := &metav1.PartialObjectMetadataList{}
-				metaList.SetGroupVersionKind(lo.Must(apiutil.GVKForObject(obj, env.Client.Scheme())))
+				metaList.SetGroupVersionKind(gvk)
 				g.Expect(env.Client.List(env, metaList, client.HasLabels([]string{test.DiscoveryLabel}))).To(Succeed())
 				// Limit the concurrency of these calls to 50 workers per object so that we try to limit how aggressively we
 				// are deleting so that we avoid getting client-side throttled
@@ -191,7 +194,7 @@ func (env *Environment) CleanupObjects(cleanableObjects ...client.Object) {
 				g.Expect(env.Client.List(env, metaList, client.HasLabels([]string{test.DiscoveryLabel}), client.Limit(1))).To(Succeed())
 				g.Expect(metaList.Items).To(HaveLen(0))
 			}).Should(Succeed())
-		}(obj)
+		}()
 	}
 	wg.Wait()
 }
