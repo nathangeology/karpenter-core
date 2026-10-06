@@ -76,6 +76,38 @@ var _ = Describe("Consolidation/DRA", func() {
 		return results
 	}
 
+	// results.PodErrors, NodeClaim.Pods and ExistingNode.Pods all hold the scheduler's own deep copies of the cluster's
+	// pods, never the pointers a spec created. So results.PodErrors[pod] is always a map miss and reads nil whether the
+	// pod rescheduled cleanly or was dropped from the simulation entirely. UID survives the copy, so the helpers below
+	// match on it.
+	holdsPod := func(pods []*corev1.Pod, pod *corev1.Pod) bool {
+		return lo.ContainsBy(pods, func(p *corev1.Pod) bool { return p.UID == pod.UID })
+	}
+
+	// podError returns the scheduling error the simulation recorded for pod, nil when it recorded none.
+	podError := func(results pscheduling.Results, pod *corev1.Pod) error {
+		GinkgoHelper()
+		for p, err := range results.PodErrors {
+			if p.UID == pod.UID {
+				return err
+			}
+		}
+		return nil
+	}
+
+	// scheduledOnReplacement reports whether the simulation placed pod on one of the replacement NodeClaims.
+	scheduledOnReplacement := func(results pscheduling.Results, pod *corev1.Pod) bool {
+		GinkgoHelper()
+		return lo.ContainsBy(results.NewNodeClaims, func(nc *pscheduling.NodeClaim) bool { return holdsPod(nc.Pods, pod) })
+	}
+
+	// isScheduled reports whether the simulation placed pod anywhere, on a replacement or on a surviving node.
+	isScheduled := func(results pscheduling.Results, pod *corev1.Pod) bool {
+		GinkgoHelper()
+		return scheduledOnReplacement(results, pod) ||
+			lo.ContainsBy(results.ExistingNodes, func(en *pscheduling.ExistingNode) bool { return holdsPod(en.Pods, pod) })
+	}
+
 	// gpuNodeClaimAndNode builds a managed NodeClaim+Node pair of the given instance type, applies it, and informs
 	// cluster state so it is evaluated as an existing node. The node carries a hostname label and a UID so node-local
 	// published ResourceSlices can target it.
@@ -137,8 +169,9 @@ var _ = Describe("Consolidation/DRA", func() {
 
 		// The pod reschedules with no error, onto a freshly launched NodeClaim (the candidate's published slice is
 		// excluded, so the only way to satisfy the claim is a new node's template GPU).
-		Expect(results.PodErrors[pod]).To(BeNil())
+		Expect(podError(results, pod)).ToNot(HaveOccurred())
 		Expect(results.NewNodeClaims).To(HaveLen(1))
+		Expect(scheduledOnReplacement(results, pod)).To(BeTrue())
 	})
 
 	It("does not target a candidate node's published device (A, positive)", func() {
@@ -153,9 +186,10 @@ var _ = Describe("Consolidation/DRA", func() {
 
 		results := simulateConsolidation(node)
 
-		Expect(results.PodErrors[pod]).To(BeNil())
+		Expect(podError(results, pod)).ToNot(HaveOccurred())
 		// The replacement is a new NodeClaim, and it does not reuse the candidate node as an existing scheduling target.
 		Expect(results.NewNodeClaims).To(HaveLen(1))
+		Expect(scheduledOnReplacement(results, pod)).To(BeTrue())
 		for _, en := range results.ExistingNodes {
 			Expect(en.Name()).ToNot(Equal(node.Name), "the candidate node must not be a scheduling target")
 		}
@@ -175,11 +209,11 @@ var _ = Describe("Consolidation/DRA", func() {
 		pod := gpuPodOnNode(node, "gpu-claim", test.NodeLocalPoolName(test.GPUDriver, node.Name), "incluster-gpu-0")
 
 		results := simulateConsolidation(node)
-		_ = pod
 
-		// The claim can't be re-allocated, so the candidate pod fails to schedule and no replacement is produced —
-		// consolidation cannot proceed. (PodErrors is keyed by the scheduler's internal pod copies, so we assert on the
-		// pointer-independent signals.)
+		// The claim can't be re-allocated, so the candidate pod itself fails to schedule and no replacement is produced,
+		// so consolidation cannot proceed.
+		Expect(podError(results, pod)).To(HaveOccurred())
+		Expect(isScheduled(results, pod)).To(BeFalse())
 		Expect(results.NewNodeClaims).To(BeEmpty())
 		Expect(results.AllNonPendingPodsScheduled()).To(BeFalse())
 	})
@@ -205,10 +239,11 @@ var _ = Describe("Consolidation/DRA", func() {
 		candidatePod := gpuPodOnNode(candidateNode, "candidate-claim", "shared-gpu-pool", "shared-gpu-0")
 
 		results := simulateConsolidation(candidateNode)
-		_ = candidatePod
 
 		// The live pod's device is not available (not freed, claim not reclassified), so the candidate pod can't
 		// reschedule and consolidation cannot proceed.
+		Expect(podError(results, candidatePod)).To(HaveOccurred())
+		Expect(isScheduled(results, candidatePod)).To(BeFalse())
 		Expect(results.NewNodeClaims).To(BeEmpty())
 		Expect(results.AllNonPendingPodsScheduled()).To(BeFalse())
 	})
@@ -230,8 +265,10 @@ var _ = Describe("Consolidation/DRA", func() {
 
 		// Both pods reschedule with no error onto a single replacement NodeClaim (its two template GPUs satisfy both
 		// reclassified claims). Neither candidate node is reused as a scheduling target.
-		Expect(results.PodErrors[pod1]).To(BeNil())
-		Expect(results.PodErrors[pod2]).To(BeNil())
+		Expect(podError(results, pod1)).ToNot(HaveOccurred())
+		Expect(podError(results, pod2)).ToNot(HaveOccurred())
+		Expect(scheduledOnReplacement(results, pod1)).To(BeTrue())
+		Expect(scheduledOnReplacement(results, pod2)).To(BeTrue())
 		Expect(results.NewNodeClaims).To(HaveLen(1))
 		Expect(results.AllNonPendingPodsScheduled()).To(BeTrue())
 		for _, en := range results.ExistingNodes {
@@ -279,7 +316,8 @@ var _ = Describe("Consolidation/DRA", func() {
 		// The candidate pod reschedules: its 10Gi share is reclaimed (B1 partial subtraction) and its claim reclassified
 		// (B2), re-allocating onto the shared device whose remaining capacity (16 - 4 live = 12Gi) now fits 10Gi. The
 		// live pod's 4Gi is untouched. no-gpu-it provides no template GPU, so the cluster-wide device is the only option.
-		Expect(results.PodErrors[candidatePod]).To(BeNil())
+		Expect(podError(results, candidatePod)).ToNot(HaveOccurred())
+		Expect(isScheduled(results, candidatePod)).To(BeTrue())
 		Expect(results.AllNonPendingPodsScheduled()).To(BeTrue())
 	})
 })
