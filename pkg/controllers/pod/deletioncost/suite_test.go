@@ -19,6 +19,7 @@ package deletioncost_test
 import (
 	"context"
 	"math"
+	"sync"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -27,6 +28,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	coreapis "sigs.k8s.io/karpenter/pkg/apis"
 	"sigs.k8s.io/karpenter/pkg/cloudprovider/fake"
@@ -115,6 +117,27 @@ var _ = AfterEach(func() {
 	ExpectCleanedUp(ctx, env.Client)
 	cluster.Reset()
 })
+
+// countingClient counts Patch calls, so a spec can assert the controller made no
+// API call at all. Shared: the write-path specs and the queue specs both use it.
+type countingClient struct {
+	client.Client
+	mu    sync.Mutex
+	count int
+}
+
+func (c *countingClient) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+	c.mu.Lock()
+	c.count++
+	c.mu.Unlock()
+	return c.Client.Patch(ctx, obj, patch, opts...)
+}
+
+func (c *countingClient) PatchCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.count
+}
 
 func rsOwnedPod(opts ...test.PodOptions) *corev1.Pod {
 	rsOwner := metav1.OwnerReference{
