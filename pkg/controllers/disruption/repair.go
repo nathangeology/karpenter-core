@@ -264,7 +264,7 @@ func (r *Repair) commitReboot(ctx context.Context, candidate *Candidate) (bool, 
 	if err := r.kubeClient.Get(ctx, client.ObjectKeyFromObject(candidate.NodeClaim), nodeClaim); err != nil {
 		return false, client.IgnoreNotFound(err)
 	}
-	if nodeClaim.StatusConditions().Get(v1.ConditionTypeRebooting).IsTrue() || !nodeClaim.DeletionTimestamp.IsZero() {
+	if nodeClaim.StatusConditions().IsTrue(v1.ConditionTypeRebooting) || !nodeClaim.DeletionTimestamp.IsZero() {
 		return false, nil
 	}
 	// Fall back to the NodeClaim TGP; no TGP means an unbounded drain.
