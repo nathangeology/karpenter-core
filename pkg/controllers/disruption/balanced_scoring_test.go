@@ -80,7 +80,9 @@ func makeCandidate(nodeName string, np *v1.NodePool, it *cloudprovider.InstanceT
 		Node: node,
 	}
 	// EvictionCost reads the PodDeletionCostManagement gate off the context, so
-	// default Options must be injected. Gate-branching specs live in suite_test.go.
+	// default Options must be injected. Gate-branching specs live in suite_test.go
+	// and pkg/utils/disruption/suite_test.go; ranking parity across the two gate
+	// values is in "Balanced Scoring Gate Parity" below.
 	return &Candidate{
 		StateNode:                sn,
 		instanceType:             it,
@@ -120,6 +122,33 @@ func makePod(name string, deletionCost string) *corev1.Pod {
 		}
 	}
 	return p
+}
+
+// withPrimaryCost sets karpenter.sh/disruption-cost, the annotation both gate
+// values read. makePod's second argument sets the legacy one.
+func withPrimaryCost(p *corev1.Pod, cost string) *corev1.Pod {
+	if p.Annotations == nil {
+		p.Annotations = map[string]string{}
+	}
+	p.Annotations[v1.DisruptionCostAnnotationKey] = cost
+	return p
+}
+
+// savingsRatioAtGate scores pods at a chosen PodDeletionCostManagement value
+// through the same two helpers makeCandidate uses, so a spec can compare both
+// gate values against one fixture.
+func savingsRatioAtGate(pods []*corev1.Pod, it *cloudprovider.InstanceType, gate bool) float64 {
+	opts := &options.Options{}
+	opts.FeatureGates.PodDeletionCostManagement = gate
+	gateCtx := options.ToContext(context.Background(), opts)
+	labels := map[string]string{
+		corev1.LabelTopologyZone: "test-zone-1",
+		v1.CapacityTypeLabelKey:  v1.CapacityTypeOnDemand,
+	}
+	return disruptionutils.SavingsRatio(
+		disruptionutils.ResolveOfferingPrice(labels, it),
+		disruptionutils.ComputeRescheduleDisruptionCost(gateCtx, pods),
+	)
 }
 
 // int32Ptr returns a pointer to an int32 value.
@@ -695,6 +724,65 @@ var _ = Describe("Balanced Scoring", func() {
 			}
 			NewBalancedEvaluator(nil, rec).EmitMultiNodeEvents(ctx, cmd, perPool, true)
 			Expect(rec.events).To(HaveLen(1))
+		})
+	})
+
+	// The gate's effect on EvictionCost is asserted in suite_test.go and
+	// pkg/utils/disruption/suite_test.go. These specs assert what it does one
+	// level up, to the ratio candidates are ranked by.
+	Describe("Balanced Scoring Gate Parity", func() {
+		var it *cloudprovider.InstanceType
+		BeforeEach(func() {
+			it = makeInstanceType("m7i.xlarge", 4.84)
+		})
+
+		It("ranks unannotated pods identically under either gate value", func() {
+			pods := []*corev1.Pod{makePod("p1", ""), makePod("p2", "")}
+			Expect(savingsRatioAtGate(pods, it, false)).
+				To(BeNumerically("~", savingsRatioAtGate(pods, it, true), 0.001))
+		})
+		It("ranks a pod carrying only the legacy annotation lower when the gate is off", func() {
+			// Gate off reads pod-deletion-cost, raising the reschedule cost and so
+			// lowering the ratio. Gate on ignores it, which must leave the ratio at
+			// the unannotated value rather than merely changing it.
+			pods := []*corev1.Pod{makePod("p", "2000000000")}
+			Expect(savingsRatioAtGate(pods, it, false)).
+				To(BeNumerically("<", savingsRatioAtGate(pods, it, true)))
+			Expect(savingsRatioAtGate(pods, it, true)).
+				To(BeNumerically("~", savingsRatioAtGate([]*corev1.Pod{makePod("p", "")}, it, true), 0.001),
+					"gate on must rank an annotated pod exactly as it ranks an unannotated one")
+		})
+		It("ranks a pod carrying the primary annotation identically under either gate value", func() {
+			pods := []*corev1.Pod{withPrimaryCost(makePod("p", ""), "2000000000")}
+			Expect(savingsRatioAtGate(pods, it, false)).
+				To(BeNumerically("~", savingsRatioAtGate(pods, it, true), 0.001))
+		})
+	})
+
+	Describe("Candidate.IsEmpty", func() {
+		var np *v1.NodePool
+		var it *cloudprovider.InstanceType
+		BeforeEach(func() {
+			np = makeNodePool("pool", v1.ConsolidationPolicyBalanced)
+			it = makeInstanceType("m7i.xlarge", 4.84)
+		})
+
+		It("treats a cost equal to the per-node base as empty", func() {
+			// The load-bearing case: it pins the comparator at <=. Flipped to <,
+			// no pod-free node is ever empty and Emptiness stops firing.
+			c := makeCandidate("node-boundary-eq", np, it, nil)
+			c.RescheduleDisruptionCost = disruptionutils.PerNodeBaseDisruptionCost
+			Expect(c.IsEmpty()).To(BeTrue())
+		})
+		It("treats a cost one float step above the per-node base as non-empty", func() {
+			c := makeCandidate("node-boundary-above", np, it, nil)
+			c.RescheduleDisruptionCost = math.Nextafter(disruptionutils.PerNodeBaseDisruptionCost, math.Inf(1))
+			Expect(c.IsEmpty()).To(BeFalse())
+		})
+		It("treats a cost one float step below the per-node base as empty", func() {
+			c := makeCandidate("node-boundary-below", np, it, nil)
+			c.RescheduleDisruptionCost = math.Nextafter(disruptionutils.PerNodeBaseDisruptionCost, math.Inf(-1))
+			Expect(c.IsEmpty()).To(BeTrue())
 		})
 	})
 
