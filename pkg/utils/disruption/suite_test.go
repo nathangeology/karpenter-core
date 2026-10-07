@@ -26,12 +26,14 @@ import (
 	"context"
 	"math"
 	"testing"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/samber/lo"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	clock "k8s.io/utils/clock/testing"
 
 	v1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 	"sigs.k8s.io/karpenter/pkg/cloudprovider"
@@ -46,6 +48,11 @@ import (
 // gateOnContext.
 var ctx context.Context
 
+// fakeClock drives the two helpers that take a clock.Clock. Both read it only
+// through Since, so every spec sets up the input time relative to
+// fakeClock.Now() rather than to wall time.
+var fakeClock *clock.FakeClock
+
 func TestDisruption(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "Disruption")
@@ -53,6 +60,7 @@ func TestDisruption(t *testing.T) {
 
 var _ = BeforeEach(func() {
 	ctx = options.ToContext(context.Background(), test.Options())
+	fakeClock = clock.NewFakeClock(time.Now())
 })
 
 // instanceTypeWithOffering builds an InstanceType carrying exactly one
@@ -83,6 +91,54 @@ func gateOnContext() context.Context {
 	return options.ToContext(context.Background(), test.Options(test.OptionsFields{
 		FeatureGates: test.FeatureGates{PodDeletionCostManagement: lo.ToPtr(true)},
 	}))
+}
+
+// expiringNodeClaim returns a NodeClaim that was created age ago on fakeClock's
+// timeline and expires expireAfter after its creation. test.NodeClaim leaves
+// ExpireAfter at its zero value, so every LifetimeRemaining spec that wants the
+// non-nil branch has to set it.
+//
+// CreationTimestamp is assigned after the builder returns, not through the
+// override: test.ObjectMeta ends with an unconditional
+// `om.CreationTimestamp = metav1.Now()` (pkg/test/metadata.go:59), which
+// discards anything passed in. Setting it through the override leaves every
+// NodeClaim at age 0, where the clamp returns 1.0 and the whole table reads as
+// passing-by-accident.
+func expiringNodeClaim(expireAfter string, age time.Duration) *v1.NodeClaim {
+	nc := test.NodeClaim(v1.NodeClaim{
+		Spec: v1.NodeClaimSpec{ExpireAfter: v1.MustParseNillableDuration(expireAfter)},
+	})
+	nc.CreationTimestamp = metav1.Time{Time: fakeClock.Now().Add(-age)}
+	return nc
+}
+
+// initializedNodeClaim returns a NodeClaim whose Initialized condition is true,
+// with lastPodEvent set lastPodEventAge ago on fakeClock's timeline. A zero
+// lastPodEventAge is not the same as a zero LastPodEventTime: pass
+// withZeroLastPodEvent for the fallback path.
+func initializedNodeClaim(lastPodEventAge time.Duration) *v1.NodeClaim {
+	nc := test.NodeClaim()
+	nc.StatusConditions().SetTrue(v1.ConditionTypeInitialized)
+	nc.Status.LastPodEventTime.Time = fakeClock.Now().Add(-lastPodEventAge)
+	return nc
+}
+
+// withZeroLastPodEvent zeroes LastPodEventTime and parks fakeClock at the
+// Initialized condition's own transition time, so Since(fallback) starts at 0.
+// SetTrue stamps that time from wall time rather than from the fake clock, which
+// is why it is read back rather than assumed.
+func withZeroLastPodEvent(nc *v1.NodeClaim) *v1.NodeClaim {
+	nc.Status.LastPodEventTime.Time = time.Time{}
+	fakeClock.SetTime(nc.StatusConditions().Get(v1.ConditionTypeInitialized).LastTransitionTime.Time)
+	return nc
+}
+
+// consolidateAfterNodePool returns a NodePool with ConsolidateAfter set.
+// test.NodePool leaves it nil, which is the "Never" shape.
+func consolidateAfterNodePool(consolidateAfter string) *v1.NodePool {
+	np := test.NodePool()
+	np.Spec.Disruption.ConsolidateAfter = v1.MustParseNillableDuration(consolidateAfter)
+	return np
 }
 
 var _ = Describe("ResolveOfferingPrice", func() {
@@ -220,5 +276,212 @@ var _ = Describe("EvictionCost", func() {
 			Entry("one negative band is one unit below the default, above the clamp", "-134217728", 0.0),
 			Entry("zero is the default cost", "0", 1.0),
 		)
+	})
+})
+
+// ReschedulingCost and ComputeRescheduleDisruptionCost both sum EvictionCost
+// over a pod list and differ in two ways that no spec pinned before: this one
+// has no per-node base and no per-pod floor. Both differences are live, because
+// pkg/controllers/disruption/types.go:221 and
+// pkg/controllers/static/deprovisioning/controller.go:302-303 call this one, not
+// the floored one.
+var _ = Describe("ReschedulingCost", func() {
+	It("returns 0 for no pods, where ComputeRescheduleDisruptionCost returns the per-node base", func() {
+		Expect(disruptionutils.ReschedulingCost(ctx, nil)).To(BeNumerically("==", 0.0))
+		Expect(disruptionutils.ComputeRescheduleDisruptionCost(ctx, nil)).
+			To(BeNumerically("==", disruptionutils.PerNodeBaseDisruptionCost))
+	})
+	It("sums one unit per unannotated pod with no base added", func() {
+		pods := []*corev1.Pod{{}, {}, {}}
+		Expect(disruptionutils.ReschedulingCost(ctx, pods)).To(BeNumerically("~", 3.0, 0.001))
+	})
+	It("returns a negative cost for a pod at the -10 clamp rather than flooring at 0", func() {
+		// The floored sibling returns exactly the base for this input. Here the
+		// -10 reaches the caller, so Candidate.DisruptionCost can go negative.
+		pods := []*corev1.Pod{podWithAnnotations(map[string]string{corev1.PodDeletionCost: "-2000000000"})}
+		Expect(disruptionutils.ReschedulingCost(ctx, pods)).To(BeNumerically("~", -10.0, 0.001))
+		Expect(disruptionutils.ComputeRescheduleDisruptionCost(ctx, pods)).
+			To(BeNumerically("==", disruptionutils.PerNodeBaseDisruptionCost))
+	})
+	It("lets a cheap pod cancel an expensive one, because the floor is absent at the pod level", func() {
+		// Floored per pod this would be 10.0. Summed unfloored it is 0, so the
+		// absent floor changes the ranking rather than only the magnitude.
+		pods := []*corev1.Pod{
+			podWithAnnotations(map[string]string{corev1.PodDeletionCost: "2000000000"}),
+			podWithAnnotations(map[string]string{corev1.PodDeletionCost: "-2000000000"}),
+		}
+		Expect(disruptionutils.ReschedulingCost(ctx, pods)).To(BeNumerically("~", 0.0, 0.001))
+	})
+	It("panics when the context carries no Options, the same contract EvictionCost imposes", func() {
+		Expect(func() {
+			_ = disruptionutils.ReschedulingCost(context.Background(), []*corev1.Pod{{}})
+		}).To(Panic())
+	})
+})
+
+var _ = Describe("LifetimeRemaining", func() {
+	// The nil branch returns 1.0 without touching the clock. It is also the only
+	// thing standing between a NodeClaim with no ExpireAfter and a nil
+	// dereference: NillableDuration embeds *time.Duration, so the promoted
+	// Seconds() panics on a nil inner pointer.
+	Context("a nil ExpireAfter duration", func() {
+		It("returns 1.0 for a NodeClaim with no ExpireAfter set", func() {
+			Expect(disruptionutils.LifetimeRemaining(fakeClock, test.NodePool(), test.NodeClaim())).
+				To(BeNumerically("==", 1.0))
+		})
+		It("returns 1.0 for ExpireAfter: Never", func() {
+			nc := expiringNodeClaim("Never", 30*time.Minute)
+			Expect(nc.Spec.ExpireAfter.Duration).To(BeNil(), "Never must parse to a nil duration for this spec to mean anything")
+			Expect(disruptionutils.LifetimeRemaining(fakeClock, test.NodePool(), nc)).
+				To(BeNumerically("==", 1.0))
+		})
+		It("ignores age entirely on the nil branch, so an ancient NodeClaim still scores 1.0", func() {
+			nc := expiringNodeClaim("Never", 365*24*time.Hour)
+			Expect(disruptionutils.LifetimeRemaining(fakeClock, test.NodePool(), nc)).
+				To(BeNumerically("==", 1.0))
+		})
+	})
+
+	Context("a set ExpireAfter duration", func() {
+		DescribeTable("scales the remaining fraction and clamps it to [0, 1]",
+			func(expireAfter string, age time.Duration, expected float64) {
+				nc := expiringNodeClaim(expireAfter, age)
+				Expect(disruptionutils.LifetimeRemaining(fakeClock, test.NodePool(), nc)).
+					To(BeNumerically("~", expected, 0.001))
+			},
+			Entry("a NodeClaim created this instant has its whole lifetime", "1h", time.Duration(0), 1.0),
+			Entry("halfway through is 0.5", "1h", 30*time.Minute, 0.5),
+			Entry("three quarters through is 0.25", "1h", 45*time.Minute, 0.25),
+			Entry("exactly at expiry is 0", "1h", time.Hour, 0.0),
+			Entry("past expiry clamps to 0 rather than going negative", "1h", 3*time.Hour, 0.0),
+			Entry("a creation timestamp ahead of the clock clamps to 1 rather than exceeding it", "1h", -2*time.Hour, 1.0),
+		)
+		It("reads the clock rather than wall time, so stepping it ages the NodeClaim", func() {
+			nc := expiringNodeClaim("1h", 0)
+			Expect(disruptionutils.LifetimeRemaining(fakeClock, test.NodePool(), nc)).To(BeNumerically("~", 1.0, 0.001))
+			fakeClock.Step(45 * time.Minute)
+			Expect(disruptionutils.LifetimeRemaining(fakeClock, test.NodePool(), nc)).To(BeNumerically("~", 0.25, 0.001))
+		})
+		It("ignores the NodePool argument, which it accepts but never reads", func() {
+			nc := expiringNodeClaim("1h", 30*time.Minute)
+			Expect(disruptionutils.LifetimeRemaining(fakeClock, nil, nc)).To(BeNumerically("~", 0.5, 0.001))
+		})
+	})
+
+	// A zero ExpireAfter is a non-nil pointer at 0, so it takes the division
+	// branch with a zero denominator. lo.Clamp compares with < and >, both of
+	// which are false for NaN, so NaN passes through unclamped. Pinned because
+	// the result feeds a multiplication into Candidate.DisruptionCost, where a
+	// NaN is unorderable and silently loses every ranking comparison.
+	Context("a zero ExpireAfter duration, which divides by zero", func() {
+		It("returns NaN when the age is also zero", func() {
+			nc := expiringNodeClaim("0s", 0)
+			Expect(nc.Spec.ExpireAfter.Duration).ToNot(BeNil())
+			Expect(math.IsNaN(disruptionutils.LifetimeRemaining(fakeClock, test.NodePool(), nc))).To(BeTrue(),
+				"0/0 is NaN and lo.Clamp does not filter it")
+		})
+		It("returns 0 for any non-zero age, because -Inf does clamp", func() {
+			nc := expiringNodeClaim("0s", time.Second)
+			Expect(disruptionutils.LifetimeRemaining(fakeClock, test.NodePool(), nc)).
+				To(BeNumerically("==", 0.0))
+		})
+	})
+})
+
+var _ = Describe("IsUnderConsolidateAfter", func() {
+	Context("the early-return guards", func() {
+		It("returns false for a nil NodePool, before any NodeClaim field is read", func() {
+			Expect(disruptionutils.IsUnderConsolidateAfter(nil, initializedNodeClaim(0), fakeClock)).To(BeFalse())
+		})
+		It("returns false for a nil NodeClaim", func() {
+			Expect(disruptionutils.IsUnderConsolidateAfter(consolidateAfterNodePool("1h"), nil, fakeClock)).To(BeFalse())
+		})
+		It("returns false for a nil ConsolidateAfter duration, which is ConsolidateAfter: Never", func() {
+			np := consolidateAfterNodePool("Never")
+			Expect(np.Spec.Disruption.ConsolidateAfter.Duration).To(BeNil())
+			Expect(disruptionutils.IsUnderConsolidateAfter(np, initializedNodeClaim(0), fakeClock)).To(BeFalse())
+		})
+		It("returns false for a zero ConsolidateAfter, which is a non-nil pointer the nil check misses", func() {
+			np := consolidateAfterNodePool("0s")
+			Expect(np.Spec.Disruption.ConsolidateAfter.Duration).ToNot(BeNil())
+			Expect(disruptionutils.IsUnderConsolidateAfter(np, initializedNodeClaim(0), fakeClock)).To(BeFalse())
+		})
+		// The two specs above pass whether or not their guard is present, because
+		// a lastPodEvent at the clock's own time gives Since == 0 and the
+		// comparator reads `0 < 0`, which is false either way. A lastPodEvent in
+		// the future is the only input where guard and comparator disagree: the
+		// guard returns false, while `Since(future) < 0` is true. Without these
+		// two entries, deleting either guard is an undetected change.
+		DescribeTable("returns false for a disabled ConsolidateAfter even when the comparator alone would say true",
+			func(consolidateAfter string) {
+				np := consolidateAfterNodePool(consolidateAfter)
+				nc := initializedNodeClaim(-time.Minute)
+				Expect(fakeClock.Since(nc.Status.LastPodEventTime.Time)).To(BeNumerically("<", 0),
+					"the entry is only meaningful while Since is negative")
+				Expect(disruptionutils.IsUnderConsolidateAfter(np, nc, fakeClock)).To(BeFalse())
+			},
+			Entry("Never, a nil duration", "Never"),
+			Entry("0s, a non-nil duration at zero", "0s"),
+		)
+		It("returns false for a NodeClaim with no Initialized condition", func() {
+			// test.NodeClaim sets no conditions, so Initialized is absent rather
+			// than false. IsTrue covers both, and only this spec covers absent.
+			Expect(disruptionutils.IsUnderConsolidateAfter(consolidateAfterNodePool("1h"), test.NodeClaim(), fakeClock)).
+				To(BeFalse())
+		})
+		It("returns false for a NodeClaim whose Initialized condition is explicitly false", func() {
+			nc := test.NodeClaim()
+			nc.StatusConditions().SetFalse(v1.ConditionTypeInitialized, "NotInitialized", "test")
+			nc.Status.LastPodEventTime.Time = fakeClock.Now()
+			Expect(disruptionutils.IsUnderConsolidateAfter(consolidateAfterNodePool("1h"), nc, fakeClock)).To(BeFalse())
+		})
+	})
+
+	Context("the lastPodEvent window", func() {
+		DescribeTable("compares the time since the last pod event against ConsolidateAfter",
+			func(consolidateAfter string, lastPodEventAge time.Duration, expected bool) {
+				np := consolidateAfterNodePool(consolidateAfter)
+				Expect(disruptionutils.IsUnderConsolidateAfter(np, initializedNodeClaim(lastPodEventAge), fakeClock)).
+					To(Equal(expected))
+			},
+			Entry("a pod event this instant is inside the window", "1m", time.Duration(0), true),
+			Entry("a pod event well inside the window counts", "1m", 30*time.Second, true),
+			Entry("a pod event exactly ConsolidateAfter ago is outside, because the comparator is strict", "1m", time.Minute, false),
+			Entry("one nanosecond short of the boundary is still inside", "1m", time.Minute-time.Nanosecond, true),
+			Entry("a pod event past the window is outside", "1m", 5*time.Minute, false),
+			Entry("a pod event in the future is inside, since a negative Since is below any positive duration", "1m", -time.Minute, true),
+		)
+		It("leaves the window as the clock advances past ConsolidateAfter", func() {
+			np := consolidateAfterNodePool("1m")
+			nc := initializedNodeClaim(0)
+			Expect(disruptionutils.IsUnderConsolidateAfter(np, nc, fakeClock)).To(BeTrue())
+			fakeClock.Step(time.Minute)
+			Expect(disruptionutils.IsUnderConsolidateAfter(np, nc, fakeClock)).To(BeFalse())
+		})
+	})
+
+	// With no pod event recorded the helper falls back to the Initialized
+	// condition's transition time, the point at which Karpenter first accepted
+	// that pods could schedule. Without the fallback a never-scheduled node
+	// would measure Since(zero time), which is decades and always outside the
+	// window.
+	Context("a zero LastPodEventTime", func() {
+		It("falls back to the Initialized transition time and reports inside the window", func() {
+			nc := withZeroLastPodEvent(initializedNodeClaim(0))
+			Expect(disruptionutils.IsUnderConsolidateAfter(consolidateAfterNodePool("1m"), nc, fakeClock)).To(BeTrue())
+		})
+		It("reports outside the window once the clock passes ConsolidateAfter from that transition time", func() {
+			nc := withZeroLastPodEvent(initializedNodeClaim(0))
+			fakeClock.Step(time.Minute)
+			Expect(disruptionutils.IsUnderConsolidateAfter(consolidateAfterNodePool("1m"), nc, fakeClock)).To(BeFalse())
+		})
+		It("does not measure from the zero time, which would put every fresh node outside the window", func() {
+			// The distinguishing input: a long ConsolidateAfter that the zero
+			// time still exceeds. Measuring from time.Time{} gives decades and
+			// returns false; measuring from the transition time gives ~0 and
+			// returns true.
+			nc := withZeroLastPodEvent(initializedNodeClaim(0))
+			Expect(disruptionutils.IsUnderConsolidateAfter(consolidateAfterNodePool("8760h"), nc, fakeClock)).To(BeTrue())
+		})
 	})
 })
