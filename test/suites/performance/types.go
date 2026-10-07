@@ -47,6 +47,12 @@ type PerformanceReport struct {
 	Rounds                  int           `json:"rounds"`
 	Timestamp               time.Time     `json:"timestamp"`
 
+	// ConsolidationWindow is the stretch monitorConsolidationRounds watched, and
+	// the stretch the Karpenter resource metrics below are averaged over. Drain
+	// detection closes it, not the workload, so it varies run to run for the same
+	// end state. Zero on scale-out and drift reports.
+	ConsolidationWindow time.Duration `json:"consolidation_window"`
+
 	// Karpenter pod resource usage from Kubernetes Metrics API (container-level)
 	KarpenterP95MemoryMB float64 `json:"karpenter_p95_memory_mb"`
 	KarpenterAvgMemoryMB float64 `json:"karpenter_avg_memory_mb"`

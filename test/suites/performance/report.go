@@ -61,6 +61,9 @@ func OutputPerformanceReport(report *PerformanceReport, filePrefix string) {
 	GinkgoWriter.Printf("Efficiency Score: %.1f%%\n", report.ResourceEfficiencyScore)
 	GinkgoWriter.Printf("Pods per Node: %.1f\n", report.PodsPerNode)
 	GinkgoWriter.Printf("Rounds: %d\n", report.Rounds)
+	if report.ConsolidationWindow > 0 {
+		GinkgoWriter.Printf("Consolidation Window: %s\n", report.ConsolidationWindow.Round(time.Second))
+	}
 
 	// Karpenter pod resource usage (from Kubernetes Metrics API)
 	if report.MetricsSampleCount > 0 {
@@ -206,7 +209,7 @@ func ReportConsolidation(env *common.Environment, testName string, initialPods, 
 	}
 
 	// Monitor consolidation rounds
-	consolidationRounds, _ := monitorConsolidationRounds(env, timeout)
+	consolidationRounds, consolidationWindow := monitorConsolidationRounds(env, timeout)
 	totalTime := time.Since(startTime)
 	memProfile, cpuProfile := profiler.Stop()
 	stats := metricsPoller.Stop()
@@ -225,7 +228,7 @@ func ReportConsolidation(env *common.Environment, testName string, initialPods, 
 		podsPerNode = float64(finalPods) / float64(finalNodes)
 	}
 
-	return &PerformanceReport{
+	report := &PerformanceReport{
 		TestName:                testName,
 		TestType:                "consolidation",
 		TotalPods:               finalPods,
@@ -239,6 +242,7 @@ func ReportConsolidation(env *common.Environment, testName string, initialPods, 
 		ResourceEfficiencyScore: resourceEfficiencyScore,
 		PodsPerNode:             podsPerNode,
 		Rounds:                  len(consolidationRounds),
+		ConsolidationWindow:     consolidationWindow,
 		Timestamp:               time.Now(),
 		KarpenterP95MemoryMB:    stats.P95MemoryMB,
 		KarpenterAvgMemoryMB:    stats.AvgMemoryMB,
@@ -249,7 +253,10 @@ func ReportConsolidation(env *common.Environment, testName string, initialPods, 
 		MetricsSampleCount:      stats.SampleCount,
 		MemoryProfileData:       memProfile,
 		CPUProfileData:          cpuProfile,
-	}, nil
+	}
+	// The report is returned alongside any measurement-validity error so the
+	// caller still writes it out: the rejected runs are the ones worth studying.
+	return report, validateConsolidationMeasurement(report)
 }
 
 // ReportDrift monitors a drift operation and returns a performance report.
@@ -432,6 +439,30 @@ func monitorConsolidationRounds(env *common.Environment, timeout time.Duration) 
 	return consolidationRounds, totalConsolidationTime
 }
 
+// validateConsolidationMeasurement rejects a consolidation report whose resource
+// metrics do not cover the consolidation they are about to be asserted against.
+//
+// monitorConsolidationRounds polls every 30 seconds for a draining node and
+// closes its window three minutes after the last one it saw, so a drain that
+// starts and finishes between two polls is never observed and the window closes
+// at its three-minute floor while nodes keep terminating. The metrics poller
+// averages over exactly that window, so the averages then describe a stretch
+// that mostly excludes the disruption burn. Measured across 51 kind-perf-e2e
+// runs, the zero-round runs averaged 0.19 cores against 0.32 for the rest at the
+// same end state, and every one of them passed a 0.30-core threshold without
+// having measured a consolidation.
+//
+// Nodes removed with no round observed is that case. It is an error rather than
+// a skip so the sampling race stays visible; the fix is drain detection that
+// does not depend on a poll landing inside the drain.
+func validateConsolidationMeasurement(report *PerformanceReport) error {
+	if report.Rounds > 0 || report.NodesNetChange >= 0 {
+		return nil
+	}
+	return fmt.Errorf("consolidation monitor observed no draining node while %d nodes were removed: the %s window and its %d resource samples do not cover the consolidation, so the thresholds have nothing to assert against",
+		-report.NodesNetChange, report.ConsolidationWindow.Round(time.Second), report.MetricsSampleCount)
+}
+
 // Convenience functions for common monitoring patterns
 
 // ReportScaleOutWithOutput monitors scale-out and automatically outputs the report
@@ -447,11 +478,10 @@ func ReportScaleOutWithOutput(env *common.Environment, testName string, expected
 // ReportConsolidationWithOutput monitors consolidation and automatically outputs the report
 func ReportConsolidationWithOutput(env *common.Environment, testName string, initialPods, finalPods, initialNodes int, timeout time.Duration, filePrefix string) (*PerformanceReport, error) {
 	report, err := ReportConsolidation(env, testName, initialPods, finalPods, initialNodes, timeout)
-	if err != nil {
-		return nil, err
+	if report != nil {
+		OutputPerformanceReport(report, filePrefix)
 	}
-	OutputPerformanceReport(report, filePrefix)
-	return report, nil
+	return report, err
 }
 
 // ReportDriftWithOutput monitors drift and automatically outputs the report
