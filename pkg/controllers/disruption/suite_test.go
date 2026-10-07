@@ -951,7 +951,7 @@ var _ = Describe("Pod Eviction Cost", func() {
 		})
 		Expect(cost).To(BeNumerically(">", standardPodCost))
 	})
-	It("should have a lower disruptionCost for a pod with a positive deletion disruptionCost", func() {
+	It("should have a lower disruptionCost for a pod with a negative deletion disruptionCost", func() {
 		cost := disruptionutils.EvictionCost(gateOffCtx, &corev1.Pod{
 			ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{
 				corev1.PodDeletionCost: "-100",
