@@ -914,19 +914,22 @@ func (env *Environment) EventuallyExpectDrifted(nodeClaims ...*v1.NodeClaim) {
 // It creates a policy that prevents nodes from registering if they have the label 'registration: fail'.
 //
 // The function performs the following steps:
-// 1. Verifies the cluster version is 1.28 or higher (requirement for ValidatingAdmissionPolicy)
+// 1. Verifies the cluster version is 1.30 or higher (requirement for ValidatingAdmissionPolicy)
 // 2. Creates an admission policy that specifically targets node creation
 // 3. Creates a binding for the admission policy to enforce the validation
 // 4. Ensures the policy is active through validation testing
 //
-// Note: Requires Kubernetes version 1.28+ to function properly.
+// Note: Requires Kubernetes version 1.30+ to function properly.
 func (env *Environment) ExpectBlockNodeRegistration() {
 	GinkgoHelper()
 
 	serverVersion, err := env.KubeClient.Discovery().ServerVersion()
 	Expect(err).To(BeNil())
-	if version.MustParseGeneric(serverVersion.GitVersion).Minor() < 28 {
-		Skip("This test is only valid for K8s >= 1.28")
+	// ValidatingAdmissionPolicy and ValidatingAdmissionPolicyBinding only reached
+	// admissionregistration.k8s.io/v1 in 1.30, and that is the group version constructed below, so
+	// an older server has no v1 API to create them through.
+	if version.MustParseGeneric(serverVersion.GitVersion).Minor() < 30 {
+		Skip("This test is only valid for K8s >= 1.30")
 	}
 
 	// Define the ValidatingAdmissionPolicy that will inspect node creation requests
@@ -997,18 +1000,21 @@ func (env *Environment) ExpectBlockNodeRegistration() {
 // It creates a policy that prevents nodeclassess from updating their status
 //
 // The function performs the following steps:
-// 1. Verifies the cluster version is 1.28 or higher (requirement for ValidatingAdmissionPolicy)
+// 1. Verifies the cluster version is 1.30 or higher (requirement for ValidatingAdmissionPolicy)
 // 2. Creates an admission policy that specifically targets nodeclass status updates
 // 3. Creates a binding for the admission policy to enforce the validation
 //
-// Note: Requires Kubernetes version 1.28+ to function properly.
+// Note: Requires Kubernetes version 1.30+ to function properly.
 func (env *Environment) ExpectBlockNodeClassStatus(nodeClass *unstructured.Unstructured) {
 	GinkgoHelper()
 
 	serverVersion, err := env.KubeClient.Discovery().ServerVersion()
 	Expect(err).To(BeNil())
-	if version.MustParseGeneric(serverVersion.GitVersion).Minor() < 28 {
-		Skip("This test is only valid for K8s >= 1.28")
+	// ValidatingAdmissionPolicy and ValidatingAdmissionPolicyBinding only reached
+	// admissionregistration.k8s.io/v1 in 1.30, and that is the group version constructed below, so
+	// an older server has no v1 API to create them through.
+	if version.MustParseGeneric(serverVersion.GitVersion).Minor() < 30 {
+		Skip("This test is only valid for K8s >= 1.30")
 	}
 
 	// Define the ValidatingAdmissionPolicy that will inspect node creation requests
