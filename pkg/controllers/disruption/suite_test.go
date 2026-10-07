@@ -19,7 +19,9 @@ package disruption_test
 import (
 	"context"
 	"fmt"
+	"math"
 	"sort"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -1025,7 +1027,45 @@ var _ = Describe("Pod Eviction Cost", func() {
 		})
 		Expect(cost).To(BeNumerically(">", standardPodCost))
 	})
+	// The four specs above read a positive pod-deletion-cost, which is the
+	// customer-set shape the gate-off fallback was written for. The three below
+	// read the value Karpenter's own pod.deletioncost controller writes on
+	// Group A, math.MinInt32, which survives a gate ON to OFF transition because
+	// clearAnnotation is only reachable from the gated controller's Queue.
+	It("should not let a leftover Group A pod-deletion-cost drive a summed reschedule cost negative", func() {
+		pods := lo.Times(5, func(int) *corev1.Pod { return groupALeftoverPod() })
+		Expect(disruptionutils.ReschedulingCost(ctx, pods)).To(BeNumerically(">", 0),
+			"ReschedulingCost sums EvictionCost without the math.Max(0, ...) that its sibling "+
+				"ComputeRescheduleDisruptionCost applies, so a leftover Group A value flips the sign")
+	})
+	It("should not let a leftover Group A pod-deletion-cost collapse a populated node to the empty floor", func() {
+		pods := lo.Times(5, func(int) *corev1.Pod { return groupALeftoverPod() })
+		Expect(disruptionutils.ComputeRescheduleDisruptionCost(ctx, pods)).
+			To(BeNumerically(">", disruptionutils.PerNodeBaseDisruptionCost),
+				"Candidate.IsEmpty compares against PerNodeBaseDisruptionCost, so a node whose pods all "+
+					"carry a leftover Group A value reports Empty while still running those pods")
+	})
+	It("should ignore a leftover Group A pod-deletion-cost while the gate is still on", func() {
+		// Control arm. Gate=ON is the self-healing case: EvictionCost skips the
+		// annotation entirely, so this spec passes on unpatched main and bounds
+		// the defect to the transition rather than to the write itself.
+		gateOnOpts := test.Options()
+		gateOnOpts.FeatureGates.PodDeletionCostManagement = true
+		gateOnCtx := options.ToContext(ctx, gateOnOpts)
+		Expect(disruptionutils.EvictionCost(gateOnCtx, groupALeftoverPod())).
+			To(BeNumerically("==", standardPodCost))
+	})
 })
+
+// groupALeftoverPod returns a pod carrying the exact pod-deletion-cost value
+// RankNodes assigns to Group A, as strconv.Itoa writes it. Built from
+// math.MinInt32 rather than a literal so the fixture tracks the production
+// constant.
+func groupALeftoverPod() *corev1.Pod {
+	return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{
+		corev1.PodDeletionCost: strconv.Itoa(math.MinInt32),
+	}}}
+}
 
 var _ = Describe("Candidate Filtering", func() {
 	var nodePool *v1.NodePool
