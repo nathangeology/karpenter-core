@@ -388,12 +388,11 @@ var _ = Describe("Annotation", func() {
 			Expect(updated.Annotations[corev1.PodDeletionCost]).To(Equal("-5"))
 		})
 
-		// PENDING on a known Queue defect: Add's "no source push when already enqueued"
-		// plus complete()'s unconditional delete drops a desired-state update that
-		// races an in-progress Reconcile, and controller-runtime is never told to
-		// re-enqueue. The 60s Controller.Reconcile re-Adds, so impact is bounded.
-		// Un-Pend once the queue always pushes to source or version-checks in complete().
-		PIt("should preserve a mid-flight Add's desired state so the next reconcile lands the newer value", func() {
+		// Guards the version check in complete(). An Add that lands while the write
+		// is in flight is suppressed from the source channel because the entry is
+		// still enqueued, so an unconditional delete here drops it with nothing left
+		// to recover it before the next 60s Controller.Reconcile.
+		It("should preserve a mid-flight Add's desired state so the next reconcile lands the newer value", func() {
 			nodeClaims, nodes := test.NodeClaimsAndNodes(1, v1.NodeClaim{
 				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{v1.NodePoolLabelKey: nodePool.Name}},
 				Status:     v1.NodeClaimStatus{Allocatable: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("4"), corev1.ResourceMemory: resource.MustParse("8Gi")}},
