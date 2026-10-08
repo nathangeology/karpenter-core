@@ -107,6 +107,40 @@ var _ = Describe("NodePoolHealthState", func() {
 		Expect(npState.DryRun(npUUID, false).Status()).To(Equal(nodepoolhealth.StatusUnhealthy))
 		Expect(npState.Status(npUUID)).To(Equal(nodepoolhealth.StatusHealthy))
 	})
+	DescribeTable("should weigh the failure threshold against the tracker's own window", func(capacity int, failures int, expected nodepoolhealth.Status) {
+		tracker := nodepoolhealth.NewTracker(capacity)
+		for range failures {
+			tracker.Update(false)
+		}
+		Expect(tracker.Status()).To(Equal(expected))
+	},
+		Entry("two failures fill half of a four-entry window", 4, 2, nodepoolhealth.StatusUnhealthy),
+		Entry("two failures are under half of a five-entry window", 5, 2, nodepoolhealth.StatusHealthy),
+		Entry("one failure fills half of a two-entry window", 2, 1, nodepoolhealth.StatusUnhealthy),
+		// The divisor is the window, not the number of entries taken so far, so one failure
+		// early in a four-entry window is a quarter rather than all of it.
+		Entry("one failure is under half of a four-entry window", 4, 1, nodepoolhealth.StatusHealthy),
+	)
+	DescribeTable("should reach the unhealthy threshold from SetStatus at any window size", func(capacity int) {
+		tracker := nodepoolhealth.NewTracker(capacity)
+		tracker.SetStatus(nodepoolhealth.StatusUnhealthy)
+		Expect(tracker.Status()).To(Equal(nodepoolhealth.StatusUnhealthy))
+
+		tracker.SetStatus(nodepoolhealth.StatusHealthy)
+		Expect(tracker.Status()).To(Equal(nodepoolhealth.StatusHealthy))
+	},
+		Entry("a one-entry window", 1),
+		Entry("a two-entry window", 2),
+		Entry("an odd three-entry window", 3),
+		Entry("the default four-entry window", 4),
+		Entry("an odd five-entry window", 5),
+	)
+	It("should stay unknown for a zero-capacity tracker instead of panicking", func() {
+		tracker := nodepoolhealth.NewTracker(0)
+		Expect(func() { tracker.Update(false) }).ToNot(Panic())
+		Expect(func() { tracker.SetStatus(nodepoolhealth.StatusUnhealthy) }).ToNot(Panic())
+		Expect(tracker.Status()).To(Equal(nodepoolhealth.StatusUnknown))
+	})
 	It("should reset the buffer first when setting status", func() {
 		npState.Update(npUUID, false)
 		npState.Update(npUUID, false)

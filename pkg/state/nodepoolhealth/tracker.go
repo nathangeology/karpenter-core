@@ -17,6 +17,7 @@ limitations under the License.
 package nodepoolhealth
 
 import (
+	"math"
 	"sync"
 
 	"k8s.io/apimachinery/pkg/types"
@@ -42,6 +43,9 @@ type Tracker struct {
 	buffer ringbuffer.RingBuffer[bool]
 }
 
+// NewTracker returns a Tracker over a window of the given number of launch results. Status
+// weighs the failures in the window against the whole window, so a capacity of 0 holds nothing
+// and stays StatusUnknown.
 func NewTracker(capacity int) *Tracker {
 	return &Tracker{
 		buffer: *ringbuffer.New[bool](capacity),
@@ -76,8 +80,10 @@ func (t *Tracker) Status() Status {
 			unhealthyCount++
 		}
 	}
-	// Determine health status based on threshold
-	if (float64(unhealthyCount) / float64(BufferSize)) >= ThresholdFalse {
+	// Determine health status based on threshold. The divisor is the window this tracker was
+	// built with rather than the number of entries in it, so that a single failure in a partly
+	// filled window stays below the threshold.
+	if (float64(unhealthyCount) / float64(t.buffer.Cap())) >= ThresholdFalse {
 		return StatusUnhealthy
 	} else {
 		return StatusHealthy
@@ -96,7 +102,9 @@ func (t *Tracker) SetStatus(status Status) {
 		t.buffer.Insert(true)
 	case StatusUnhealthy:
 		t.buffer.Reset()
-		for range int(BufferSize * ThresholdFalse) {
+		// Round up, so that a window whose threshold falls between two entries still reaches it
+		// rather than landing just below.
+		for range int(math.Ceil(float64(t.buffer.Cap()) * ThresholdFalse)) {
 			t.buffer.Insert(false)
 		}
 	}
