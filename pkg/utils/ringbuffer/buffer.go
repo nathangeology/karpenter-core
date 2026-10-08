@@ -28,6 +28,11 @@ func New[T any](capacity int) *RingBuffer[T] {
 }
 
 func (b *RingBuffer[T]) Insert(value T) {
+	// A zero-capacity buffer has nowhere to hold the value, so it discards it. Without this the
+	// full-buffer branch below indexes into a zero-length slice and takes a modulo of zero.
+	if cap(b.values) == 0 {
+		return
+	}
 	// If buffer is not full, append the new value
 	if len(b.values) < cap(b.values) {
 		b.values = append(b.values, value)
@@ -40,6 +45,11 @@ func (b *RingBuffer[T]) Insert(value T) {
 
 func (b *RingBuffer[T]) Len() int {
 	return len(b.values)
+}
+
+// Cap returns the number of entries the buffer holds before it starts replacing the oldest one.
+func (b *RingBuffer[T]) Cap() int {
+	return cap(b.values)
 }
 
 func (b *RingBuffer[T]) Reset() {
