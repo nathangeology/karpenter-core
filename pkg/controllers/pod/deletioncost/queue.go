@@ -53,6 +53,9 @@ const (
 type queueItem struct {
 	rank  int
 	clear bool
+	// Bumped by every Add. Reconcile carries the version it read so complete can
+	// tell the item it finished from one a mid-flight Add replaced.
+	version uint64
 }
 
 // Fire-and-forget, modeled after terminator.Queue.
@@ -103,8 +106,8 @@ func (q *Queue) Add(pod *corev1.Pod, rank int, clear bool) {
 	defer q.Unlock()
 
 	qk := terminator.NewQueueKey(pod)
-	_, enqueued := q.items[qk]
-	q.items[qk] = queueItem{rank: rank, clear: clear}
+	existing, enqueued := q.items[qk]
+	q.items[qk] = queueItem{rank: rank, clear: clear, version: existing.version + 1}
 	if !enqueued {
 		q.source <- event.TypedGenericEvent[*corev1.Pod]{Object: pod}
 	}
@@ -117,10 +120,22 @@ func (q *Queue) Has(pod *corev1.Pod) bool {
 	return ok
 }
 
-func (q *Queue) complete(qk terminator.QueueKey) {
+// complete clears the entry for a finishing Reconcile and reports that
+// Reconcile's result. An Add that landed while the write was in flight bumped the
+// version, and its source push was suppressed because the entry was still
+// enqueued, so deleting here would drop the newer desired state with nothing left
+// to recover it. Keep the entry and requeue instead; the next pass reads the
+// newer item. Declining the delete without the requeue would strand the entry,
+// since no later Add pushes to source either.
+func (q *Queue) complete(qk terminator.QueueKey, version uint64) (reconcile.Result, error) {
 	q.Lock()
 	defer q.Unlock()
+
+	if current, ok := q.items[qk]; ok && current.version != version {
+		return reconcile.Result{Requeue: true}, nil
+	}
 	delete(q.items, qk)
+	return reconcile.Result{}, nil
 }
 
 func (q *Queue) Reconcile(ctx context.Context, pod *corev1.Pod) (reconcile.Result, error) {
@@ -136,9 +151,8 @@ func (q *Queue) Reconcile(ctx context.Context, pod *corev1.Pod) (reconcile.Resul
 	}
 
 	if q.matchesDesired(pod, item) {
-		q.complete(qk)
 		podAnnotationWritesTotal.Inc(map[string]string{resultLabel: ResultSkippedUnchanged.Name})
-		return reconcile.Result{}, nil
+		return q.complete(qk, item.version)
 	}
 
 	var err error
@@ -149,20 +163,17 @@ func (q *Queue) Reconcile(ctx context.Context, pod *corev1.Pod) (reconcile.Resul
 	}
 	if err == nil {
 		podAnnotationWritesTotal.Inc(map[string]string{resultLabel: ResultUpdated.Name})
-		q.complete(qk)
-		return reconcile.Result{}, nil
+		return q.complete(qk, item.version)
 	}
 	if apierrors.IsNotFound(err) {
 		log.FromContext(ctx).V(1).WithValues("pod", klog.KObj(pod)).Info("skipping pod annotation update, target not found")
 		podAnnotationWritesTotal.Inc(map[string]string{resultLabel: ResultSkippedNotFound.Name})
-		q.complete(qk)
-		return reconcile.Result{}, nil
+		return q.complete(qk, item.version)
 	}
 	if apierrors.IsConflict(err) {
 		log.FromContext(ctx).V(1).WithValues("pod", klog.KObj(pod)).Info("skipping pod annotation update, write raced")
 		podAnnotationWritesTotal.Inc(map[string]string{resultLabel: ResultSkippedConflict.Name})
-		q.complete(qk)
-		return reconcile.Result{}, nil
+		return q.complete(qk, item.version)
 	}
 	podAnnotationWritesTotal.Inc(map[string]string{resultLabel: ResultError.Name})
 	return reconcile.Result{}, err
