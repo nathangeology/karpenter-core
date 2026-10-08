@@ -60,7 +60,8 @@ const (
 	pollInterval = 15 * time.Second
 	// Maximum time to retry provider acceptance after drain.
 	issuanceTimeout = 5 * time.Minute
-	// Minimum graceful drain window, including forceful reboots, to catch late pod bindings.
+	// Minimum graceful drain window, measured from the start of the drain, to catch pods the scheduler bound
+	// before it saw the reboot fence. A forceful reboot has no drain, so it does not observe this.
 	// Mirrors the minimum-drain behavior from kubernetes-sigs/karpenter#2709.
 	minDrainTime = 5 * time.Second
 )
@@ -73,20 +74,29 @@ type Controller struct {
 	terminator    *terminator.Terminator
 	recorder      events.Recorder
 
-	// Tracks when each NodeClaim's provider-accept retry window started.
-	// Process-local; a restart re-seeds the timeout in reconcileRequested.
-	issuanceStartedMu sync.Mutex
-	issuanceStarted   map[types.UID]time.Time
+	// Tracks each in-flight reboot episode's process-local phase starts.
+	// A restart re-seeds them in reconcileRequested, which also re-applies the scheduling fence.
+	episodesMu sync.Mutex
+	episodes   map[types.UID]episode
+}
+
+// episode holds the phase starts this controller observes itself, for the phases whose bounds must run
+// from when this controller entered them rather than from the consumer's request.
+type episode struct {
+	// When this process first drained the episode, i.e. when it applied the scheduling fence.
+	drainStarted time.Time
+	// When the provider-accept retry window opened, i.e. when the drain finished. Zero until then.
+	issuanceStarted time.Time
 }
 
 func NewController(clk clock.Clock, kubeClient client.Client, cloudProvider cloudprovider.CloudProvider, t *terminator.Terminator, recorder events.Recorder) *Controller {
 	return &Controller{
-		clock:           clk,
-		kubeClient:      kubeClient,
-		cloudProvider:   cloudProvider,
-		terminator:      t,
-		recorder:        recorder,
-		issuanceStarted: map[types.UID]time.Time{},
+		clock:         clk,
+		kubeClient:    kubeClient,
+		cloudProvider: cloudProvider,
+		terminator:    t,
+		recorder:      recorder,
+		episodes:      map[types.UID]episode{},
 	}
 }
 
@@ -116,7 +126,7 @@ func (c *Controller) Reconcile(ctx context.Context, nodeClaim *v1.NodeClaim) (re
 	}
 	// Deleting NodeClaims are handled by termination.
 	if !nodeClaim.DeletionTimestamp.IsZero() {
-		c.clearIssuanceStarted(nodeClaim.UID)
+		c.clearEpisode(nodeClaim.UID)
 		return reconcile.Result{}, nil
 	}
 
@@ -230,11 +240,16 @@ func (c *Controller) drain(ctx context.Context, nodeClaim *v1.NodeClaim, node *c
 	if tgp != nil && *tgp == 0 {
 		return true, reconcile.Result{}, nil
 	}
-	// Drain deadlines are measured from when the reboot was requested.
-	floor := rebootRequestedAt(nodeClaim).Add(minDrainTime)
+	// The minimum window runs from when this controller started the drain, so a slow first reconcile (a
+	// restart, a busy workqueue) cannot collapse it: the fence and the provider call would otherwise land in
+	// the same pass. Mirrors the Drained-anchored MinDrainTime check in node termination.
+	floor := c.ensureDrainStarted(nodeClaim.UID).Add(minDrainTime)
 	var deadline *time.Time
 	if tgp != nil {
-		deadline = lo.ToPtr(rebootRequestedAt(nodeClaim).Add(max(*tgp, minDrainTime)))
+		// The grace period runs from the request, as it does for node termination, but never cuts the
+		// minimum window short — the deadline-elapsed return below relies on being at or past the floor.
+		bound := rebootRequestedAt(nodeClaim).Add(*tgp)
+		deadline = lo.ToPtr(lo.Ternary(bound.Before(floor), floor, bound))
 	}
 	// A timeout, not a force-delete deadline: residual pods are never deleted.
 	if err := c.terminator.Drain(ctx, node, deadline, terminator.Timeout); err != nil {
@@ -272,19 +287,33 @@ func (c *Controller) recordIssuingState(ctx context.Context, nodeClaim *v1.NodeC
 	return c.kubeClient.Patch(ctx, nodeClaim, client.MergeFrom(stored))
 }
 
+// ensureDrainStarted records the drain start once per process and returns it.
+func (c *Controller) ensureDrainStarted(uid types.UID) time.Time {
+	c.episodesMu.Lock()
+	defer c.episodesMu.Unlock()
+	ep := c.episodes[uid]
+	if ep.drainStarted.IsZero() {
+		ep.drainStarted = c.clock.Now()
+		c.episodes[uid] = ep
+	}
+	return ep.drainStarted
+}
+
 // ensureIssuanceStarted records the issuance start time once per process.
 func (c *Controller) ensureIssuanceStarted(uid types.UID) {
-	c.issuanceStartedMu.Lock()
-	defer c.issuanceStartedMu.Unlock()
-	if _, ok := c.issuanceStarted[uid]; !ok {
-		c.issuanceStarted[uid] = c.clock.Now()
+	c.episodesMu.Lock()
+	defer c.episodesMu.Unlock()
+	ep := c.episodes[uid]
+	if ep.issuanceStarted.IsZero() {
+		ep.issuanceStarted = c.clock.Now()
+		c.episodes[uid] = ep
 	}
 }
 
-func (c *Controller) clearIssuanceStarted(uid types.UID) {
-	c.issuanceStartedMu.Lock()
-	defer c.issuanceStartedMu.Unlock()
-	delete(c.issuanceStarted, uid)
+func (c *Controller) clearEpisode(uid types.UID) {
+	c.episodesMu.Lock()
+	defer c.episodesMu.Unlock()
+	delete(c.episodes, uid)
 }
 
 func (c *Controller) transitionToIssued(ctx context.Context, nodeClaim *v1.NodeClaim, node *corev1.Node) (reconcile.Result, error) {
@@ -346,7 +375,7 @@ func (c *Controller) transitionToFailed(ctx context.Context, nodeClaim *v1.NodeC
 		if err := c.kubeClient.Delete(ctx, nodeClaim, client.Preconditions{ResourceVersion: lo.ToPtr(nodeClaim.ResourceVersion)}); err != nil {
 			return reconcile.Result{}, client.IgnoreNotFound(err)
 		}
-		c.clearIssuanceStarted(nodeClaim.UID)
+		c.clearEpisode(nodeClaim.UID)
 		log.FromContext(ctx).WithValues("result", result).Info("reboot failed, replacing node")
 	}
 	// Record events and metrics only after the terminal write succeeds.
@@ -357,7 +386,7 @@ func (c *Controller) transitionToFailed(ctx context.Context, nodeClaim *v1.NodeC
 
 func (c *Controller) setTerminal(ctx context.Context, nodeClaim *v1.NodeClaim, reason, msg string) error {
 	// Clear episode-scoped state so a later reboot starts clean.
-	c.clearIssuanceStarted(nodeClaim.UID)
+	c.clearEpisode(nodeClaim.UID)
 	// Use optimistic locking to avoid double-counting terminal metrics from stale reconciles.
 	if _, hadPreBoot := nodeClaim.Annotations[v1.RebootPreBootIDAnnotationKey]; hadPreBoot {
 		stored := nodeClaim.DeepCopy()
@@ -431,10 +460,13 @@ func (c *Controller) issuedAt(nodeClaim *v1.NodeClaim) (time.Time, bool) {
 
 // Returns the process-local start of the provider-accept retry window.
 func (c *Controller) issuanceStartedAt(nodeClaim *v1.NodeClaim) (time.Time, bool) {
-	c.issuanceStartedMu.Lock()
-	defer c.issuanceStartedMu.Unlock()
-	t, ok := c.issuanceStarted[nodeClaim.UID]
-	return t, ok
+	c.episodesMu.Lock()
+	defer c.episodesMu.Unlock()
+	ep, ok := c.episodes[nodeClaim.UID]
+	if !ok || ep.issuanceStarted.IsZero() {
+		return time.Time{}, false
+	}
+	return ep.issuanceStarted, true
 }
 
 // Returns the deadline for the current reboot phase, if bounded.

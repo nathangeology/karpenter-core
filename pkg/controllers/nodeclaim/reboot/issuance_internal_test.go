@@ -32,13 +32,13 @@ import (
 var _ = Describe("Reboot Issuance Timer", func() {
 	It("should not leak the in-memory issuance timer for a NodeClaim deleted mid-reboot", func() {
 		clk := clock.NewFakeClock(time.Now())
-		c := &Controller{clock: clk, issuanceStarted: map[types.UID]time.Time{}}
+		c := &Controller{clock: clk, episodes: map[types.UID]episode{}}
 		nodeClaim := &v1.NodeClaim{ObjectMeta: metav1.ObjectMeta{Name: "rebooting", UID: "uid-1", DeletionTimestamp: &metav1.Time{Time: clk.Now()}, Finalizers: []string{v1.TerminationFinalizer}}}
 		nodeClaim.StatusConditions().SetTrueWithReason(v1.ConditionTypeRebooting, v1.RebootReasonRequested, "rebooting")
 		c.ensureIssuanceStarted(nodeClaim.UID)
 
 		_, err := c.Reconcile(context.Background(), nodeClaim)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(c.issuanceStarted).ToNot(HaveKey(nodeClaim.UID))
+		Expect(c.episodes).ToNot(HaveKey(nodeClaim.UID))
 	})
 })
