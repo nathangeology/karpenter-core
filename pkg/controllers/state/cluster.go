@@ -668,13 +668,17 @@ func (c *Cluster) NodePoolResourcesFor(nodePoolName string) corev1.ResourceList 
 	return maps.Clone(c.nodePoolResources[nodePoolName])
 }
 
-// Reset the cluster state for unit testing
+// Reset the cluster state for unit testing. It must clear every field the constructor populates: a field left behind
+// here leaks into the next spec. clusterState and bufferPodCounts are taken under their own mutexes, since mu guards
+// neither, and a concurrent ConsolidationState or BufferPodCount otherwise races the write.
 func (c *Cluster) Reset() {
 	c.unsyncedTimeMu.Lock()
 	defer c.unsyncedTimeMu.Unlock()
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.clusterStateMu.Lock()
 	c.clusterState = time.Time{}
+	c.clusterStateMu.Unlock()
 	c.unsyncedStartTime = time.Time{}
 	c.lastUnsyncedLogTime = time.Time{}
 	c.hasSynced.Store(false)
@@ -689,8 +693,11 @@ func (c *Cluster) Reset() {
 	c.podAcks = sync.Map{}
 	c.podsSchedulingAttempted = sync.Map{}
 	c.podsSchedulableTimes = sync.Map{}
+	c.podHealthyNodePoolScheduledTime = sync.Map{}
 	c.podToNodeClaim = sync.Map{}
+	c.bufferPodCountsMu.Lock()
 	c.bufferPodCounts = map[string]int{}
+	c.bufferPodCountsMu.Unlock()
 }
 
 // sets the cluster to be synced or unsynced for unit testing
