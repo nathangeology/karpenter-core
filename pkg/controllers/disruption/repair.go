@@ -355,4 +355,4 @@ func (r *Repair) Reason() v1.DisruptionReason { return v1.DisruptionReasonUnheal
 
 func (r *Repair) Class() string { return RepairDisruptionClass }
 
-func (r *Repair) ConsolidationType() string { return "" }
+func (r *Repair) ConsolidationType() string { return NoConsolidationType.Name }

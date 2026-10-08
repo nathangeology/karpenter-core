@@ -141,5 +141,5 @@ func (d *StaticDrift) Class() string {
 }
 
 func (d *StaticDrift) ConsolidationType() string {
-	return ""
+	return NoConsolidationType.Name
 }

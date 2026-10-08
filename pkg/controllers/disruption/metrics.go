@@ -45,13 +45,27 @@ var (
 		Name: "empty",
 		Help: "Consolidation that removes empty nodes.",
 	}
+	// NoConsolidationType is the value emitted by the disruption methods that are not
+	// consolidation algorithms, currently drift and static drift. It is the empty string
+	// so that the series these methods already emit stays unchanged; the var exists so
+	// that the value is documented and its emission sites reference it by Name rather
+	// than repeating the literal.
+	NoConsolidationType = opmetrics.Value{
+		Name: "",
+		Help: "The disruption method is not a consolidation algorithm, e.g. drift.",
+	}
 )
 
 var (
 	ConsolidationType = opmetrics.Label{
-		Name:   ConsolidationTypeLabel,
-		Help:   "The consolidation algorithm that produced the decision.",
-		Values: []opmetrics.Value{MultiNodeConsolidationType, SingleNodeConsolidationType, EmptyConsolidationType},
+		Name: ConsolidationTypeLabel,
+		Help: "The consolidation algorithm that produced the decision, empty for a disruption method that is not consolidation.",
+		Values: []opmetrics.Value{
+			MultiNodeConsolidationType,
+			SingleNodeConsolidationType,
+			EmptyConsolidationType,
+			NoConsolidationType,
+		},
 	}
 	// DecisionDim is the `decision` dimension for the voluntary-disruption decision
 	// counters, whose value is the command's action.

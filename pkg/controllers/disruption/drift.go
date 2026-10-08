@@ -129,5 +129,5 @@ func (d *Drift) Class() string {
 }
 
 func (d *Drift) ConsolidationType() string {
-	return ""
+	return NoConsolidationType.Name
 }
