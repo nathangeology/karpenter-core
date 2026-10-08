@@ -46,6 +46,11 @@ func RankNodes(ctx context.Context, kubeClient client.Client, clk clock.Clock, n
 	// PDC only annotates pods on nodes Karpenter owns. An unmanaged node with a
 	// deletion timestamp satisfies StateNode.Deleted(), so without this filter it
 	// reaches Group A and gets MinInt32 written on every pod, uncapped.
+	//
+	// Filtering here rather than in classifyNode is deliberate. Group A annotates
+	// and Group D clears, so both partitions write, and an unmanaged node must
+	// reach neither. Routing it to Group D instead would delete a
+	// pod-deletion-cost value some other writer owns.
 	nodes = lo.Filter(nodes, func(n *state.StateNode, _ int) bool { return n.Managed() })
 	if len(nodes) == 0 {
 		return nil, nil, nil, nil
