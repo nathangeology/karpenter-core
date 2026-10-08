@@ -163,6 +163,34 @@ var _ = Describe("Reboot Lifecycle", func() {
 			Expect(cloudProvider.RebootCalls).To(HaveLen(1))
 		})
 
+		It("holds a drained reboot for minDrainTime even when the reboot was committed long before the first reconcile", func() {
+			// The window exists to catch pods the scheduler bound before it saw the fence, so it has to be
+			// measured from when this controller applies the fence, not from the consumer's request stamp.
+			// A restart or a busy workqueue can put minutes between the two.
+			nodeClaim.Annotations = lo.Assign(nodeClaim.Annotations, map[string]string{v1.RebootTerminationGracePeriodAnnotationKey: "1m"})
+			ExpectApplied(ctx, env.Client, nodePool, nodeClaim, node)
+
+			// Preconditions. Without these the spec could pass on the forceful bypass, on a stale taint, or
+			// without ever crossing the floor.
+			nodeClaim = ExpectExists(ctx, env.Client, nodeClaim)
+			requestedAt := nodeClaim.StatusConditions().Get(v1.ConditionTypeRebooting).LastTransitionTime.Time
+			Expect(nodeClaim.Annotations[v1.RebootTerminationGracePeriodAnnotationKey]).ToNot(Equal("0s"))
+			Expect(hasRebootTaint(ExpectExists(ctx, env.Client, node))).To(BeFalse())
+			env.Clock.Step(10 * time.Minute)
+			Expect(env.Clock.Since(requestedAt)).To(BeNumerically(">", 5*time.Second))
+
+			// The pass that applies the fence must not also issue the reboot.
+			result := ExpectObjectReconciled(ctx, env.Client, rebootController, nodeClaim)
+			Expect(hasRebootTaint(ExpectExists(ctx, env.Client, node))).To(BeTrue())
+			Expect(cloudProvider.RebootCalls).To(BeEmpty())
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+			Expect(result.RequeueAfter).To(BeNumerically("<=", 5*time.Second))
+
+			stepPastDrainFloor()
+			ExpectObjectReconciled(ctx, env.Client, rebootController, nodeClaim)
+			Expect(cloudProvider.RebootCalls).To(HaveLen(1))
+		})
+
 		It("issues the reboot and transitions to RebootIssued", func() {
 			ExpectApplied(ctx, env.Client, nodePool, nodeClaim, node)
 			stepPastDrainFloor()
