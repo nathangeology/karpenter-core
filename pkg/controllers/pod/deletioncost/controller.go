@@ -110,6 +110,13 @@ func (c *Controller) Reconcile(ctx context.Context) (reconciler.Result, error) {
 		nodes = append(nodes, n)
 	}
 	if len(nodes) == 0 {
+		// The cycle ran and found nothing to rank, so no pool has pending writes.
+		// Left unreset, the previous cycle's samples outlive the nodes they counted:
+		// ConsolidationState re-stamps itself every five minutes, so a drained cluster
+		// takes this return forever and the Reset below is never reached. Not hoisted
+		// above the error returns, which retry against the same state and are better
+		// served by the last published value than by an empty gauge.
+		nodesWithPendingAnnotationWrites.Reset()
 		return reconciler.Result{RequeueAfter: reconcileInterval}, nil
 	}
 
