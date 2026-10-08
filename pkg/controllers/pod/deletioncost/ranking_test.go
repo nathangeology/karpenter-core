@@ -384,6 +384,43 @@ var _ = Describe("Ranking", func() {
 
 			expectPodAnnotationCleared(pod)
 		})
+
+		It("should not clear a third-party pod-deletion-cost on an unmanaged node", func() {
+			// Guards the PLACEMENT of the Managed() filter, not its presence. The
+			// spec above only covers the Group A arm: its pod starts with no
+			// annotation, so it passes whether the node is filtered out at
+			// RankNodes entry or routed to Group D. Group D CLEARS the
+			// annotation, so filtering inside classifyNode instead would silently
+			// delete a value another writer owns. This node is not going away, so
+			// without the entry filter it fails ValidateNodeDisruptable and lands
+			// in Group D.
+			node := test.Node(test.NodeOptions{
+				Allocatable: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("4"), corev1.ResourceMemory: resource.MustParse("8Gi")},
+			})
+			ExpectApplied(ctx, env.Client, nodePool, node)
+			pod := rsOwnedPod(test.PodOptions{
+				ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{corev1.PodDeletionCost: "7"}},
+				NodeName:   node.Name,
+			})
+			ExpectApplied(ctx, env.Client, pod)
+
+			// No NodeClaim is ever created for this node, so Managed() is false.
+			ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(node))
+
+			stateNode := ExpectStateNodeExists(cluster, node)
+			Expect(stateNode.Managed()).To(BeFalse())
+			Expect(stateNode.Deleted()).To(BeFalse(), "fixture must exercise the Group D arm, not Group A")
+
+			controller := deletioncost.NewController(env.Clock, env.Client, cloudProvider, cluster, queue)
+			_, err := controller.Reconcile(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			drainQueueForPod(pod)
+			updated := &corev1.Pod{}
+			Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(pod), updated)).To(Succeed())
+			Expect(updated.Annotations).To(HaveKeyWithValue(corev1.PodDeletionCost, "7"),
+				"an unmanaged node must reach neither Group A nor Group D")
+		})
 	})
 
 	Context("Per-NodePool budgets", func() {
