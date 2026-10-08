@@ -17,12 +17,15 @@ limitations under the License.
 package deletioncost_test
 
 import (
+	"time"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/samber/lo"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 	"sigs.k8s.io/karpenter/pkg/controllers/pod/deletioncost"
@@ -77,6 +80,57 @@ var _ = Describe("Metrics", func() {
 		Expect(err).ToNot(HaveOccurred())
 
 		Expect(nodesWithPendingAnnotationWritesGauge(map[string]string{metrics.NodePoolLabel: nodePool.Name})).To(Equal(3.0))
+	})
+
+	It("should clear nodes_with_pending_annotation_writes when a cycle finds the cluster drained to zero nodes", func() {
+		nodeClaims, nodes := test.NodeClaimsAndNodes(3, v1.NodeClaim{
+			ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{v1.NodePoolLabelKey: nodePool.Name}},
+			Status:     v1.NodeClaimStatus{Allocatable: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("4"), corev1.ResourceMemory: resource.MustParse("8Gi")}},
+		})
+		ExpectApplied(ctx, env.Client, nodePool)
+		for i := range nodeClaims {
+			ExpectApplied(ctx, env.Client, nodeClaims[i], nodes[i])
+			ExpectApplied(ctx, env.Client, rsOwnedPod(test.PodOptions{NodeName: nodes[i].Name}))
+		}
+		ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, env.Clock, nodeStateController, nodeClaimStateController, nodes, nodeClaims)
+
+		// One controller instance across both cycles, so lastConsolidationState survives.
+		controller := deletioncost.NewController(env.Clock, env.Client, cloudProvider, cluster, queue)
+		_, err := controller.Reconcile(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(nodesWithPendingAnnotationWritesGauge(map[string]string{metrics.NodePoolLabel: nodePool.Name})).To(Equal(3.0))
+
+		// Step before the delete so the cleanup's MarkUnconsolidated lands on a later
+		// stamp than the cursor cycle 1 stored. Keep it under 5 minutes:
+		// ConsolidationState() re-stamps itself past that, which would advance the
+		// cursor whether the drain did anything or not.
+		cursor := cluster.ConsolidationState()
+		env.Clock.Step(time.Minute)
+		for i := range nodes {
+			// Both halves: cleanupNodeClaim leaves the StateNode in the map with
+			// NodeClaim = nil, and only the second delete drops the entry.
+			ExpectDeleted(ctx, env.Client, nodeClaims[i], nodes[i])
+			ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaims[i]))
+			ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(nodes[i]))
+		}
+
+		// Preconditions. Without them a green run could be the unchanged-state
+		// short-circuit, which skips the gauge write for a different reason and wears
+		// the same symptom.
+		Expect(cluster.Nodes()).To(BeEmpty(),
+			"the drain must empty state, or Reconcile never reaches the zero-node return")
+		Expect(cluster.ConsolidationState()).ToNot(Equal(cursor),
+			"the drain must advance consolidation state, or the next cycle takes the unchanged short-circuit instead of the zero-node return")
+
+		_, err = controller.Reconcile(ctx)
+		Expect(err).ToNot(HaveOccurred())
+
+		_, found := FindMetricWithLabelValues(
+			"karpenter_pod_deletion_cost_nodes_with_pending_annotation_writes",
+			map[string]string{metrics.NodePoolLabel: nodePool.Name},
+		)
+		Expect(found).To(BeFalse(),
+			"a cycle that finds zero nodes must clear the gauge, or a drained nodepool reports pending annotation writes forever")
 	})
 
 	It("should increment pod_annotation_writes_total{result=updated} on a successful annotation write", func() {
