@@ -27,7 +27,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 
 	v1 "sigs.k8s.io/karpenter/pkg/apis/v1"
-	"sigs.k8s.io/karpenter/pkg/apis/v1alpha1"
 	"sigs.k8s.io/karpenter/pkg/cloudprovider"
 	"sigs.k8s.io/karpenter/pkg/scheduling"
 )
@@ -131,12 +130,12 @@ func (i *NodeClaimTemplate) ToNodeClaim() *v1.NodeClaim {
 
 		if foundPriceOverlay := lo.ContainsBy(instanceTypes, func(it *cloudprovider.InstanceType) bool { return it.IsPricingOverlayApplied() }); foundPriceOverlay {
 			i.Annotations = lo.Assign(i.Annotations, map[string]string{
-				v1alpha1.PriceOverlayAppliedAnnotationKey: "true",
+				v1.PriceOverlayAppliedAnnotationKey: "true",
 			})
 		}
 		if foundCapacityOverlay := lo.ContainsBy(instanceTypes, func(it *cloudprovider.InstanceType) bool { return it.IsCapacityOverlayApplied() }); foundCapacityOverlay {
 			i.Annotations = lo.Assign(i.Annotations, map[string]string{
-				v1alpha1.CapacityOverlayAppliedAnnotationKey: "true",
+				v1.CapacityOverlayAppliedAnnotationKey: "true",
 			})
 		}
 	}

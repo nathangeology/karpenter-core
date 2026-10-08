@@ -62,6 +62,8 @@ const (
 	RebootTerminationGracePeriodAnnotationKey  = apis.Group + "/reboot-termination-grace-period"
 	DRADriversAnnotationKey                    = apis.Group + "/requested-dra-drivers"
 	DisruptionCostAnnotationKey                = apis.Group + "/disruption-cost"
+	PriceOverlayAppliedAnnotationKey           = apis.Group + "/price-overlay-applied"
+	CapacityOverlayAppliedAnnotationKey        = apis.Group + "/capacity-overlay-applied"
 )
 
 var (
@@ -172,6 +174,26 @@ var (
 			"controller.kubernetes.io/pod-deletion-cost itself.",
 		Stage: docs.Alpha,
 	}
+	PriceOverlayAppliedAnnotation = wellknown.Annotation{
+		Name:    PriceOverlayAppliedAnnotationKey,
+		Example: trueValue,
+		UsedOn:  []runtime.Object{&NodeClaim{}},
+		Help: "Karpenter sets this when a NodeOverlay adjusted the price of an instance type that scheduling " +
+			"selected for the NodeClaim.",
+		Values:       []docs.Value{{Name: trueValue, Help: "A price overlay was applied."}},
+		Stage:        options.NodeOverlayFeatureGate.Stage,
+		InternalOnly: true,
+	}
+	CapacityOverlayAppliedAnnotation = wellknown.Annotation{
+		Name:    CapacityOverlayAppliedAnnotationKey,
+		Example: trueValue,
+		UsedOn:  []runtime.Object{&NodeClaim{}},
+		Help: "Karpenter sets this when a NodeOverlay adjusted the capacity of an instance type that scheduling " +
+			"selected for the NodeClaim.",
+		Values:       []docs.Value{{Name: trueValue, Help: "A capacity overlay was applied."}},
+		Stage:        options.NodeOverlayFeatureGate.Stage,
+		InternalOnly: true,
+	}
 )
 
 // KarpenterAnnotations are the well known annotations Karpenter reads or writes.
@@ -186,6 +208,8 @@ var KarpenterAnnotations = []wellknown.Annotation{
 	RebootTerminationGracePeriodAnnotation,
 	DRADriversAnnotation,
 	DisruptionCostAnnotation,
+	PriceOverlayAppliedAnnotation,
+	CapacityOverlayAppliedAnnotation,
 }
 
 // Karpenter specific finalizers

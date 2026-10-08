@@ -16,9 +16,14 @@ limitations under the License.
 
 package v1alpha1
 
-import "sigs.k8s.io/karpenter/pkg/apis"
+import v1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 
+// These annotations are applied to NodeClaims, so they are declared in pkg/apis/v1
+// alongside Karpenter's other NodeClaim annotations and documented in
+// v1.KarpenterAnnotations. They are aliased here for compatibility.
 const (
-	PriceOverlayAppliedAnnotationKey    = apis.Group + "/price-overlay-applied"
-	CapacityOverlayAppliedAnnotationKey = apis.Group + "/capacity-overlay-applied"
+	// Deprecated: use v1.PriceOverlayAppliedAnnotationKey.
+	PriceOverlayAppliedAnnotationKey = v1.PriceOverlayAppliedAnnotationKey
+	// Deprecated: use v1.CapacityOverlayAppliedAnnotationKey.
+	CapacityOverlayAppliedAnnotationKey = v1.CapacityOverlayAppliedAnnotationKey
 )
