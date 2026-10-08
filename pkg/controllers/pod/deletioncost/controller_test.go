@@ -444,6 +444,7 @@ var _ = Describe("Controller", func() {
 		// minute is enough to separate the stamps and stays under the 5-minute
 		// ConsolidationState refresh, so the deletion below is what has to move the
 		// cursor rather than that timer.
+		cursor := cluster.ConsolidationState()
 		env.Clock.Step(time.Minute)
 
 		// Removing nodeB bumps ConsolidationState past the unchanged-state
@@ -451,6 +452,16 @@ var _ = Describe("Controller", func() {
 		ExpectDeleted(ctx, env.Client, podB, nodeB, ncB)
 		ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(nodeB))
 		ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(ncB))
+
+		// Preconditions, asserted rather than read off a transcript. Two other
+		// Reconcile returns skip the gauge write and wear the same symptom as a
+		// deleted Reset: the zero-node return needs state emptied, the unchanged-state
+		// short-circuit needs the cursor to have stood still. Pinning both leaves the
+		// Reset as the only remaining explanation for a dropped series.
+		Expect(cluster.Nodes()).To(HaveLen(1),
+			"nodeA must survive the drain, or the next cycle takes the zero-node return instead of the Reset-then-Set path")
+		Expect(cluster.ConsolidationState()).ToNot(Equal(cursor),
+			"the drain must advance consolidation state, or the next cycle takes the unchanged-state short-circuit")
 
 		// Strips podA's annotation so nodePool re-enqueues whichever rank it drew in
 		// the first cycle. Without this the assertion depends on the rank shifting
