@@ -77,10 +77,16 @@ delete-kind-dra: ## Delete DRA Kind cluster
 	kind delete cluster --name $(KIND_CLUSTER_NAME)
 
 JUNIT_REPORT := $(if $(ARTIFACT_DIR), --ginkgo.junit-report="$(ARTIFACT_DIR)/junit_report.xml")
+# -timeout must stay above --ginkgo.timeout plus --ginkgo.grace-period. Ginkgo arms its
+# suite deadline inside RunSpecs, after go test has already armed -timeout, so equal
+# values put go test first and its panic kills the process before Ginkgo can name the
+# slow spec, write the JUnit report, or run the AfterEach that deletes the NodeClaims.
+# Each cleanup node that overruns gets its own grace period, so leave room for more
+# than one.
 e2etests: ## Run the e2e suite against your local cluster
 	cd test && go test \
 		-count 1 \
-		-timeout 2h \
+		-timeout 2h30m \
 		-v \
 		./suites/$(shell echo $(TEST_SUITE) | tr A-Z a-z)/... \
 		$(JUNIT_REPORT) \
