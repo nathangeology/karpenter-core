@@ -80,6 +80,24 @@ changed_lines() {
     git diff "${BASE_BRANCH}" -- "$1" 2>/dev/null | grep '^+' | grep -v '^+++' || true
 }
 
+# Get the post-image line numbers of the added lines in a changed file.
+# Needed by checks that read the whole file (to find a construct spanning
+# several lines) but should only report what this diff touched.
+# Usage: added_line_numbers <file>
+added_line_numbers() {
+    { git diff -U0 "${BASE_BRANCH}"... -- "$1" 2>/dev/null || \
+      git diff -U0 "${BASE_BRANCH}" -- "$1" 2>/dev/null || true; } | awk '
+        /^@@/ {
+            if (match($0, /\+[0-9]+(,[0-9]+)?/)) {
+                spec = substr($0, RSTART + 1, RLENGTH - 1)
+                n = split(spec, a, ",")
+                start = a[1] + 0
+                count = (n > 1 ? a[2] + 0 : 1)
+                for (i = 0; i < count; i++) print start + i
+            }
+        }'
+}
+
 # --- Gather files ---
 
 PROD_FILES=$(changed_prod_files)
@@ -361,6 +379,66 @@ check_make_map() {
     [ "$found" -eq 0 ] && pass "A11: make-map"
 }
 
+# A12: hardcoded metric value literal at an emission site
+#
+# Convention, AGENTS.md "Metric Labels": a value that exists only as a metric
+# value should be a first-class metrics.Value var that its emission site
+# references by .Name. The shape that breaks it is an accessor named after a
+# declared metric dimension returning a bare string literal. No value-equality
+# test can catch that one: when the literal equals the var's Name, pointing the
+# return at the var is an equivalent mutant, so a linter is the only gate.
+#
+# Candidate accessor names are read out of the tree rather than hardcoded. A
+# `<X>Label = "<dimension>"` const means the value-producing accessor is named
+# `<X>`: ConsolidationTypeLabel -> ConsolidationType(), ReasonLabel ->
+# Reason(). Measured on upstream/main 637bceba: 18 such consts, 4 hits over
+# every .go file in pkg/ and test/, 3 of them real (the consolidation_type
+# empty-string sites) and 1 a nil guard whose literal reaches no series.
+#
+# WARN, not FAIL. A nil guard returning "" is this pattern and is legitimate,
+# so a reviewer has to make the call.
+check_metric_value_literal() {
+    local found=0
+    if [ -z "$PROD_FILES" ]; then
+        pass "A12: metric-value-literal"
+        return
+    fi
+    local names
+    names=$(git grep -hoE '[A-Za-z_][A-Za-z0-9_]*Label[[:space:]]*=[[:space:]]*"' -- '*.go' ':!*_test.go' 2>/dev/null \
+            | sed -E 's/[[:space:]]*=[[:space:]]*"$//; s/Label$//' | sort -u | paste -sd'|' - || true)
+    if [ -z "$names" ]; then
+        pass "A12: metric-value-literal"
+        return
+    fi
+    while IFS= read -r file; do
+        [ -z "$file" ] && continue
+        [ -f "$file" ] || continue
+        # Report the literal returns inside a dimension-named accessor's body.
+        # The body can span lines, so this reads the file, not the diff.
+        hits=$(awk -v names="$names" '
+            !inside && $0 ~ ("^func \\([^)]*\\) (" names ")\\(\\)") { inside = 1; depth = 0 }
+            inside {
+                if ($0 ~ "return[[:space:]]+\"") print FNR ":" $0
+                n = gsub(/\{/, "{"); m = gsub(/\}/, "}")
+                depth += n - m
+                if (depth <= 0 && (n + m) > 0) inside = 0
+            }' "$file" || true)
+        [ -z "$hits" ] && continue
+        added=$(added_line_numbers "$file")
+        [ -z "$added" ] && continue
+        while IFS= read -r hit; do
+            [ -z "$hit" ] && continue
+            lineno=${hit%%:*}
+            if echo "$added" | grep -qx "$lineno"; then
+                warn "A12: metric-value-literal" "$file:$lineno: accessor named after a metric dimension returns a bare string literal; declare a metrics.Value and return its .Name"
+                echo "    ${hit#*:}"
+                found=1
+            fi
+        done <<< "$hits"
+    done <<< "$PROD_FILES"
+    [ "$found" -eq 0 ] && pass "A12: metric-value-literal"
+}
+
 echo ""
 
 # =============================================================================
@@ -378,6 +456,7 @@ check_double_log
 check_sleep_tests
 check_test_only_exports
 check_make_map
+check_metric_value_literal
 
 # =============================================================================
 # Summary
