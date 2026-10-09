@@ -145,9 +145,13 @@ func (r *Repair) computeCommands(ctx context.Context, disruptionBudgetMapping ma
 				fmt.Sprintf("more than %s of nodes in nodepool %q are unhealthy", repairUnhealthyThreshold, candidate.NodePool.Name))...)
 			continue
 		}
-		// Budgets only count initialized nodes, since an uninitialized node runs no workload to protect, so repairing one
-		// neither needs nor consumes budget.
-		if candidate.Initialized() && disruptionBudgetMapping[candidate.NodePool.Name] == 0 {
+		// Budgets only count initialized nodes, since an uninitialized node runs no workload to protect, so replacing one
+		// neither needs nor consumes budget. Reboot is the exception: NodePoolStats counts a rebooting node against every
+		// budget until the reboot completes, so the reboot must be paced by the budget it goes on to consume, whatever the
+		// candidate's initialization state. Without this, concurrent reboots of uninitialized nodes are bounded only by
+		// repairUnhealthyThreshold and can exceed the NodePool's budget.
+		if (candidate.Initialized() || candidate.RepairPolicyResult.Action == cloudprovider.RebootNode) &&
+			disruptionBudgetMapping[candidate.NodePool.Name] == 0 {
 			continue
 		}
 		// Repair admits nodes with blocking (PDB / do-not-disrupt) pods only on the promise of this drain bound, so it
