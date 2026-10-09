@@ -84,6 +84,47 @@ func BenchmarkForEachDomain(b *testing.B) {
 	}
 }
 
+// BenchmarkForEachDomainDuplicateProducers sweeps the number of Insert calls each NodePool makes per
+// domain. buildDomainGroups makes one per instance type offering the domain, always with the NodePool's
+// template taints, so this is the shape of a real TopologyDomainGroup rather than the distinct taint sets
+// BenchmarkForEachDomain holds. The pod tolerates nothing, which is the worst case: ForEachDomain
+// traverses every set a domain holds before rejecting it.
+func BenchmarkForEachDomainDuplicateProducers(b *testing.B) {
+	for _, insertsPerPool := range []int{1, 144, 400} {
+		b.Run(fmt.Sprintf("vector=insertsperpool/i=%d", insertsPerPool), func(b *testing.B) {
+			benchmarkForEachDomainDuplicateProducers(b, 3, 50, insertsPerPool)
+		})
+	}
+}
+
+func benchmarkForEachDomainDuplicateProducers(b *testing.B, domains, nodePools, insertsPerPool int) {
+	dg := scheduling.NewTopologyDomainGroup()
+	for p := 0; p < nodePools; p++ {
+		taint := corev1.Taint{
+			Key:    fmt.Sprintf("bench.example.com/pool-%d", p),
+			Value:  "true",
+			Effect: corev1.TaintEffectNoSchedule,
+		}
+		for d := 0; d < domains; d++ {
+			domain := fmt.Sprintf("test-zone-%d", d)
+			for i := 0; i < insertsPerPool; i++ {
+				dg.Insert(domain, taint)
+			}
+		}
+	}
+	pod := test.Pod()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		count := 0
+		dg.ForEachDomain(pod, corev1.NodeInclusionPolicyHonor, func(domain string) {
+			count++
+		})
+		_ = count
+	}
+}
+
 func benchmarkForEachDomain(b *testing.B, domains, taintGroupsPerDomain int, tolerates bool) {
 	dg := scheduling.NewTopologyDomainGroup()
 	for d := 0; d < domains; d++ {
