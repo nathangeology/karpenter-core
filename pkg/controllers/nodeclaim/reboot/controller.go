@@ -291,9 +291,10 @@ func (c *Controller) transitionToIssued(ctx context.Context, nodeClaim *v1.NodeC
 	stored := nodeClaim.DeepCopy()
 	// Preserve the fault message while advancing to Issued.
 	cond := nodeClaim.StatusConditions().Get(v1.ConditionTypeRebooting)
-	nodeClaim.StatusConditions().SetTrueWithReason(v1.ConditionTypeRebooting, v1.RebootReasonIssued, cond.Message)
-	// Initialization is boot-scoped; mark it Unknown while rebooting.
-	nodeClaim.StatusConditions().SetUnknownWithReason(v1.ConditionTypeInitialized, v1.RebootReasonRebooting, "node is rebooting")
+	nodeClaim.StatusConditions(status.WithClock(c.clock)).SetTrueWithReason(v1.ConditionTypeRebooting, v1.RebootReasonIssued, cond.Message)
+	// Initialization is boot-scoped; mark it Unknown while rebooting. issuedAt reads this
+	// transition back, so it must be stamped from the clock the deadlines are measured against.
+	nodeClaim.StatusConditions(status.WithClock(c.clock)).SetUnknownWithReason(v1.ConditionTypeInitialized, v1.RebootReasonRebooting, "node is rebooting")
 	if !equality.Semantic.DeepEqual(stored, nodeClaim) {
 		if err := c.kubeClient.Status().Patch(ctx, nodeClaim, client.MergeFrom(stored)); err != nil {
 			return reconcile.Result{}, err
@@ -367,7 +368,9 @@ func (c *Controller) setTerminal(ctx context.Context, nodeClaim *v1.NodeClaim, r
 		}
 	}
 	stored := nodeClaim.DeepCopy()
-	nodeClaim.StatusConditions().SetFalse(v1.ConditionTypeRebooting, reason, msg)
+	// state.StateNode.GetRepairResult measures post-reboot repair tolerations from this
+	// transition, so it must be stamped from the same clock repair resolves them against.
+	nodeClaim.StatusConditions(status.WithClock(c.clock)).SetFalse(v1.ConditionTypeRebooting, reason, msg)
 	if !equality.Semantic.DeepEqual(stored, nodeClaim) {
 		if err := c.kubeClient.Status().Patch(ctx, nodeClaim, client.MergeFromWithOptions(stored, client.MergeFromWithOptimisticLock{})); err != nil {
 			return err
