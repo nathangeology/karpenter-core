@@ -904,8 +904,10 @@ var _ = Describe("Ranking", func() {
 			Expect(info2.rank).To(BeNumerically(">", math.MinInt32))
 		})
 
-		// Bare and StatefulSet pods route the node to Group D; Job, DaemonSet and
-		// kube-system pods fall through to Group C.
+		// Bare, StatefulSet, ReplicationController and CronJob pods route the node
+		// to Group D; Job and DaemonSet pods fall through to Group C. The
+		// kube-system carve-out is its own spec below, because it short-circuits
+		// ahead of the ownership read rather than going through it.
 		DescribeTable("should _Edge_ classify non-RS-owned pods as Group D (not disruptable)",
 			func(ownerRef *metav1.OwnerReference, expectGroupD bool) {
 				nodeClaims, nodes := test.NodeClaimsAndNodes(2, v1.NodeClaim{
@@ -957,6 +959,20 @@ var _ = Describe("Ranking", func() {
 			Entry("DaemonSet-owned pod is NOT Group D",
 				&metav1.OwnerReference{APIVersion: "apps/v1", Kind: "DaemonSet", Name: "ds", UID: types.UID("ds-uid"), Controller: lo.ToPtr(true), BlockOwnerDeletion: lo.ToPtr(true)},
 				false,
+			),
+			// ReplicationController and CronJob are absent from recreatingControllers
+			// on purpose: an RC pod is recreated by the RC, but the kind is not in the
+			// list, and a CronJob owns Jobs rather than Pods so a CronJob controller
+			// reference on a Pod is not a recreating owner. Both therefore pin. The
+			// entries pin the list's membership, which the four above cannot: they
+			// only reach kinds the list already holds.
+			Entry("ReplicationController-owned pod routes to Group D",
+				&metav1.OwnerReference{APIVersion: "v1", Kind: "ReplicationController", Name: "rc", UID: types.UID("rc-uid"), Controller: lo.ToPtr(true), BlockOwnerDeletion: lo.ToPtr(true)},
+				true,
+			),
+			Entry("CronJob-owned pod routes to Group D",
+				&metav1.OwnerReference{APIVersion: "batch/v1", Kind: "CronJob", Name: "cj", UID: types.UID("cj-uid"), Controller: lo.ToPtr(true), BlockOwnerDeletion: lo.ToPtr(true)},
+				true,
 			),
 		)
 
@@ -1167,6 +1183,21 @@ var _ = Describe("Ranking", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(totalRanked(groupA, groupBC, groupD)).To(Equal(2))
 			Expect(groupA).To(BeEmpty(), "kube-system bare pods must not push a node to Group A")
+
+			// The Group D assertion the title names. Group A was empty either way, so
+			// asserting only that left the carve-out itself unpinned: deleting the
+			// kube-system skip in hasPinningPods kept this spec green.
+			infoSystem := rankInfoFor(nodes[0].Name, groupA, groupBC, groupD)
+			Expect(infoSystem.found).To(BeTrue())
+			Expect(infoSystem.cleanup).To(BeFalse(),
+				"a bare kube-system pod must not push its host to Group D; the carve-out in hasPinningPods is what keeps it ranked")
+			Expect(infoSystem.rank).To(BeNumerically(">", math.MinInt32))
+
+			// Control: the RS-owned node reaches the same group by a different route,
+			// so a change that sent every node to Group D would not read as a pass.
+			infoRS := rankInfoFor(nodes[1].Name, groupA, groupBC, groupD)
+			Expect(infoRS.found).To(BeTrue())
+			Expect(infoRS.cleanup).To(BeFalse())
 		})
 	})
 
