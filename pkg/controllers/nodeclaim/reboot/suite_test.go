@@ -538,4 +538,66 @@ var _ = Describe("Reboot Lifecycle", func() {
 			Expect(nodeClaim.StatusConditions().Get(v1.ConditionTypeRebooting).Reason).To(Equal(v1.RebootReasonIssued))
 		})
 	})
+
+	// The injected clock is the controller's only time source. operatorpkg stamps
+	// LastTransitionTime from whichever clock StatusConditions() is given, and both reboot
+	// deadlines and repair's post-reboot toleration read those stamps back through an
+	// injected clock. Skewing the injected clock away from wall time makes a stamp taken
+	// from the wrong clock visible; the phases below are otherwise the ones already covered.
+	Context("clock injection", func() {
+		// Large enough to be unambiguous, small enough to leave the observation window intact.
+		const clockSkew = 10 * time.Minute
+
+		// The reboot request stays stamped in the injected clock's past, so issuance still
+		// clears the drain floor on the first reconcile.
+		skewClock := func() { env.Clock.SetTime(env.Clock.Now().Add(clockSkew)) }
+
+		It("stamps the issuance transition from the injected clock, which bounds the observation window", func() {
+			skewClock()
+			ExpectApplied(ctx, env.Client, nodePool, nodeClaim, node)
+			ExpectObjectReconciled(ctx, env.Client, rebootController, nodeClaim)
+			Expect(cloudProvider.RebootCalls).To(HaveLen(1))
+
+			issuedAt := env.Clock.Now()
+			nodeClaim = ExpectExists(ctx, env.Client, nodeClaim)
+			// rebootDeadline derives issuedAt from this transition. The tolerance is the
+			// second of precision a metav1.Time keeps across the API round trip, two orders
+			// below clockSkew.
+			Expect(nodeClaim.StatusConditions().Get(v1.ConditionTypeInitialized).LastTransitionTime.Time).To(BeTemporally("~", issuedAt, time.Second))
+
+			// A minute short of the window, the reboot is still under observation.
+			env.Clock.Step(19 * time.Minute)
+			result := ExpectObjectReconciled(ctx, env.Client, rebootController, nodeClaim)
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+			nodeClaim = ExpectExists(ctx, env.Client, nodeClaim)
+			Expect(nodeClaim.StatusConditions().Get(v1.ConditionTypeRebooting).Reason).To(Equal(v1.RebootReasonIssued))
+
+			// Past it, the reboot fails.
+			env.Clock.Step(2 * time.Minute)
+			ExpectObjectReconciled(ctx, env.Client, rebootController, nodeClaim)
+			expectReplaced(nodeClaim, "recovery_timeout")
+		})
+
+		It("stamps the terminal transition from the injected clock, which repair measures its toleration from", func() {
+			skewClock()
+			ExpectApplied(ctx, env.Client, nodePool, nodeClaim, node)
+			ExpectObjectReconciled(ctx, env.Client, rebootController, nodeClaim)
+			Expect(cloudProvider.RebootCalls).To(HaveLen(1))
+
+			node = ExpectExists(ctx, env.Client, node)
+			node.Status.NodeInfo.BootID = "boot-2"
+			node.Status.Conditions = []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}}
+			ExpectApplied(ctx, env.Client, node)
+
+			finishedAt := env.Clock.Now()
+			nodeClaim = ExpectExists(ctx, env.Client, nodeClaim)
+			ExpectObjectReconciled(ctx, env.Client, rebootController, nodeClaim)
+
+			nodeClaim = ExpectExists(ctx, env.Client, nodeClaim)
+			cond := nodeClaim.StatusConditions().Get(v1.ConditionTypeRebooting)
+			Expect(cond.Reason).To(Equal(v1.RebootReasonSucceeded))
+			// state.StateNode.GetRepairResult measures post-reboot repair tolerations from this stamp.
+			Expect(cond.LastTransitionTime.Time).To(BeTemporally("~", finishedAt, time.Second))
+		})
+	})
 })
