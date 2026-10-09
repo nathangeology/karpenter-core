@@ -89,11 +89,19 @@ func LifetimeRemaining(clock clock.Clock, nodePool *v1.NodePool, nodeClaim *v1.N
 //     ranking, not user intent about consolidation cost. Consolidation scoring therefore
 //     reads only karpenter.sh/disruption-cost.
 //
-//   - Gate OFF (default): the controller does not write pod-deletion-cost, so any
-//     existing values are user-set. Consolidation scoring reads
-//     karpenter.sh/disruption-cost first; if absent, it falls back to
-//     controller.kubernetes.io/pod-deletion-cost. This preserves current behavior for
-//     customers who have not migrated to the new annotation.
+//   - Gate OFF (default): the controller does not write pod-deletion-cost.
+//     Consolidation scoring reads karpenter.sh/disruption-cost first; if absent, it
+//     falls back to controller.kubernetes.io/pod-deletion-cost. This preserves current
+//     behavior for customers who have not migrated to the new annotation.
+//
+// The fallback treats pod-deletion-cost as user intent. That is sound on a cluster
+// that never enabled the gate, and unsound after a gate ON -> OFF transition:
+// disabling the gate deregisters the controller without clearing what it wrote, so the
+// fallback reads the controller's own output back. Group A pods carry math.MinInt32,
+// which lands on the -10.0 clamp floor below against a 1.0 default, and
+// ReschedulingCost sums EvictionCost without clamping the sum. Cleanup-on-disable is a
+// beta deliverable in designs/pod-deletion-cost-controller.md; until it lands, a
+// leftover is indistinguishable here from a user-set value.
 func EvictionCost(ctx context.Context, p *corev1.Pod) float64 {
 	cost := 1.0
 	if costStr, ok := p.Annotations[v1.DisruptionCostAnnotationKey]; ok {
