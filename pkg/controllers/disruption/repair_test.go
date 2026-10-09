@@ -1196,6 +1196,64 @@ var _ = Describe("Repair", func() {
 			Expect(queue.GetCommands()).To(HaveLen(1))
 		})
 
+		// A reboot holds the NodeClaim, which NodePoolStats counts against every budget, so the reboot action must be
+		// paced by the budget it consumes. Only the replace action above is free of it.
+		It("should not reboot without disruption budget, since a reboot consumes it", func() {
+			useRepairPolicies([]cloudprovider.RepairPolicy{
+				{ConditionType: "BadNode", ConditionStatus: corev1.ConditionFalse, ReasonRegex: "RebootMe", TolerationDuration: 10 * time.Minute, Action: cloudprovider.RebootNode},
+				{ConditionType: "BadNode", ConditionStatus: corev1.ConditionFalse, TolerationDuration: 30 * time.Minute, Action: cloudprovider.ReplaceNode},
+			})
+			newRepairController()
+			nodePool.Spec.Disruption.Budgets = []v1.Budget{{Nodes: "0"}}
+			ExpectApplied(ctx, env.Client, nodePool)
+			registerNode(nodeClaim, node)
+			markUnhealthyWithReason(node, "BadNode", "RebootMe")
+			env.Clock.Step(11 * time.Minute) // only the reboot policy is eligible
+
+			ExpectSingletonReconciled(ctx, repairController)
+			Expect(queue.GetCommands()).To(BeEmpty())
+			Expect(ExpectExists(ctx, env.Client, nodeClaim).StatusConditions().Get(v1.ConditionTypeRebooting).IsTrue()).To(BeFalse())
+		})
+
+		It("should not exceed the disruption budget with concurrent reboots", func() {
+			useRepairPolicies([]cloudprovider.RepairPolicy{
+				{ConditionType: "BadNode", ConditionStatus: corev1.ConditionFalse, ReasonRegex: "RebootMe", TolerationDuration: 10 * time.Minute, Action: cloudprovider.RebootNode},
+				{ConditionType: "BadNode", ConditionStatus: corev1.ConditionFalse, TolerationDuration: 30 * time.Minute, Action: cloudprovider.ReplaceNode},
+			})
+			newRepairController()
+			nodePool.Spec.Disruption.Budgets = []v1.Budget{{Nodes: "1"}}
+			ExpectApplied(ctx, env.Client, nodePool)
+			// Five healthy nodes keep both unhealthy nodes under the 20% circuit breaker, so the budget is the only bound.
+			healthyNodeClaims, healthyNodes := test.NodeClaimsAndNodes(5, v1.NodeClaim{ObjectMeta: metav1.ObjectMeta{Labels: labels()}})
+			for i := range healthyNodes {
+				initNode(healthyNodeClaims[i], healthyNodes[i])
+			}
+			secondNodeClaim, secondNode := test.NodeClaimAndNode(v1.NodeClaim{ObjectMeta: metav1.ObjectMeta{Labels: labels()}})
+			registerNode(nodeClaim, node)
+			registerNode(secondNodeClaim, secondNode)
+			markUnhealthyWithReason(node, "BadNode", "RebootMe")
+			markUnhealthyWithReason(secondNode, "BadNode", "RebootMe")
+			env.Clock.Step(11 * time.Minute)
+
+			rebootingCount := func(nodeClaims ...*v1.NodeClaim) int {
+				count := 0
+				for _, nc := range nodeClaims {
+					if ExpectExists(ctx, env.Client, nc).StatusConditions().Get(v1.ConditionTypeRebooting).IsTrue() {
+						count++
+					}
+				}
+				return count
+			}
+
+			// The first pass spends the pool's one disruption on a reboot.
+			ExpectSingletonReconciled(ctx, repairController)
+			Expect(rebootingCount(nodeClaim, secondNodeClaim)).To(Equal(1))
+
+			// The in-flight reboot consumes that disruption, so the second node must wait for it.
+			ExpectSingletonReconciled(ctx, repairController)
+			Expect(rebootingCount(nodeClaim, secondNodeClaim)).To(Equal(1))
+		})
+
 		It("should not consume disruption budget for initialized nodes", func() {
 			nodePool.Spec.Disruption.Budgets = []v1.Budget{{Nodes: "1"}}
 			ExpectApplied(ctx, env.Client, nodePool)
