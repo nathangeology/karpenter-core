@@ -14,6 +14,7 @@
 # Usage:
 #   ./karpenter-lint.sh              # diff against main
 #   ./karpenter-lint.sh origin/main  # diff against specific base
+#   BASE_SHA=<sha> ./karpenter-lint.sh   # same, for callers that set it in the env
 #
 # Pass an explicit base. The default 'main' is a local ref, so a stale local
 # main widens the diff to every commit main is behind, and the three-dot diff
@@ -21,12 +22,15 @@
 # review.
 #
 # Exit codes:
-#   0  All checks passed
-#   1  Violations found
+#   0  All checks passed, or the diff touched no .go files
+#   1  Violations found, or the base does not resolve
 
 set -uo pipefail
 
-BASE_BRANCH="${1:-main}"
+# Positional wins, then either env name, then 'main'. The env forms are read
+# because callers reach for them and a base that is read as 'main' instead of
+# as what the caller passed reports violations against files they never touched.
+BASE_BRANCH="${1:-${BASE_BRANCH:-${BASE_SHA:-main}}}"
 VIOLATIONS=0
 WARNINGS=0
 
@@ -39,6 +43,16 @@ if [ -t 1 ]; then
     NC='\033[0m'
 else
     RED='' YELLOW='' GREEN='' BOLD='' NC=''
+fi
+
+# An unresolvable base makes every git diff below fail, which reads as an empty
+# file list and exits 0 with every check reported as passed. Refuse it instead,
+# so "no .go files changed" and "the base could not be read" are distinguishable
+# by exit code.
+if ! git rev-parse --verify --quiet "${BASE_BRANCH}^{commit}" >/dev/null 2>&1; then
+    echo -e "${RED}${BOLD}FAIL${NC} base '${BASE_BRANCH}' does not resolve to a commit in this worktree." >&2
+    echo -e "Pass the parent SHA of the commit under review, e.g. ./karpenter-lint.sh HEAD~1" >&2
+    exit 1
 fi
 
 # --- Helpers ---
