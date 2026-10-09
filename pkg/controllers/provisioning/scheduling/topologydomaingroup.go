@@ -17,6 +17,8 @@ limitations under the License.
 package scheduling
 
 import (
+	"slices"
+
 	v1 "k8s.io/api/core/v1"
 
 	"sigs.k8s.io/karpenter/pkg/scheduling"
@@ -46,6 +48,14 @@ func (t TopologyDomainGroup) Insert(domain string, taints ...v1.Taint) {
 	if len(t[domain][0]) == 0 {
 		// This is the base case, where we're already tracking the empty set of taints for the domain. Pods will always
 		// be eligible for NodeClaims with this domain (based on taints), so there is no need to track additional taints.
+		return
+	}
+	// buildDomainGroups calls Insert once per instance type with the NodePool's template taints, which don't vary with
+	// the instance type, so the set we're inserting is usually equal to the one we just inserted. Inserts for a single
+	// NodePool are contiguous (one NodePool is fully processed before the next), so comparing against the last set is
+	// enough to drop every such duplicate. ForEachDomain is unaffected by the duplicates it leaves: a set it already
+	// holds can't change whether any set is tolerated, only how many are traversed before one is.
+	if slices.Equal(t[domain][len(t[domain])-1], taints) {
 		return
 	}
 	t[domain] = append(t[domain], taints)
