@@ -50,6 +50,21 @@ func (c *pdbListFailingClient) List(ctx context.Context, list client.ObjectList,
 	return c.Client.List(ctx, list, opts...)
 }
 
+// BuildNodePoolMap's only error return is a failed NodePool list; a
+// GetInstanceTypes error is logged and skipped with a continue. Narrowed to
+// NodePoolList so the PDB list inside RankNodes still succeeds and a surfaced
+// error cannot be mistaken for the one pdbListFailingClient produces.
+type nodePoolListFailingClient struct {
+	client.Client
+}
+
+func (c *nodePoolListFailingClient) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	if _, ok := list.(*v1.NodePoolList); ok {
+		return errors.New("simulated NodePool list failure for test")
+	}
+	return c.Client.List(ctx, list, opts...)
+}
+
 type toggleablePDBListFailingClient struct {
 	client.Client
 	fail bool
@@ -324,6 +339,36 @@ var _ = Describe("Controller", func() {
 		Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(pod), observed)).To(Succeed())
 		Expect(observed.Annotations).To(HaveKey(corev1.PodDeletionCost),
 			"second reconcile must succeed after the first failed one; if it took the unchanged short-circuit, the cursor was advanced on error")
+	})
+
+	// The only pre-enqueue failure surface the suite reached was the PDB list
+	// inside RankNodes. BuildNodePoolMap runs before it and its error return was
+	// unasserted, so swallowing that error left every spec green while a reconcile
+	// silently annotated nothing.
+	It("should _Edge_ surface a NodePool list failure instead of ranking against an empty map", func() {
+		nodeClaims, nodes := test.NodeClaimsAndNodes(1, v1.NodeClaim{
+			ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{v1.NodePoolLabelKey: nodePool.Name}},
+			Status:     v1.NodeClaimStatus{Allocatable: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("4"), corev1.ResourceMemory: resource.MustParse("8Gi")}},
+		})
+		ExpectApplied(ctx, env.Client, nodePool)
+		ExpectApplied(ctx, env.Client, nodeClaims[0], nodes[0])
+		pod := rsOwnedPod(test.PodOptions{NodeName: nodes[0].Name})
+		ExpectApplied(ctx, env.Client, pod)
+		ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, env.Clock, nodeStateController, nodeClaimStateController, nodes, nodeClaims)
+
+		failing := &nodePoolListFailingClient{Client: env.Client}
+		controller := deletioncost.NewController(env.Clock, failing, cloudProvider, cluster, queue)
+
+		_, err := controller.Reconcile(ctx)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("building node pool map"),
+			"the NodePool list failure must surface from BuildNodePoolMap, not from a later stage")
+
+		// Nothing annotated: the reconcile aborted before the enqueue, so the
+		// assertion is not merely about the returned error.
+		observed := &corev1.Pod{}
+		Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(pod), observed)).To(Succeed())
+		Expect(observed.Annotations).ToNot(HaveKey(corev1.PodDeletionCost))
 	})
 
 	It("should skip when change detection finds no changes", func() {
