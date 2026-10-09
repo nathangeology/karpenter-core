@@ -281,7 +281,7 @@ func IsDoNotDisruptActive(pod *corev1.Pod, clk clock.Clock, recorder events.Reco
 
 // ToleratesDisruptedNoScheduleTaint returns true if the pod tolerates karpenter.sh/disruption:NoSchedule taint
 func ToleratesDisruptedNoScheduleTaint(pod *corev1.Pod) bool {
-	return scheduling.Taints([]corev1.Taint{v1.DisruptedNoScheduleTaint}).ToleratesPod(pod) == nil
+	return scheduling.Taints([]corev1.Taint{v1.DisruptedNoScheduleTaint}).IsToleratedByPod(pod)
 }
 
 // HasRequiredPodAntiAffinity returns true if a non-empty PodAntiAffinity/RequiredDuringSchedulingIgnoredDuringExecution

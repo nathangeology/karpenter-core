@@ -851,7 +851,7 @@ func (s *Scheduler) shouldSkipDaemonPod(ctx context.Context, p *corev1.Pod) bool
 
 // isDaemonPodCompatibleWithNode checks if a daemon pod is compatible with the node
 func (s *Scheduler) isDaemonPodCompatibleWithNode(p *corev1.Pod, taints []corev1.Taint, nodeLabels map[string]string) bool {
-	if err := scheduling.Taints(taints).ToleratesPod(p); err != nil {
+	if !scheduling.Taints(taints).IsToleratedByPod(p) {
 		return false
 	}
 	if err := scheduling.NewLabelRequirements(nodeLabels).Compatible(scheduling.NewStrictPodRequirements(p)); err != nil {
@@ -1050,7 +1050,7 @@ func isDaemonPodCompatible(nodeClaimTemplate *NodeClaimTemplate, it *cloudprovid
 	preferences := &Preferences{}
 	// Add a toleration for PreferNoSchedule since a daemon pod shouldn't respect the preference
 	_ = preferences.toleratePreferNoScheduleTaints(pod)
-	if err := scheduling.Taints(nodeClaimTemplate.Spec.Taints).ToleratesPod(pod); err != nil {
+	if !scheduling.Taints(nodeClaimTemplate.Spec.Taints).IsToleratedByPod(pod) {
 		return false
 	}
 	for {

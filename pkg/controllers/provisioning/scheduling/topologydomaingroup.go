@@ -63,7 +63,7 @@ func (t TopologyDomainGroup) ForEachDomain(pod *v1.Pod, taintHonorPolicy v1.Node
 		// the pod tolerates.
 		// Perf Note: We could consider hashing the pod's tolerations and using that to look up a set of tolerated domains.
 		for _, taints := range taintGroups {
-			if err := scheduling.Taints(taints).ToleratesPod(pod); err == nil {
+			if scheduling.Taints(taints).IsToleratedByPod(pod) {
 				f(domain)
 				break
 			}

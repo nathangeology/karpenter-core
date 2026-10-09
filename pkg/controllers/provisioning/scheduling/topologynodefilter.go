@@ -72,9 +72,7 @@ func (t TopologyNodeFilter) Matches(taints []corev1.Taint, requirements scheduli
 	}
 	matchesTaints := true
 	if t.TaintPolicy == corev1.NodeInclusionPolicyHonor {
-		if err := scheduling.Taints(taints).Tolerates(t.Tolerations); err != nil {
-			matchesTaints = false
-		}
+		matchesTaints = scheduling.Taints(taints).IsToleratedBy(t.Tolerations)
 	}
 	return matchesAffinity && matchesTaints
 }
