@@ -65,14 +65,25 @@ func SavingsRatio(price, rescheduleDisruptionCost float64) float64 {
 	return price / rescheduleDisruptionCost
 }
 
-// lifetimeRemaining calculates the fraction of node lifetime remaining in the range [0.0, 1.0].  If the ExpireAfter
-// is non-zero, we use it to scale down the disruption costs of candidates that are going to expire.  Just after creation, the
-// disruption cost is highest, and it approaches zero as the node ages towards its expiration time.
+// LifetimeRemaining calculates the fraction of node lifetime remaining, always in the range [0.0, 1.0].  A nil
+// ExpireAfter, which is how "Never" parses, leaves the fraction at 1.0 so expiry never scales the cost down.
+// Otherwise we use it to scale down the disruption costs of candidates that are going to expire.  Just after
+// creation, the disruption cost is highest, and it approaches zero as the node ages towards its expiration time.
+//
+// The CRD pattern admits "0s", which is a non-nil pointer at zero rather than a nil one.  That makes the fraction
+// totalLifetimeSeconds-relative division a division by zero, whose answer depends on where the clock sits inside
+// the creation second: 0/0 is NaN at age zero, -Inf once the node is older, and +Inf if the recorded creation time
+// leads the clock.  lo.Clamp compares with < and >, both false for NaN, so NaN would leave this function outside
+// its documented range, and +Inf would clamp to 1.0 and report a node that expires on creation as brand new.  Such
+// a node has no lifetime left by definition, so answer 0 for the whole branch.
 func LifetimeRemaining(clock clock.Clock, nodePool *v1.NodePool, nodeClaim *v1.NodeClaim) float64 {
 	remaining := 1.0
 	if nodeClaim.Spec.ExpireAfter.Duration != nil {
-		ageInSeconds := clock.Since(nodeClaim.CreationTimestamp.Time).Seconds()
 		totalLifetimeSeconds := nodeClaim.Spec.ExpireAfter.Seconds()
+		if totalLifetimeSeconds == 0 {
+			return 0
+		}
+		ageInSeconds := clock.Since(nodeClaim.CreationTimestamp.Time).Seconds()
 		lifetimeRemainingSeconds := totalLifetimeSeconds - ageInSeconds
 		remaining = lo.Clamp(lifetimeRemainingSeconds/totalLifetimeSeconds, 0.0, 1.0)
 	}
