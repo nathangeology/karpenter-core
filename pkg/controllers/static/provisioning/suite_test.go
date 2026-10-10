@@ -531,6 +531,151 @@ var _ = Describe("Static Provisioning Controller", func() {
 			Expect(nodeClaimList.Items).To(HaveLen(4))
 			ExpectStateNodePoolCount(cluster, nodePool.Name, 4, 0, 0)
 		})
+		It("should provision only the true shortfall when a node is lost while a nodeclaim is pending disruption", func() {
+			// A replica change is not required to reach ReserveNodeCount with a non-zero pending
+			// disruption count. Losing an active NodeClaim drops active plus pending below the replica
+			// count just as a scale up raises the replica count above it, and the replica count never
+			// moves here.
+			nodePool := test.StaticNodePool()
+			nodePool.Spec.Replicas = new(int64(4))
+			Expect(nodePool.Spec.Limits).To(BeNil())
+
+			nodeClaims, nodes := staticNodeClaimsAndNodes(nodePool, 4)
+			ExpectApplied(ctx, env.Client, nodePool)
+			for i := range nodeClaims {
+				ExpectApplied(ctx, env.Client, nodeClaims[i], nodes[i])
+			}
+			ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, env.Clock, nodeController, nodeClaimStateController, nodes, nodeClaims)
+			ExpectStateNodePoolCount(cluster, nodePool.Name, 4, 0, 0)
+
+			cluster.NodePoolState.MarkNodeClaimPendingDisruption(nodePool.Name, nodeClaims[0].Name)
+			ExpectStateNodePoolCount(cluster, nodePool.Name, 3, 0, 1)
+
+			// Lose a different NodeClaim outright, so it leaves state entirely rather than becoming
+			// deleting. active plus pending is now 3 against 4 replicas.
+			ExpectDeleted(ctx, env.Client, nodeClaims[1], nodes[1])
+			cluster.NodePoolState.Cleanup(nodeClaims[1].Name)
+			ExpectStateNodePoolCount(cluster, nodePool.Name, 2, 0, 1)
+
+			result := ExpectObjectReconciled(ctx, env.Client, controller, nodePool)
+			Expect(result.RequeueAfter).To(BeNumerically("~", time.Minute*1, time.Second))
+
+			// Three NodeClaims survive the loss and the true shortfall is one: the disruption controller
+			// owns the replacement for the NodeClaim pending disruption.
+			nodeClaimList := &v1.NodeClaimList{}
+			Expect(env.Client.List(ctx, nodeClaimList)).To(Succeed())
+			Expect(nodeClaimList.Items).To(HaveLen(4))
+			ExpectStateNodePoolCount(cluster, nodePool.Name, 3, 0, 1)
+		})
+		It("should provision only the true shortfall when a nodeclaim is deleting and another is pending disruption", func() {
+			// Same reachability as above with the lost NodeClaim held in the deleting state instead of
+			// removed. ReserveNodeCount charges deleting against the limit, so this arm and the one below
+			// differ only in whether that limit is finite.
+			nodePool := test.StaticNodePool()
+			nodePool.Spec.Replicas = new(int64(4))
+			Expect(nodePool.Spec.Limits).To(BeNil())
+
+			nodeClaims, nodes := staticNodeClaimsAndNodes(nodePool, 4)
+			ExpectApplied(ctx, env.Client, nodePool)
+			for i := range nodeClaims {
+				ExpectApplied(ctx, env.Client, nodeClaims[i], nodes[i])
+			}
+			ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, env.Clock, nodeController, nodeClaimStateController, nodes, nodeClaims)
+			ExpectStateNodePoolCount(cluster, nodePool.Name, 4, 0, 0)
+
+			cluster.NodePoolState.MarkNodeClaimPendingDisruption(nodePool.Name, nodeClaims[0].Name)
+			cluster.NodePoolState.MarkNodeClaimDeleting(nodePool.Name, nodeClaims[1].Name)
+			ExpectStateNodePoolCount(cluster, nodePool.Name, 2, 1, 1)
+
+			result := ExpectObjectReconciled(ctx, env.Client, controller, nodePool)
+			Expect(result.RequeueAfter).To(BeNumerically("~", time.Minute*1, time.Second))
+
+			// Four NodeClaims exist, one of them deleting, and the true shortfall is one.
+			nodeClaimList := &v1.NodeClaimList{}
+			Expect(env.Client.List(ctx, nodeClaimList)).To(Succeed())
+			Expect(nodeClaimList.Items).To(HaveLen(5))
+			ExpectStateNodePoolCount(cluster, nodePool.Name, 3, 1, 1)
+		})
+		It("should provision nothing when a node limit is set and a nodeclaim is deleting alongside one pending disruption", func() {
+			// The deleting arm with a finite node limit as the only variable. ReserveNodeCount's
+			// remainingLimit is limit minus active plus deleting plus pending disruption, which is
+			// 4-(2+1+1) = 0 here, so the grant is zero and the true shortfall of one goes unprovisioned.
+			// This is the opposite direction from the over-provision the other specs pin, it is not
+			// addressed by subtracting the pending disruption count from the wanted limit, and the
+			// NodePool is held one node short for as long as the deleting NodeClaim stays in state.
+			nodePool := test.StaticNodePool(v1.NodePool{Spec: v1.NodePoolSpec{Limits: v1.Limits{
+				corev1.ResourceName("nodes"): resource.MustParse("4"),
+			}}})
+			nodePool.Spec.Replicas = new(int64(4))
+
+			nodeClaims, nodes := staticNodeClaimsAndNodes(nodePool, 4)
+			ExpectApplied(ctx, env.Client, nodePool)
+			for i := range nodeClaims {
+				ExpectApplied(ctx, env.Client, nodeClaims[i], nodes[i])
+			}
+			ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, env.Clock, nodeController, nodeClaimStateController, nodes, nodeClaims)
+			ExpectStateNodePoolCount(cluster, nodePool.Name, 4, 0, 0)
+
+			cluster.NodePoolState.MarkNodeClaimPendingDisruption(nodePool.Name, nodeClaims[0].Name)
+			cluster.NodePoolState.MarkNodeClaimDeleting(nodePool.Name, nodeClaims[1].Name)
+			ExpectStateNodePoolCount(cluster, nodePool.Name, 2, 1, 1)
+
+			// The node-limit-reached branch requeues at 30 seconds rather than the one minute every
+			// provisioning path above returns, which is how this arm is distinguishable from them.
+			result := ExpectObjectReconciled(ctx, env.Client, controller, nodePool)
+			Expect(result.RequeueAfter).To(BeNumerically("~", time.Second*30, time.Second))
+
+			nodeClaimList := &v1.NodeClaimList{}
+			Expect(env.Client.List(ctx, nodeClaimList)).To(Succeed())
+			Expect(nodeClaimList.Items).To(HaveLen(4))
+			ExpectStateNodePoolCount(cluster, nodePool.Name, 2, 1, 1)
+
+			// The shortfall is met as soon as the deleting NodeClaim leaves state, which bounds the
+			// under-provision to the lifetime of that NodeClaim rather than leaving it standing. The
+			// requeue above is what brings the controller back to do it.
+			ExpectDeleted(ctx, env.Client, nodeClaims[1], nodes[1])
+			cluster.NodePoolState.Cleanup(nodeClaims[1].Name)
+			ExpectStateNodePoolCount(cluster, nodePool.Name, 2, 0, 1)
+
+			result = ExpectObjectReconciled(ctx, env.Client, controller, nodePool)
+			Expect(result.RequeueAfter).To(BeNumerically("~", time.Minute*1, time.Second))
+
+			Expect(env.Client.List(ctx, nodeClaimList)).To(Succeed())
+			Expect(nodeClaimList.Items).To(HaveLen(4))
+			ExpectStateNodePoolCount(cluster, nodePool.Name, 3, 0, 1)
+		})
+		It("should provision the true shortfall when a node limit is set and a lost nodeclaim has left state", func() {
+			// Positive control for the spec above: the same node limit, the same replica count and the
+			// same pending disruption, with the lost NodeClaim removed from state instead of held
+			// deleting. remainingLimit is 4-(2+0+1) = 1, so the grant is one and the shortfall is met.
+			// Without this arm, the zero-grant spec would also pass against a limit that bounds
+			// everything to zero.
+			nodePool := test.StaticNodePool(v1.NodePool{Spec: v1.NodePoolSpec{Limits: v1.Limits{
+				corev1.ResourceName("nodes"): resource.MustParse("4"),
+			}}})
+			nodePool.Spec.Replicas = new(int64(4))
+
+			nodeClaims, nodes := staticNodeClaimsAndNodes(nodePool, 4)
+			ExpectApplied(ctx, env.Client, nodePool)
+			for i := range nodeClaims {
+				ExpectApplied(ctx, env.Client, nodeClaims[i], nodes[i])
+			}
+			ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, env.Clock, nodeController, nodeClaimStateController, nodes, nodeClaims)
+			ExpectStateNodePoolCount(cluster, nodePool.Name, 4, 0, 0)
+
+			cluster.NodePoolState.MarkNodeClaimPendingDisruption(nodePool.Name, nodeClaims[0].Name)
+			ExpectDeleted(ctx, env.Client, nodeClaims[1], nodes[1])
+			cluster.NodePoolState.Cleanup(nodeClaims[1].Name)
+			ExpectStateNodePoolCount(cluster, nodePool.Name, 2, 0, 1)
+
+			result := ExpectObjectReconciled(ctx, env.Client, controller, nodePool)
+			Expect(result.RequeueAfter).To(BeNumerically("~", time.Minute*1, time.Second))
+
+			nodeClaimList := &v1.NodeClaimList{}
+			Expect(env.Client.List(ctx, nodeClaimList)).To(Succeed())
+			Expect(nodeClaimList.Items).To(HaveLen(4))
+			ExpectStateNodePoolCount(cluster, nodePool.Name, 3, 0, 1)
+		})
 		It("should handle zero replicas", func() {
 			nodePool := test.StaticNodePool()
 			nodePool.Spec.Replicas = new(int64(0))
