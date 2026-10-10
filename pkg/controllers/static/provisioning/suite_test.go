@@ -438,6 +438,99 @@ var _ = Describe("Static Provisioning Controller", func() {
 
 			ExpectStateNodePoolCount(cluster, nodePool.Name, 10, 0, 0)
 		})
+		It("should not provision a replacement for a nodeclaim pending disruption when no node limit is set", func() {
+			nodePool := test.StaticNodePool()
+			nodePool.Spec.Replicas = new(int64(3))
+			// StaticNodePool leaves Spec.Limits nil, which makes the node limit math.MaxInt64, so
+			// ReserveNodeCount's remainingLimit cannot clamp an over-count in the wanted limit.
+			Expect(nodePool.Spec.Limits).To(BeNil())
+
+			nodeClaims, nodes := staticNodeClaimsAndNodes(nodePool, 3)
+			ExpectApplied(ctx, env.Client, nodePool)
+			for i := range nodeClaims {
+				ExpectApplied(ctx, env.Client, nodeClaims[i], nodes[i])
+			}
+			ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, env.Clock, nodeController, nodeClaimStateController, nodes, nodeClaims)
+			ExpectStateNodePoolCount(cluster, nodePool.Name, 3, 0, 0)
+
+			// The disruption controller stages a replacement for one NodeClaim, which moves it out of
+			// active and into pending disruption. This is the transition queue.go does on launch.
+			cluster.NodePoolState.MarkNodeClaimPendingDisruption(nodePool.Name, nodeClaims[0].Name)
+			ExpectStateNodePoolCount(cluster, nodePool.Name, 2, 0, 1)
+
+			// Scale up by one while that replacement is still in flight. This is the only way to reach
+			// the ReserveNodeCount call with a non-zero pending disruption count, since the check above
+			// returns early whenever active plus pending has already reached the replica count.
+			nodePool.Spec.Replicas = new(int64(4))
+			ExpectApplied(ctx, env.Client, nodePool)
+
+			result := ExpectObjectReconciled(ctx, env.Client, controller, nodePool)
+			Expect(result.RequeueAfter).To(BeNumerically("~", time.Minute*1, time.Second))
+
+			// One NodeClaim for the added replica, and none for the NodeClaim pending disruption: the
+			// disruption controller owns that replacement.
+			nodeClaimList := &v1.NodeClaimList{}
+			Expect(env.Client.List(ctx, nodeClaimList)).To(Succeed())
+			Expect(nodeClaimList.Items).To(HaveLen(4))
+			ExpectStateNodePoolCount(cluster, nodePool.Name, 3, 0, 1)
+		})
+		It("should not provision a replacement for a nodeclaim pending disruption when a node limit is set", func() {
+			// Same scenario as above with the node limit as the only variable. The limit is what makes
+			// ReserveNodeCount's remainingLimit finite, so this arm holds whether or not the wanted limit
+			// subtracts the pending disruption count. It is here to pin which term is doing the work.
+			nodePool := test.StaticNodePool(v1.NodePool{Spec: v1.NodePoolSpec{Limits: v1.Limits{
+				corev1.ResourceName("nodes"): resource.MustParse("4"),
+			}}})
+			nodePool.Spec.Replicas = new(int64(3))
+
+			nodeClaims, nodes := staticNodeClaimsAndNodes(nodePool, 3)
+			ExpectApplied(ctx, env.Client, nodePool)
+			for i := range nodeClaims {
+				ExpectApplied(ctx, env.Client, nodeClaims[i], nodes[i])
+			}
+			ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, env.Clock, nodeController, nodeClaimStateController, nodes, nodeClaims)
+			ExpectStateNodePoolCount(cluster, nodePool.Name, 3, 0, 0)
+
+			cluster.NodePoolState.MarkNodeClaimPendingDisruption(nodePool.Name, nodeClaims[0].Name)
+			ExpectStateNodePoolCount(cluster, nodePool.Name, 2, 0, 1)
+
+			nodePool.Spec.Replicas = new(int64(4))
+			ExpectApplied(ctx, env.Client, nodePool)
+
+			result := ExpectObjectReconciled(ctx, env.Client, controller, nodePool)
+			Expect(result.RequeueAfter).To(BeNumerically("~", time.Minute*1, time.Second))
+
+			nodeClaimList := &v1.NodeClaimList{}
+			Expect(env.Client.List(ctx, nodeClaimList)).To(Succeed())
+			Expect(nodeClaimList.Items).To(HaveLen(4))
+			ExpectStateNodePoolCount(cluster, nodePool.Name, 3, 0, 1)
+		})
+		It("should provision the full shortfall when no nodeclaim is pending disruption", func() {
+			// Positive control for the two specs above: the same objects and the same scale up, with the
+			// pending disruption transition as the only difference, provision two rather than one. Without
+			// this, a spec that provisioned nothing at all would pass them both.
+			nodePool := test.StaticNodePool()
+			nodePool.Spec.Replicas = new(int64(3))
+
+			nodeClaims, nodes := staticNodeClaimsAndNodes(nodePool, 2)
+			ExpectApplied(ctx, env.Client, nodePool)
+			for i := range nodeClaims {
+				ExpectApplied(ctx, env.Client, nodeClaims[i], nodes[i])
+			}
+			ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, env.Clock, nodeController, nodeClaimStateController, nodes, nodeClaims)
+			ExpectStateNodePoolCount(cluster, nodePool.Name, 2, 0, 0)
+
+			nodePool.Spec.Replicas = new(int64(4))
+			ExpectApplied(ctx, env.Client, nodePool)
+
+			result := ExpectObjectReconciled(ctx, env.Client, controller, nodePool)
+			Expect(result.RequeueAfter).To(BeNumerically("~", time.Minute*1, time.Second))
+
+			nodeClaimList := &v1.NodeClaimList{}
+			Expect(env.Client.List(ctx, nodeClaimList)).To(Succeed())
+			Expect(nodeClaimList.Items).To(HaveLen(4))
+			ExpectStateNodePoolCount(cluster, nodePool.Name, 4, 0, 0)
+		})
 		It("should handle zero replicas", func() {
 			nodePool := test.StaticNodePool()
 			nodePool.Spec.Replicas = new(int64(0))
@@ -615,3 +708,29 @@ var _ = Describe("Static Provisioning Controller", func() {
 		)
 	})
 })
+
+// staticNodeClaimsAndNodes builds n initialized NodeClaim and Node pairs labeled for the NodePool.
+func staticNodeClaimsAndNodes(nodePool *v1.NodePool, n int) ([]*v1.NodeClaim, []*corev1.Node) {
+	nodeClaims := make([]*v1.NodeClaim, 0, n)
+	nodes := make([]*corev1.Node, 0, n)
+	for range n {
+		nodeClaim, node := test.NodeClaimAndNode(v1.NodeClaim{
+			ObjectMeta: metav1.ObjectMeta{
+				Labels: map[string]string{
+					v1.NodePoolLabelKey:        nodePool.Name,
+					v1.NodeInitializedLabelKey: "true",
+				},
+			},
+			Status: v1.NodeClaimStatus{
+				ProviderID: test.RandomProviderID(),
+				Capacity: corev1.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("10"),
+					corev1.ResourceMemory: resource.MustParse("1000Mi"),
+				},
+			},
+		})
+		nodeClaims = append(nodeClaims, nodeClaim)
+		nodes = append(nodes, node)
+	}
+	return nodeClaims, nodes
+}
