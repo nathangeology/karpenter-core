@@ -17,13 +17,16 @@
 #   BASE_SHA=<sha> ./karpenter-lint.sh   # same, for callers that set it in the env
 #
 # Pass an explicit base. The default 'main' is a local ref, so a stale local
-# main widens the diff to every commit main is behind, and the three-dot diff
-# cannot see uncommitted work. Prefer the parent SHA of the commit under
-# review.
+# main widens the diff to every commit main is behind. Prefer the parent SHA of
+# the commit under review.
+#
+# The gate reads the working tree, so uncommitted and staged edits are checked
+# too. There is no need to commit before running it.
 #
 # Exit codes:
-#   0  All checks passed, or the diff touched no .go files
+#   0  All checks passed, and at least one .go file was checked
 #   1  Violations found, or the base does not resolve
+#   2  Nothing was checked: the diff touched no .go files. Not a pass.
 
 set -uo pipefail
 
@@ -55,6 +58,23 @@ if ! git rev-parse --verify --quiet "${BASE_BRANCH}^{commit}" >/dev/null 2>&1; t
     exit 1
 fi
 
+# Every diff below is taken from the merge base against the WORKING TREE, which
+# is the union of the branch's own commits, the index, and unstaged edits.
+#
+# The two-dot and three-dot forms each miss half of that. 'git diff BASE...'
+# resolves to merge-base(BASE,HEAD)..HEAD, so it reads committed trees only and
+# cannot see an edit that has not been committed. 'git diff BASE' does read the
+# working tree, but it also reports the inverse of any commit on BASE that is
+# not in HEAD, which attributes base-side churn to the change under review.
+# Diffing the merge base against the working tree keeps the three-dot form's
+# immunity to base churn and adds the index and the worktree.
+DIFF_BASE=$(git merge-base "${BASE_BRANCH}" HEAD 2>/dev/null)
+if [ -z "${DIFF_BASE}" ]; then
+    echo -e "${RED}${BOLD}FAIL${NC} no merge base between '${BASE_BRANCH}' and HEAD." >&2
+    echo -e "Pass a base that shares history with HEAD, e.g. ./karpenter-lint.sh HEAD~1" >&2
+    exit 1
+fi
+
 # --- Helpers ---
 
 fail() {
@@ -73,8 +93,7 @@ pass() {
 
 # Get changed .go files (excludes deleted files)
 changed_go_files() {
-    git diff --name-only --diff-filter=d "${BASE_BRANCH}"... -- '*.go' 2>/dev/null || \
-    git diff --name-only --diff-filter=d "${BASE_BRANCH}" -- '*.go' 2>/dev/null || true
+    git diff --name-only --diff-filter=d "${DIFF_BASE}" -- '*.go' 2>/dev/null || true
 }
 
 # Get changed non-test .go files
@@ -90,8 +109,7 @@ changed_test_files() {
 # Get only the added/modified lines in changed files (new code only)
 # Usage: changed_lines <file>
 changed_lines() {
-    git diff "${BASE_BRANCH}"... -- "$1" 2>/dev/null | grep '^+' | grep -v '^+++' || \
-    git diff "${BASE_BRANCH}" -- "$1" 2>/dev/null | grep '^+' | grep -v '^+++' || true
+    git diff "${DIFF_BASE}" -- "$1" 2>/dev/null | grep '^+' | grep -v '^+++' || true
 }
 
 # Get the post-image line numbers of the added lines in a changed file.
@@ -99,8 +117,7 @@ changed_lines() {
 # several lines) but should only report what this diff touched.
 # Usage: added_line_numbers <file>
 added_line_numbers() {
-    { git diff -U0 "${BASE_BRANCH}"... -- "$1" 2>/dev/null || \
-      git diff -U0 "${BASE_BRANCH}" -- "$1" 2>/dev/null || true; } | awk '
+    git diff -U0 "${DIFF_BASE}" -- "$1" 2>/dev/null | awk '
         /^@@/ {
             if (match($0, /\+[0-9]+(,[0-9]+)?/)) {
                 spec = substr($0, RSTART + 1, RLENGTH - 1)
@@ -118,9 +135,14 @@ PROD_FILES=$(changed_prod_files)
 TEST_FILES=$(changed_test_files)
 ALL_FILES=$(changed_go_files)
 
+# A run that checked nothing is not a pass. Exit 2 so the caller cannot quote
+# it as one, and say why on stderr. 0 is reserved for "N > 0 files checked and
+# every check passed", which is the claim the pre-review gate is asked for.
 if [ -z "$ALL_FILES" ]; then
-    echo -e "${GREEN}No changed .go files against ${BASE_BRANCH}. Nothing to check.${NC}"
-    exit 0
+    echo -e "${YELLOW}${BOLD}NOT RUN${NC} no changed .go files between ${DIFF_BASE} and the working tree." >&2
+    echo -e "Nothing was checked, so this is not a pass. Check the base: '${BASE_BRANCH}'" >&2
+    echo -e "resolved to merge base ${DIFF_BASE}." >&2
+    exit 2
 fi
 
 echo -e "${BOLD}Karpenter Lint -- checking $(echo "$ALL_FILES" | wc -l | tr -d ' ') changed .go files against ${BASE_BRANCH}${NC}"
