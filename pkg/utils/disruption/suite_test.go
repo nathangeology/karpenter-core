@@ -370,9 +370,26 @@ var _ = Describe("LifetimeRemaining", func() {
 
 	// A zero ExpireAfter is a non-nil pointer at 0, so it takes the division
 	// branch with a zero denominator. lo.Clamp compares with < and >, both of
-	// which are false for NaN, so NaN passes through unclamped. Pinned because
-	// the result feeds a multiplication into Candidate.DisruptionCost, where a
-	// NaN is unorderable and silently loses every ranking comparison.
+	// which are false for NaN, so NaN passes through unclamped.
+	//
+	// Pinned because the result feeds a multiplication into
+	// Candidate.DisruptionCost in controllers/disruption/types.go, and the two
+	// consumers of that cost disagree about a NaN rather than discarding it:
+	//
+	//   - static/deprovisioning/controller.go ranks with cmp.Compare, which is
+	//     NaN-safe and documents NaN as less than any non-NaN. Its selection
+	//     takes the lowest costs first, so a NaN-cost node sorts to the FRONT.
+	//   - disruption/repair.go's candidate tie-break reads the cost through !=
+	//     and then <. Both are false against a NaN, so it ties with every cost
+	//     while the costs still order among themselves. That is not a strict
+	//     weak ordering, so sort.SliceStable's output there varies with input
+	//     order, against the promise in that tie-break's own comment.
+	//
+	// So a NaN neither loses nor is dropped. On one path it wins selection
+	// outright; on the other the order stops being deterministic. Both sites
+	// are cited by file rather than by line or by symbol: the repair.go method
+	// holding that tie-break is ComputeCommands on this branch's base and
+	// computeCommands upstream, and the types.go line has already moved once.
 	Context("a zero ExpireAfter duration, which divides by zero", func() {
 		It("returns NaN when the age is also zero", func() {
 			nc := expiringNodeClaim("0s", 0)
