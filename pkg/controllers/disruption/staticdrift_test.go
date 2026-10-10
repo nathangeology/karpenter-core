@@ -670,6 +670,68 @@ var _ = Describe("StaticDrift", func() {
 				metrics.ReasonLabel: strings.ToLower(string(v1.DisruptionReasonDrifted)),
 			})
 		})
+		// The overscale gate reads active + pendingDisruption. MarkNodeClaimActive moves a name out of
+		// PendingDisruption and into Active, so it cannot change that sum, and a NodeClaim event landing on an
+		// in-flight candidate has to leave the gate's verdict alone. Narrowing the gate to active alone would
+		// make it depend on which of the two buckets holds the candidate, which is racy. Both arms below run on
+		// the same objects and the same candidate set; only the bucket differs.
+		It("should hold the overscale gate when a pending candidate is returned to active", func() {
+			nodePool.Spec.Replicas = new(int64(1)) // Target 1, but have 2
+			numNodes = 2
+			nodeClaims, nodes = test.NodeClaimsAndNodes(numNodes, v1.NodeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						v1.NodePoolLabelKey:            nodePool.Name,
+						v1.NodeInitializedLabelKey:     "true",
+						corev1.LabelInstanceTypeStable: mostExpensiveInstance.Name,
+						v1.CapacityTypeLabelKey:        mostExpensiveOffering.Requirements.Get(v1.CapacityTypeLabelKey).Any(),
+						corev1.LabelTopologyZone:       mostExpensiveOffering.Requirements.Get(corev1.LabelTopologyZone).Any(),
+					},
+				},
+				Status: v1.NodeClaimStatus{
+					Allocatable: map[corev1.ResourceName]resource.Quantity{
+						corev1.ResourceCPU:  resource.MustParse("32"),
+						corev1.ResourcePods: resource.MustParse("100"),
+					},
+				},
+			})
+
+			ExpectApplied(ctx, env.Client, nodePool)
+			for i := range numNodes {
+				nodeClaims[i].StatusConditions().SetTrue(v1.ConditionTypeDrifted)
+				ExpectApplied(ctx, env.Client, nodeClaims[i], nodes[i])
+			}
+			ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, env.Clock, nodeStateController, nodeClaimStateController, nodes, nodeClaims)
+
+			// A command is in flight on the first candidate, so the queue has it marked pending. This touches
+			// NodePoolState only, which is what the gate reads; the StateNode and so the candidate set are
+			// untouched, keeping the two arms comparable.
+			cluster.NodePoolState.MarkNodeClaimPendingDisruption(nodePool.Name, nodeClaims[0].Name)
+			ExpectStateNodePoolCount(cluster, nodePool.Name, 1, 0, 1)
+
+			ExpectSingletonReconciled(ctx, disruptionController)
+			Expect(queue.GetCommands()).To(HaveLen(0))
+
+			// A NodeClaim event on the in-flight candidate. The informer path marks it active again, which
+			// clears it from PendingDisruption without the command having finished.
+			ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaims[0]))
+			ExpectStateNodePoolCount(cluster, nodePool.Name, 2, 0, 0)
+
+			// Same verdict, because the sum the gate reads is still 2 against 1 replica.
+			ExpectSingletonReconciled(ctx, disruptionController)
+			Expect(queue.GetCommands()).To(HaveLen(0))
+
+			// Positive control: the two zeros above are the overscale gate and nothing else. Scale down to the
+			// replica count and the same candidate drifts.
+			ExpectDeleted(ctx, env.Client, nodeClaims[1], nodes[1])
+			ExpectNodeClaimsCascadeDeletion(ctx, env.Client, nodeClaims[1])
+			ExpectReconcileSucceeded(ctx, nodeStateController, client.ObjectKeyFromObject(nodes[1]))
+			ExpectReconcileSucceeded(ctx, nodeClaimStateController, client.ObjectKeyFromObject(nodeClaims[1]))
+			ExpectStateNodePoolCount(cluster, nodePool.Name, 1, 0, 0)
+
+			ExpectSingletonReconciled(ctx, disruptionController)
+			Expect(queue.GetCommands()).To(HaveLen(1))
+		})
 	})
 	Context("Multiple NodePools", func() {
 		It("should handle drift for multiple static NodePools independently", func() {
