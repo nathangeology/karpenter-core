@@ -97,7 +97,11 @@ func (c *Controller) Reconcile(ctx context.Context, np *v1.NodePool) (reconcile.
 
 	limit, ok := np.Spec.Limits[resources.Node]
 	nodeLimit := lo.Ternary(ok, limit.Value(), int64(math.MaxInt64))
-	countNodeClaimsToProvision := c.cluster.NodePoolState.ReserveNodeCount(np.Name, nodeLimit, desiredReplicas-int64(runningNodeClaims))
+	// Exclude NodeClaims pending disruption from the shortfall for the same reason the check above counts them:
+	// the disruption controller is already creating their replacements. Counting them as missing asks for one
+	// NodeClaim per pending disruption more than the shortfall, and ReserveNodeCount only clamps that back when
+	// the NodePool sets a node limit.
+	countNodeClaimsToProvision := c.cluster.NodePoolState.ReserveNodeCount(np.Name, nodeLimit, desiredReplicas-int64(runningNodeClaims)-int64(nodesPendingDisruptionCount))
 
 	if countNodeClaimsToProvision <= 0 {
 		log.FromContext(ctx).Info("nodepool node limit reached")
