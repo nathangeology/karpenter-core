@@ -240,7 +240,7 @@ func (in *StateNode) GetRepairResult(now time.Time) health.RepairResult {
 	}
 	var rebootFinishedAt time.Time
 	if in.NodeClaim != nil {
-		if rebooting := in.NodeClaim.StatusConditions().Get(v1.ConditionTypeRebooting); rebooting != nil && rebooting.IsFalse() {
+		if rebooting := in.NodeClaim.StatusConditions().Get(v1.ConditionTypeRebooting); rebooting.IsFalse() {
 			rebootFinishedAt = rebooting.LastTransitionTime.Time
 		}
 	}
