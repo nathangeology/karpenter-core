@@ -17,6 +17,7 @@ limitations under the License.
 package health
 
 import (
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -186,6 +187,27 @@ var _ = Describe("Repair Policies", func() {
 			"default fallback policy",
 		),
 	)
+
+	// A provider written before Action and ReasonRegex existed supplies neither on any policy. Every such policy is a
+	// default fallback with an empty action, so one set trips three independent checks at once. They are reported
+	// together, so a provider migrating its policy set sees the whole shape of the work in one startup rather than one
+	// reason per restart.
+	It("reports every reason a pre-migration policy set is rejected", func() {
+		preMigration := []cloudprovider.RepairPolicy{
+			{ConditionType: corev1.NodeReady, ConditionStatus: corev1.ConditionFalse, TolerationDuration: 30 * time.Minute},
+			{ConditionType: corev1.NodeReady, ConditionStatus: corev1.ConditionUnknown, TolerationDuration: 30 * time.Minute},
+			{ConditionType: "StorageReady", ConditionStatus: corev1.ConditionFalse, TolerationDuration: 30 * time.Minute},
+		}
+
+		_, err := newRepairPolicyMatcher(preMigration, supportedActions)
+		Expect(err).To(HaveOccurred())
+		// One per policy: an omitted Action is not a supported action.
+		Expect(err.Error()).To(ContainSubstring(`has unsupported action ""`))
+		// An omitted ReasonRegex makes every policy a default fallback, so the second and third collide with the first.
+		Expect(err.Error()).To(ContainSubstring("multiple default fallbacks"))
+		// The fallback the set does elect still has to request replacement.
+		Expect(err.Error()).To(ContainSubstring(fmt.Sprintf("must use action %q", cloudprovider.ReplaceNode)))
+	})
 
 	It("includes the complete policy in validation errors", func() {
 		policies := []cloudprovider.RepairPolicy{
