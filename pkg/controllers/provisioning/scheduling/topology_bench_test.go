@@ -26,6 +26,7 @@ import (
 	"k8s.io/utils/clock"
 	fakecr "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	v1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 	"sigs.k8s.io/karpenter/pkg/cloudprovider"
 	"sigs.k8s.io/karpenter/pkg/cloudprovider/fake"
 	"sigs.k8s.io/karpenter/pkg/controllers/provisioning/scheduling"
@@ -36,31 +37,48 @@ import (
 func BenchmarkNewTopology(b *testing.B) {
 	for _, np := range []int{1, 5, 20, 50} {
 		b.Run(fmt.Sprintf("vector=nodepools/np=%d", np), func(b *testing.B) {
-			ctx := benchCtx()
-			pods := makeDiversePods(1000)
-
-			cp := fake.NewCloudProvider()
-			instanceTypes := fake.InstanceTypes(400)
-			cp.InstanceTypes = instanceTypes
-
-			client := fakecr.NewFakeClient()
-			clk := &clock.RealClock{}
-			cl := state.NewCluster(clk, client, cp)
-
-			nodePools := benchNodePools(np)
-			itsByNP := map[string][]*cloudprovider.InstanceType{}
-			for _, pool := range nodePools {
-				itsByNP[pool.Name] = instanceTypes
-			}
-
-			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				if _, err := scheduling.NewTopology(ctx, client, cl, nil, nodePools, itsByNP, pods); err != nil {
-					b.Fatalf("creating topology: %s", err)
-				}
-			}
+			benchmarkNewTopology(b, benchNodePools(np))
 		})
+	}
+}
+
+// BenchmarkNewTopologySharedTaintSets sweeps how many distinct taint sets a fixed count of
+// NodePools carry between them. The sweep above gives every NodePool a taint of its own, which
+// is the one point at which a domain legitimately tracks one taint set per NodePool. Fleets
+// where several NodePools are tainted alike are the common case and the only shape in which
+// buildDomainGroups has anything to collapse across NodePools, so no benchmark that holds the
+// taints distinct can see a change to that.
+func BenchmarkNewTopologySharedTaintSets(b *testing.B) {
+	for _, taintSets := range []int{1, 2, 25, 50} {
+		b.Run(fmt.Sprintf("vector=taintsets/t=%d", taintSets), func(b *testing.B) {
+			benchmarkNewTopology(b, shareTaintSets(benchNodePools(50), taintSets))
+		})
+	}
+}
+
+func benchmarkNewTopology(b *testing.B, nodePools []*v1.NodePool) {
+	ctx := benchCtx()
+	pods := makeDiversePods(1000)
+
+	cp := fake.NewCloudProvider()
+	instanceTypes := fake.InstanceTypes(400)
+	cp.InstanceTypes = instanceTypes
+
+	client := fakecr.NewFakeClient()
+	clk := &clock.RealClock{}
+	cl := state.NewCluster(clk, client, cp)
+
+	itsByNP := map[string][]*cloudprovider.InstanceType{}
+	for _, pool := range nodePools {
+		itsByNP[pool.Name] = instanceTypes
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := scheduling.NewTopology(ctx, client, cl, nil, nodePools, itsByNP, pods); err != nil {
+			b.Fatalf("creating topology: %s", err)
+		}
 	}
 }
 

@@ -99,6 +99,20 @@ func benchNodePools(count int) []*v1.NodePool {
 	return nps
 }
 
+// shareTaintSets rewrites the NodePools' template taints so they carry taintSets distinct sets
+// between them, assigned round robin, rather than one set each. taintSets == len(nodePools)
+// restores what benchNodePools produced.
+func shareTaintSets(nodePools []*v1.NodePool, taintSets int) []*v1.NodePool {
+	for i, np := range nodePools {
+		np.Spec.Template.Spec.Taints = []corev1.Taint{{
+			Key:    fmt.Sprintf("bench.example.com/taint-set-%d", i%taintSets),
+			Value:  "true",
+			Effect: corev1.TaintEffectNoSchedule,
+		}}
+	}
+	return nodePools
+}
+
 // benchStateNodes builds initialized+registered StateNodes directly, distributed
 // round-robin across the given NodePools.
 func benchStateNodes(count int, nodePools []*v1.NodePool) []*state.StateNode {
