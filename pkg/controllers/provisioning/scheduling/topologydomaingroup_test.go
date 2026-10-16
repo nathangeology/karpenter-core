@@ -55,9 +55,10 @@ var _ = Describe("TopologyDomainGroup", func() {
 			Expect(domainGroup["test-zone-1"]).To(HaveLen(2))
 		})
 		It("should track a taint set per insert when equal sets are not consecutive", func() {
-			// Deduplication only compares against the last set inserted, which is all buildDomainGroups
-			// needs: it finishes one NodePool before starting the next. A caller interleaving NodePools
-			// keeps the pre-existing behavior rather than a wrong one.
+			// Deduplication only compares against the last set inserted. That is all buildDomainGroups
+			// needs because of the order it inserts in: it finishes one NodePool before starting the
+			// next, and it visits NodePools carrying equal taints consecutively. A caller interleaving
+			// equal sets keeps the pre-existing behavior rather than a wrong one.
 			domainGroup := scheduling.NewTopologyDomainGroup()
 			domainGroup.Insert("test-zone-1", teamTaint)
 			domainGroup.Insert("test-zone-1", gpuTaint)

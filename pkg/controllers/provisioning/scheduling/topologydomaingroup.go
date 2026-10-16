@@ -51,10 +51,12 @@ func (t TopologyDomainGroup) Insert(domain string, taints ...v1.Taint) {
 		return
 	}
 	// buildDomainGroups calls Insert once per instance type with the NodePool's template taints, which don't vary with
-	// the instance type, so the set we're inserting is usually equal to the one we just inserted. Inserts for a single
-	// NodePool are contiguous (one NodePool is fully processed before the next), so comparing against the last set is
-	// enough to drop every such duplicate. ForEachDomain is unaffected by the duplicates it leaves: a set it already
-	// holds can't change whether any set is tolerated, only how many are traversed before one is.
+	// the instance type, so the set we're inserting is usually equal to the one we just inserted. Comparing against the
+	// last set is enough to drop every duplicate it produces, but only because of how it orders its inserts: one
+	// NodePool is fully processed before the next, and NodePools carrying equal taints are visited consecutively. A
+	// caller that interleaves equal sets instead gets one stored set per run of them, which is correct and larger.
+	// ForEachDomain is unaffected by the duplicates left either way: a set it already holds can't change whether any
+	// set is tolerated, only how many are traversed before one is.
 	if slices.Equal(t[domain][len(t[domain])-1], taints) {
 		return
 	}
