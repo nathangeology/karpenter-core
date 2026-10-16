@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 
 	"github.com/awslabs/operatorpkg/option"
 	"github.com/awslabs/operatorpkg/serrors"
@@ -107,9 +108,25 @@ func buildDomainGroups(nodePools []*v1.NodePool, instanceTypes map[string][]*clo
 		return np.Name, np
 	})
 	domainGroups := map[string]TopologyDomainGroup{}
-	for npName, its := range instanceTypes {
+	// TopologyDomainGroup.Insert drops a taint set equal to the one stored last against the domain, so
+	// NodePools carrying the same taints only collapse into one set if they're processed back to back.
+	// Ranging over instanceTypes gives Go's randomized map order, under which that happens by accident:
+	// 200 NodePools over two distinct taint sets stored 90 to 120 sets per domain across runs, where two
+	// is correct.  Ordering by the taints makes the equal ones contiguous, so a domain stores one set per
+	// distinct set of taints, and the same count on every run.
+	npNames := lo.Keys(instanceTypes)
+	taintKeys := lo.SliceToMap(npNames, func(npName string) (string, string) {
+		return npName, taintSetKey(nodePoolIndex[npName].Spec.Template.Spec.Taints)
+	})
+	sort.Slice(npNames, func(i, j int) bool {
+		if taintKeys[npNames[i]] != taintKeys[npNames[j]] {
+			return taintKeys[npNames[i]] < taintKeys[npNames[j]]
+		}
+		return npNames[i] < npNames[j]
+	})
+	for _, npName := range npNames {
 		np := nodePoolIndex[npName]
-		for _, it := range its {
+		for _, it := range instanceTypes[npName] {
 			// We need to intersect the instance type requirements with the current nodePool requirements.  This
 			// ensures that something like zones from an instance type don't expand the universe of valid domains.
 			requirements := scheduling.NewNodeSelectorRequirementsWithMinValues(np.Spec.Template.Spec.Requirements...)
@@ -140,6 +157,19 @@ func buildDomainGroups(nodePools []*v1.NodePool, instanceTypes map[string][]*clo
 		}
 	}
 	return domainGroups
+}
+
+// taintSetKey returns an ordering key for a NodePool's template taints.  NodePools carrying the same
+// taints get the same key, which is what buildDomainGroups orders on so that their inserts into a
+// domain are consecutive and TopologyDomainGroup.Insert can collapse them.  Taint.TimeAdded is left
+// out: a template taint doesn't carry one, and Insert compares the sets themselves, so a pair that
+// matches here and differs there is still held apart by that comparison.  None of a taint's fields
+// can contain the separators, since a key is a qualified name, a value is alphanumeric with dashes,
+// dots and underscores, and an effect is one of three constants.
+func taintSetKey(taints []corev1.Taint) string {
+	return strings.Join(lo.Map(taints, func(taint corev1.Taint, _ int) string {
+		return fmt.Sprintf("%s=%s:%s", taint.Key, taint.Value, taint.Effect)
+	}), ",")
 }
 
 // topologyError allows lazily generating the error string in the topology error.  If a pod fails to schedule, most often
