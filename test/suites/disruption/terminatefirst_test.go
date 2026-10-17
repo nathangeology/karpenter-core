@@ -138,6 +138,24 @@ var _ = Describe("TerminateFirst", Ordered, func() {
 		}, 10*time.Second, 2*time.Second).Should(Succeed())
 	}
 
+	// The Consistently window above cannot distinguish terminate-first from replace-first at this
+	// fixture: with Replicas and the node limit both at 1, static.provisioning returns early on
+	// active+pendingDisruption >= Replicas before it ever reads Spec.Limits, so "no replacement
+	// appeared" holds on every reachable arm. This counter is the one signal that separates them,
+	// and it is the only cluster-visible effect of Command.TerminateFirstReason.
+	eventuallyExpectTerminateFirstDecision := func(reason v1.DisruptionReason) {
+		Eventually(func(g Gomega) {
+			decisions := lo.Filter(env.ExpectPodMetrics(), func(metric common.PrometheusMetric, _ int) bool {
+				return metric.Name == "karpenter_voluntary_disruption_terminate_first_decisions_total" &&
+					metric.Labels["nodepool"] == nodePool.Name &&
+					metric.Labels["reason"] == strings.ToLower(string(reason)) &&
+					metric.Labels["terminate_first_reason"] == "static-at-limit"
+			})
+			g.Expect(decisions).ToNot(BeEmpty())
+			g.Expect(decisions[0].Value).To(BeNumerically(">", 0))
+		}, 2*time.Minute, 5*time.Second).Should(Succeed())
+	}
+
 	eventuallyExpectReplacement := func(originalUIDs map[types.UID]struct{}) {
 		Eventually(func(g Gomega) bool {
 			nodeClaims := listNodeClaims(g)
@@ -174,6 +192,7 @@ var _ = Describe("TerminateFirst", Ordered, func() {
 		env.ExpectRepairFaultInjected(nodes[0])
 
 		assertReplacementDidNotPrecedeDeletion(originalUIDs, target, nodes[0])
+		eventuallyExpectTerminateFirstDecision(v1.DisruptionReasonUnhealthy)
 		release(nodes[0])
 		env.EventuallyExpectNotFound(target)
 		eventuallyExpectReplacement(originalUIDs)
@@ -208,6 +227,7 @@ var _ = Describe("TerminateFirst", Ordered, func() {
 		}).Should(Succeed())
 
 		assertReplacementDidNotPrecedeDeletion(originalUIDs, target, originalNodes[0])
+		eventuallyExpectTerminateFirstDecision(v1.DisruptionReasonDrifted)
 		for _, node := range originalNodes {
 			release(node)
 		}
