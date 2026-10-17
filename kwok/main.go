@@ -17,6 +17,8 @@ limitations under the License.
 package main
 
 import (
+	"os"
+
 	"github.com/samber/lo"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -40,7 +42,13 @@ func main() {
 
 	overlayUndecoratedCloudProvider := kwok.NewCloudProvider(ctx, op.GetClient(), instanceTypes)
 	cloudProvider := overlay.Decorate(overlayUndecoratedCloudProvider, op.GetClient(), op.InstanceTypeStore)
-	repairPolicyMatcher := lo.Must(health.NewRepairPolicyMatcher(ctx, cloudProvider))
+	// A provider whose RepairPolicies do not satisfy the matcher is a provider configuration error, so report it and
+	// exit rather than panicking: the accumulated reasons are the whole of the work, and a goroutine dump buries them.
+	repairPolicyMatcher, err := health.NewRepairPolicyMatcher(ctx, cloudProvider)
+	if err != nil {
+		log.FromContext(ctx).Error(err, "failed building the node repair policy matcher")
+		os.Exit(1)
+	}
 	clusterState := state.NewCluster(op.Clock, op.GetClient(), cloudProvider, state.WithRepairPolicyMatcher(repairPolicyMatcher))
 	op.
 		WithControllers(ctx, controllers.NewControllers(
