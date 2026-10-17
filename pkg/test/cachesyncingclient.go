@@ -37,8 +37,12 @@ type CacheSyncingClient struct {
 	client.Client
 }
 
-// pollForCacheSync blocks until condition returns done or the attempts are exhausted.
-// Attempts are bounded by count rather than wall time so slow (e.g. -race, coverage) runs still sync.
+// pollForCacheSync blocks until condition returns done, the attempts are exhausted, or ctx is done.
+// The interval stays flat at 10ms because Factor is 0, so this is 100 attempts over ~1s rather than
+// a growing backoff. A ctx carrying a deadline cuts the poll short of its count:
+// ExponentialBackoffWithContext selects on ctx.Done() before the first attempt and between every
+// retry, so a cancelled ctx yields zero attempts. Every caller reaches this through a suite context
+// that has no deadline and is never cancelled, so the full count runs today.
 // If we exhaust our attempts, the assumption is that the cache updated to a newer version
 // and we missed the current WRITE operation that we just performed.
 func pollForCacheSync(ctx context.Context, condition wait.ConditionWithContextFunc) {
