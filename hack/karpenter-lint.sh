@@ -322,7 +322,10 @@ check_double_log() {
     while IFS= read -r file; do
         # Check if changed lines contain both .Error(err and return.*err patterns
         has_log_err=$(changed_lines "$file" | grep -c '\.Error(err' || true)
-        has_return_err=$(changed_lines "$file" | grep -c 'return.*fmt\.Errorf\|return.*err$\|return.*err)' || true)
+        # ERE, not BRE: BSD grep anchors '$' only at the very end of a BRE, so in
+        # 'a\|b$\|c' the middle '$' matches a literal dollar sign and the bare
+        # 'return err' arm never fires. ')' needs escaping under ERE.
+        has_return_err=$(changed_lines "$file" | grep -cE 'return.*fmt\.Errorf|return.*err$|return.*err\)' || true)
         if [ "$has_log_err" -gt 0 ] && [ "$has_return_err" -gt 0 ]; then
             warn "A8: double-log" "$file: may be logging AND returning errors (controller-runtime auto-logs returned errors)"
             found=1
