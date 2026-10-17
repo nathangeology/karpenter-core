@@ -92,13 +92,14 @@ var (
 )
 
 // client-go request dimensions. These match the dimensions operatorpkg's
-// LatencyAdapter emits, derived from the request's URL template.
+// LatencyAdapter emits. Every value but the verb is a segment of the request's
+// URL path, so they carry the path's spelling rather than a Go type name.
 var (
-	clientVerb        = opmetrics.Label{Name: "verb", Help: "The action of the Kubernetes API request, e.g. `GET`, `LIST`, `CREATE`, `UPDATE`."}
-	clientGroup       = opmetrics.Label{Name: "group", Help: "The API group of the request's target resource."}
-	clientVersion     = opmetrics.Label{Name: "version", Help: "The API version of the request's target resource."}
-	clientKind        = opmetrics.Label{Name: "kind", Help: "The kind of the request's target resource."}
-	clientSubresource = opmetrics.Label{Name: "subresource", Help: "The subresource of the request, if any."}
+	clientVerb        = opmetrics.Label{Name: "verb", Help: "The action of the Kubernetes API request. The adapter remaps the HTTP method, so a `POST` reports `CREATE` and a `GET` reports `LIST` when the path carries no name. Values are `CREATE`, `GET`, `LIST`, `UPDATE`, `DELETE` and `PATCH`."}
+	clientGroup       = opmetrics.Label{Name: opmetrics.LabelGroup, Help: "The API group of the request's target resource, e.g. `karpenter.sh`. Empty for the core API."}
+	clientVersion     = opmetrics.Label{Name: "version", Help: "The API version of the request's target resource, e.g. `v1`."}
+	clientKind        = opmetrics.Label{Name: opmetrics.LabelKind, Help: "The resource segment of the request path, e.g. `nodepools`. This is the plural lowercase resource name, not the Kind `NodePool`."}
+	clientSubresource = opmetrics.Label{Name: "subresource", Help: "The subresource of the request, e.g. `status`. Empty when the request targets the resource itself."}
 )
 
 var (
