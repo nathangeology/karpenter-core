@@ -35,9 +35,14 @@ func main() {
 	lo.Must0(cloudprovider.SetCapacityTypeClassResolver(kwok.CapacityTypes))
 	cloudprovider.SetNodeClaimPriceProvider(kwok.NodeClaimPriceProvider{})
 	ctx, op := operator.NewOperator()
+	// Both of ConstructInstanceTypes' error paths return a nil list, and there is no fallback: an unreadable
+	// --instance-types-file-path or malformed JSON would otherwise start the operator offering zero instance types,
+	// which leaves every NodePool skipped and every pod pending. Falling back to the embedded defaults was rejected
+	// because it silently ignores a file the operator was explicitly asked to use, so report it and exit.
 	instanceTypes, err := kwok.ConstructInstanceTypes(ctx)
 	if err != nil {
 		log.FromContext(ctx).Error(err, "failed constructing instance types")
+		os.Exit(1)
 	}
 
 	overlayUndecoratedCloudProvider := kwok.NewCloudProvider(ctx, op.GetClient(), instanceTypes)
