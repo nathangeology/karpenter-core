@@ -89,7 +89,7 @@ func benchmarkForEachDomain(b *testing.B, domains, taintGroupsPerDomain int, tol
 	for d := 0; d < domains; d++ {
 		domain := fmt.Sprintf("test-zone-%d", d)
 		for t := 0; t < taintGroupsPerDomain; t++ {
-			dg.Insert(domain, corev1.Taint{
+			dg.Insert(domain, nil, corev1.Taint{
 				Key:    fmt.Sprintf("bench.example.com/taint-%d", t),
 				Value:  "true",
 				Effect: corev1.TaintEffectNoSchedule,
@@ -110,7 +110,7 @@ func benchmarkForEachDomain(b *testing.B, domains, taintGroupsPerDomain int, tol
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		count := 0
-		dg.ForEachDomain(pod, corev1.NodeInclusionPolicyHonor, func(domain string) {
+		dg.ForEachDomain(pod, nil, corev1.NodeInclusionPolicyHonor, corev1.NodeInclusionPolicyHonor, func(domain string) {
 			count++
 		})
 		_ = count
