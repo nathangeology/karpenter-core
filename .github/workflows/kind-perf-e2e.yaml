@@ -37,6 +37,8 @@ jobs:
             focus: "Balanced Churn Chain"
           - name: "Balanced Heterogeneous NodePools"
             focus: "Balanced Heterogeneous NodePools"
+          - name: "Many Diverse NodePools"
+            focus: "Many Diverse NodePools"
     uses: ./.github/workflows/e2e.yaml
     with:
       suite: Performance
