@@ -80,8 +80,10 @@ var manyNodePoolsToleration = corev1.Toleration{Key: manyNodePoolsTaintKey, Oper
 //     NodePool to a rotating zone, architecture, and instance-size ceiling. On real cloud providers these
 //     dimensions vary by account/region, so we keep to the portable capacity-type dimension there.
 //
-// Pods created by the test carry no node requirements, so they remain schedulable against any NodePool the
-// scheduler selects (every NodePool retains at least one viable, affordable offering).
+// Every NodePool retains at least one viable, affordable offering. The first spec's pods carry no node
+// requirements, so the scheduler is free to pick any NodePool for them; the second spec instead pins each
+// pod to one NodePool by name. Both rely on the tainted third of the set staying usable, which is what
+// manyNodePoolsToleration is for.
 func diverseNodePools(count int) []*v1.NodePool {
 	capacityTypes := [][]string{
 		{v1.CapacityTypeSpot},
@@ -272,6 +274,12 @@ var _ = Describe("Performance", Label(debug.NoWatch), func() {
 			// Sanity: pinning to distinct NodePools should provision roughly one node per targeted NodePool.
 			Expect(scaleOutReport.TotalNodes).To(BeNumerically(">", manyNodePoolsTargetPools/2),
 				"Pinned pods should provision nodes across many distinct NodePools")
+			nodePoolsWithNodes := lo.Uniq(lo.FilterMap(env.Monitor.CreatedNodes(), func(n *corev1.Node, _ int) (string, bool) {
+				name, ok := n.Labels[v1.NodePoolLabelKey]
+				return name, ok && name != ""
+			}))
+			Expect(nodePoolsWithNodes).To(HaveLen(manyNodePoolsTargetPools),
+				"Pinned pods should provision nodes on exactly the targeted NodePools, one NodePool each")
 
 			Expect(scaleOutReport.KarpenterP95HeapMB).To(BeNumerically("<", HeapThreshold("manyNodePoolsTargeted/scaleOut", 170)),
 				"Karpenter controller P95 live heap should stay bounded when targeting many NodePools")
