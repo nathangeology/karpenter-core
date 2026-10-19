@@ -140,6 +140,8 @@ var _ = Describe("TerminateFirstDrift", func() {
 			Expect(cmds[0].Decision()).To(Equal(disruption.TerminateFirstDecision))
 			ExpectMetricCounterValue(disruption.TerminateFirstDecisionsTotal, 1, map[string]string{metrics.NodePoolLabel: nodePool.Name, metrics.ReasonLabel: "drifted", disruption.TerminateFirstReasonDim.Name: string(disruption.TerminateFirstStaticAtLimit)})
 			Expect(cmds[0].Replacements).To(HaveLen(0))
+			// Terminating first is the action taken, so the candidate is not also reported Blocked
+			Expect(recorder.Calls(events.DisruptionBlocked)).To(Equal(0))
 		})
 
 		It("blocks instead of terminating first when the static NodePool at its node limit is NotReady", func() {

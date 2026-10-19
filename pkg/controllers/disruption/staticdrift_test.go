@@ -403,8 +403,11 @@ var _ = Describe("StaticDrift", func() {
 			// Since we cannot acquire limits, we should not have any drifts
 			cmds := queue.GetCommands()
 			Expect(cmds).To(HaveLen(0))
-			// The budget-allowed candidate is reported Blocked rather than silently skipped
-			Expect(recorder.Calls(events.DisruptionBlocked)).To(BeNumerically(">", 0))
+			// Every budget-allowed candidate is reported Blocked rather than silently skipped, so the count is
+			// exact: the budget is 100% of 5 nodes and Blocked publishes one event on the Node and one on the
+			// NodeClaim. Asserting only that the count is positive leaves the per-candidate loop unpinned.
+			Expect(recorder.Calls(events.DisruptionBlocked)).To(Equal(10))
+			Expect(recorder.DetectedEvent("static NodePool is at its node limit and cannot stage a replacement")).To(BeTrue())
 		})
 		It("should drift nodes when we can acquire limits", func() {
 			nodePool.Spec.Replicas = new(int64(5))
