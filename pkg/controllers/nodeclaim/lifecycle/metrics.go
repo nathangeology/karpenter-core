@@ -24,7 +24,7 @@ import (
 	"sigs.k8s.io/karpenter/pkg/metrics"
 )
 
-var InstanceTerminationDurationSeconds = opmetrics.NewPrometheusHistogram(
+var InstanceTerminationDurationSeconds = metrics.NodePoolScoped(opmetrics.NewPrometheusHistogram(
 	crmetrics.Registry,
 	prometheus.HistogramOpts{
 		Namespace: metrics.Namespace,
@@ -35,9 +35,9 @@ var InstanceTerminationDurationSeconds = opmetrics.NewPrometheusHistogram(
 	},
 	[]opmetrics.Label{metrics.NodePool},
 	opmetrics.Beta,
-)
+))
 
-var NodeClaimTerminationDurationSeconds = opmetrics.NewPrometheusHistogram(
+var NodeClaimTerminationDurationSeconds = metrics.NodePoolScoped(opmetrics.NewPrometheusHistogram(
 	crmetrics.Registry,
 	prometheus.HistogramOpts{
 		Namespace: metrics.Namespace,
@@ -47,4 +47,4 @@ var NodeClaimTerminationDurationSeconds = opmetrics.NewPrometheusHistogram(
 		Buckets:   prometheus.ExponentialBuckets(1, 2, 12)}, //The threshold values generated here are 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024. 2048
 	[]opmetrics.Label{metrics.NodePool},
 	opmetrics.Beta,
-)
+))

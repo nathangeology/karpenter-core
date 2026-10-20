@@ -100,7 +100,7 @@ var MethodDuration = opmetrics.NewPrometheusHistogram(
 )
 
 var (
-	ErrorsTotal = opmetrics.NewPrometheusCounter(
+	ErrorsTotal = metrics.NodePoolScoped(opmetrics.NewPrometheusCounter(
 		crmetrics.Registry,
 		prometheus.CounterOpts{
 			Namespace: metrics.Namespace,
@@ -116,7 +116,7 @@ var (
 			metrics.NodePool,
 		},
 		opmetrics.Beta,
-	)
+	))
 )
 
 type decorator struct {

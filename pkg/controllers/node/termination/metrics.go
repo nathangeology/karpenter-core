@@ -29,7 +29,7 @@ import (
 const dayDuration = time.Hour * 24
 
 var (
-	DurationSeconds = opmetrics.NewPrometheusSummary(
+	DurationSeconds = metrics.NodePoolScoped(opmetrics.NewPrometheusSummary(
 		crmetrics.Registry,
 		prometheus.SummaryOpts{
 			Namespace:  metrics.Namespace,
@@ -40,8 +40,8 @@ var (
 		},
 		[]opmetrics.Label{metrics.NodePool},
 		opmetrics.Beta,
-	)
-	NodesDrainedTotal = opmetrics.NewPrometheusCounter(
+	))
+	NodesDrainedTotal = metrics.NodePoolScoped(opmetrics.NewPrometheusCounter(
 		crmetrics.Registry,
 		prometheus.CounterOpts{
 			Namespace: metrics.Namespace,
@@ -51,8 +51,8 @@ var (
 		},
 		[]opmetrics.Label{metrics.NodePool},
 		opmetrics.Alpha,
-	)
-	NodeLifetimeDurationSeconds = opmetrics.NewPrometheusHistogram(
+	))
+	NodeLifetimeDurationSeconds = metrics.NodePoolScoped(opmetrics.NewPrometheusHistogram(
 		crmetrics.Registry,
 		prometheus.HistogramOpts{
 			Namespace: metrics.Namespace,
@@ -88,5 +88,5 @@ var (
 		},
 		[]opmetrics.Label{metrics.NodePool},
 		opmetrics.Alpha,
-	)
+	))
 )

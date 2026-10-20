@@ -18,14 +18,17 @@ package nodepool
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
 	opmetrics "github.com/awslabs/operatorpkg/metrics"
+	"github.com/awslabs/operatorpkg/serrors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/samber/lo"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/klog/v2"
 	controllerruntime "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -38,6 +41,7 @@ import (
 	"sigs.k8s.io/karpenter/pkg/metrics"
 	"sigs.k8s.io/karpenter/pkg/operator/injection"
 	"sigs.k8s.io/karpenter/pkg/state/cost"
+	nodeclaimutils "sigs.k8s.io/karpenter/pkg/utils/nodeclaim"
 	nodepoolutils "sigs.k8s.io/karpenter/pkg/utils/nodepool"
 )
 
@@ -108,6 +112,7 @@ func (c *Controller) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	if err := c.kubeClient.Get(ctx, req.NamespacedName, nodePool); err != nil {
 		if errors.IsNotFound(err) {
 			c.metricStore.Delete(req.String())
+			return c.deleteNodePoolScopedMetrics(ctx, req.Name)
 		}
 		return reconcile.Result{}, client.IgnoreNotFound(err)
 	}
@@ -117,6 +122,21 @@ func (c *Controller) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	c.metricStore.Update(req.String(), c.buildMetrics(nodePool))
 	// periodically update our metrics per nodepool even if nothing has changed
 	return reconcile.Result{RequeueAfter: 10 * time.Second}, nil
+}
+
+// deleteNodePoolScopedMetrics drops the deleted NodePool's children from every NodePool scoped
+// metric, once the NodePool has no NodeClaims left to write more of them.
+func (c *Controller) deleteNodePoolScopedMetrics(ctx context.Context, nodePoolName string) (reconcile.Result, error) {
+	nodeClaims, err := nodeclaimutils.ListManaged(ctx, c.kubeClient, c.cloudProvider,
+		nodeclaimutils.ForNodePool(nodePoolName), client.UnsafeDisableDeepCopy)
+	if err != nil {
+		return reconcile.Result{}, serrors.Wrap(fmt.Errorf("listing nodeclaims, %w", err), "NodePool", klog.KRef("", nodePoolName))
+	}
+	if len(nodeClaims) > 0 {
+		return reconcile.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+	metrics.DeleteNodePool(nodePoolName)
+	return reconcile.Result{}, nil
 }
 
 func (c *Controller) buildMetrics(nodePool *v1.NodePool) (res []*metrics.StoreMetric) {

@@ -30,7 +30,7 @@ const (
 )
 
 var (
-	NodeClaimsCreatedTotal = opmetrics.NewPrometheusCounter(
+	NodeClaimsCreatedTotal = NodePoolScoped(opmetrics.NewPrometheusCounter(
 		crmetrics.Registry,
 		prometheus.CounterOpts{
 			Namespace: Namespace,
@@ -44,8 +44,8 @@ var (
 			MinValuesRelaxed,
 		},
 		opmetrics.GA,
-	)
-	NodeClaimsTerminatedTotal = opmetrics.NewPrometheusCounter(
+	))
+	NodeClaimsTerminatedTotal = NodePoolScoped(opmetrics.NewPrometheusCounter(
 		crmetrics.Registry,
 		prometheus.CounterOpts{
 			Namespace: Namespace,
@@ -59,8 +59,8 @@ var (
 			Zone,
 		},
 		opmetrics.GA,
-	)
-	NodeClaimsDisruptedTotal = opmetrics.NewPrometheusCounter(
+	))
+	NodeClaimsDisruptedTotal = NodePoolScoped(opmetrics.NewPrometheusCounter(
 		crmetrics.Registry,
 		prometheus.CounterOpts{
 			Namespace: Namespace,
@@ -76,8 +76,8 @@ var (
 			TerminationMode,
 		},
 		opmetrics.Alpha,
-	)
-	PodsDisruptionInitiatedTotal = opmetrics.NewPrometheusCounter(
+	))
+	PodsDisruptionInitiatedTotal = NodePoolScoped(opmetrics.NewPrometheusCounter(
 		crmetrics.Registry,
 		prometheus.CounterOpts{
 			Namespace: Namespace,
@@ -93,8 +93,8 @@ var (
 			TerminationMode,
 		},
 		opmetrics.Alpha,
-	)
-	NodesCreatedTotal = opmetrics.NewPrometheusCounter(
+	))
+	NodesCreatedTotal = NodePoolScoped(opmetrics.NewPrometheusCounter(
 		crmetrics.Registry,
 		prometheus.CounterOpts{
 			Namespace: Namespace,
@@ -107,8 +107,8 @@ var (
 			Zone,
 		},
 		opmetrics.GA,
-	)
-	NodesTerminatedTotal = opmetrics.NewPrometheusCounter(
+	))
+	NodesTerminatedTotal = NodePoolScoped(opmetrics.NewPrometheusCounter(
 		crmetrics.Registry,
 		prometheus.CounterOpts{
 			Namespace: Namespace,
@@ -121,5 +121,5 @@ var (
 			Zone,
 		},
 		opmetrics.GA,
-	)
+	))
 )

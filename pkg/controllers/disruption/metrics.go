@@ -152,7 +152,7 @@ var (
 		[]opmetrics.Label{DecisionDim, metrics.DisruptionReason, ConsolidationType},
 		opmetrics.GA,
 	)
-	NodepoolDecisionsPerformed = opmetrics.NewPrometheusCounter(
+	NodepoolDecisionsPerformed = metrics.NodePoolScoped(opmetrics.NewPrometheusCounter(
 		crmetrics.Registry,
 		prometheus.CounterOpts{
 			Namespace: metrics.Namespace,
@@ -162,8 +162,8 @@ var (
 		},
 		[]opmetrics.Label{metrics.NodePool, DecisionDim, metrics.DisruptionReason, ConsolidationType},
 		opmetrics.Alpha,
-	)
-	TerminateFirstDecisionsTotal = opmetrics.NewPrometheusCounter(
+	))
+	TerminateFirstDecisionsTotal = metrics.NodePoolScoped(opmetrics.NewPrometheusCounter(
 		crmetrics.Registry,
 		prometheus.CounterOpts{
 			Namespace: metrics.Namespace,
@@ -173,7 +173,7 @@ var (
 		},
 		[]opmetrics.Label{metrics.NodePool, metrics.DisruptionReason, TerminateFirstReasonDim},
 		opmetrics.Alpha,
-	)
+	))
 	EligibleNodes = opmetrics.NewPrometheusGauge(
 		crmetrics.Registry,
 		prometheus.GaugeOpts{
@@ -207,7 +207,7 @@ var (
 		[]opmetrics.Label{ConsolidationType},
 		opmetrics.Alpha,
 	)
-	NodePoolAllowedDisruptions = opmetrics.NewPrometheusGauge(
+	NodePoolAllowedDisruptions = metrics.NodePoolScoped(opmetrics.NewPrometheusGauge(
 		crmetrics.Registry,
 		prometheus.GaugeOpts{
 			Namespace: metrics.Namespace,
@@ -217,8 +217,8 @@ var (
 		},
 		[]opmetrics.Label{metrics.NodePool, metrics.DisruptionReason},
 		opmetrics.GA,
-	)
-	NodePoolNodesConsumingBudgets = opmetrics.NewPrometheusGauge(
+	))
+	NodePoolNodesConsumingBudgets = metrics.NodePoolScoped(opmetrics.NewPrometheusGauge(
 		crmetrics.Registry,
 		prometheus.GaugeOpts{
 			Namespace: metrics.Namespace,
@@ -228,7 +228,7 @@ var (
 		},
 		[]opmetrics.Label{metrics.NodePool, metrics.DisruptionReason},
 		opmetrics.Alpha,
-	)
+	))
 	DisruptionQueueFailuresTotal = opmetrics.NewPrometheusCounter(
 		crmetrics.Registry,
 		prometheus.CounterOpts{
@@ -240,7 +240,7 @@ var (
 		[]opmetrics.Label{DecisionDim, metrics.DisruptionReason, ConsolidationType},
 		opmetrics.Beta,
 	)
-	ConsolidationScoreHistogram = opmetrics.NewPrometheusHistogram(
+	ConsolidationScoreHistogram = metrics.NodePoolScoped(opmetrics.NewPrometheusHistogram(
 		crmetrics.Registry,
 		prometheus.HistogramOpts{
 			Namespace: metrics.Namespace,
@@ -250,8 +250,8 @@ var (
 		},
 		[]opmetrics.Label{ApprovalDim, metrics.NodePool, Policy},
 		opmetrics.Alpha,
-	)
-	ConsolidationMovesTotal = opmetrics.NewPrometheusCounter(
+	))
+	ConsolidationMovesTotal = metrics.NodePoolScoped(opmetrics.NewPrometheusCounter(
 		crmetrics.Registry,
 		prometheus.CounterOpts{
 			Namespace: metrics.Namespace,
@@ -260,11 +260,11 @@ var (
 		},
 		[]opmetrics.Label{ApprovalDim, metrics.NodePool, Policy},
 		opmetrics.Alpha,
-	)
+	))
 	// NodeClaimsUnhealthyDisruptedTotal preserves the per-condition/per-image breakdown the retired node.health
 	// controller emitted, which the reason-labeled karpenter_nodeclaims_disrupted_total loses. Labeled by the repair
 	// condition, the owning NodePool, the capacity type, and the image ID.
-	NodeClaimsUnhealthyDisruptedTotal = opmetrics.NewPrometheusCounter(
+	NodeClaimsUnhealthyDisruptedTotal = metrics.NodePoolScoped(opmetrics.NewPrometheusCounter(
 		crmetrics.Registry,
 		prometheus.CounterOpts{
 			Namespace: metrics.Namespace,
@@ -274,7 +274,7 @@ var (
 		},
 		[]opmetrics.Label{RepairCondition, metrics.NodePool, metrics.CapacityType, ImageID, metrics.TerminationMode},
 		opmetrics.Alpha,
-	)
+	))
 )
 
 const (

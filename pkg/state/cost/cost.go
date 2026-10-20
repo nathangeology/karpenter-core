@@ -42,7 +42,7 @@ import (
 var NecessaryLabels = []string{corev1.LabelInstanceTypeStable, v1.CapacityTypeLabelKey, corev1.LabelTopologyZone, v1.NodePoolLabelKey}
 
 var (
-	CostTrackingErrorsTotal = opmetrics.NewPrometheusCounter(
+	CostTrackingErrorsTotal = metrics.NodePoolScoped(opmetrics.NewPrometheusCounter(
 		crmetrics.Registry,
 		prometheus.CounterOpts{
 			Namespace: metrics.Namespace,
@@ -54,7 +54,7 @@ var (
 			metrics.NodePool,
 		},
 		opmetrics.Alpha,
-	)
+	))
 )
 
 // ClusterCost tracks the cost of compute resources across all NodePools in a cluster.
