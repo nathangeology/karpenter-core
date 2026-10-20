@@ -365,3 +365,16 @@ var _ = Describe("Store", func() {
 		})
 	})
 })
+
+var _ = Describe("NodePoolScoped", func() {
+	It("should panic on a metric that does not carry the nodepool dimension", func() {
+		Expect(func() {
+			metrics.NodePoolScoped(opmetrics.NewPrometheusGauge(
+				prometheus.NewRegistry(),
+				prometheus.GaugeOpts{Name: "test_gauge_unscoped"},
+				[]opmetrics.Label{{Name: "label_1"}},
+				opmetrics.Alpha,
+			))
+		}).To(PanicWith(ContainSubstring(metrics.NodePoolLabel)))
+	})
+})
