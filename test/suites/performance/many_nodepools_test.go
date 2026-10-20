@@ -305,6 +305,8 @@ var _ = Describe("Performance", Label(debug.NoWatch), func() {
 			Expect(consolidationReport.TestType).To(Equal("consolidation"), "Should be detected as consolidation test")
 			Expect(consolidationReport.TotalPods).To(Equal(scaleInPools), "Should have the scaled-in pod count")
 			Expect(consolidationReport.PodsNetChange).To(Equal(scaleInPools-manyNodePoolsTargetPools), "Should reflect the net pod reduction")
+			Expect(consolidationReport.NodesNetChange).To(BeNumerically("<=", scaleInPools-manyNodePoolsTargetPools),
+				"Zeroing out a deployment should empty its NodePool and reclaim that NodePool's node")
 
 			Expect(consolidationReport.KarpenterP95HeapMB).To(BeNumerically("<", HeapThreshold("manyNodePoolsTargeted/consolidation", 180)),
 				"Karpenter controller P95 live heap should stay bounded during targeted consolidation")
