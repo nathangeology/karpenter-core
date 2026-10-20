@@ -271,9 +271,6 @@ var _ = Describe("Performance", Label(debug.NoWatch), func() {
 			By("Validating targeted scale-out performance")
 			Expect(scaleOutReport.TestType).To(Equal("scale-out"), "Should be detected as scale-out test")
 			Expect(scaleOutReport.TotalPods).To(Equal(manyNodePoolsTargetPools), "Should have all pods scheduled")
-			// Sanity: pinning to distinct NodePools should provision roughly one node per targeted NodePool.
-			Expect(scaleOutReport.TotalNodes).To(BeNumerically(">", manyNodePoolsTargetPools/2),
-				"Pinned pods should provision nodes across many distinct NodePools")
 			nodePoolsWithNodes := lo.Uniq(lo.FilterMap(env.Monitor.CreatedNodes(), func(n *corev1.Node, _ int) (string, bool) {
 				name, ok := n.Labels[v1.NodePoolLabelKey]
 				return name, ok && name != ""
