@@ -3,33 +3,61 @@ set -euo pipefail
 
 # Metrics Validation
 #
-# Any metric carrying the NodePool dimension must be wrapped in metrics.NodePoolScoped, so that
-# metrics.DeleteNodePool drops its children once a deleted NodePool has no NodeClaims left.
-# Unwrapped, those children outlive the NodePool for the process lifetime.
+# Two checks, one per way the NodePool dimension reaches a metric.
+#
+# Declared in this repository. Any metric carrying the NodePool dimension must be wrapped in
+# metrics.NodePoolScoped, so that metrics.DeleteNodePool drops its children once a deleted
+# NodePool has no NodeClaims left. Unwrapped, those children outlive the NodePool for the process
+# lifetime.
 #
 # A registry sweep cannot enforce this. prometheus.Registry exposes Gather() but not its
 # collectors, and Gather() only returns families that already have a child, so a metric that has
 # never been written is invisible at runtime. Hence a source-shape check.
 #
-# Two classes are reported:
+# Built by an operatorpkg status controller. status.New*Controller declares its own metrics and
+# derives their dimensions from the label keys given to status.WithLabels and the field keys given
+# to status.WithFields, so a NodePool dimension arrives with no declaration in this repository for
+# the first check to read. operatorpkg's own cleanupNotFound drops three of the six, and keys them
+# on the object's namespace and name, so the condition duration, condition transitions and
+# termination duration series keyed on a deleted NodePool need
+# metrics.NodePoolScoped(Generic)StatusMetrics to go with it.
 #
-#   UNSCOPED  the label list is an inline []opmetrics.Label{...} that names the NodePool
-#             dimension, and the constructor is not wrapped in NodePoolScoped(.
-#   OPAQUE    the label list is not an inline slice, so the dimension cannot be decided from
-#             source. Treated as a finding rather than a pass: an opaque label list evades a
-#             source check in exactly the shape this script exists to close.
+# WithGaugeLabels and WithGaugeFields are deliberately not checked. They feed only the three
+# gauges cleanupNotFound already drops, and the wrapper panics on a dimension the three reaped
+# metrics do not carry, so requiring it there would turn a non-leak into a startup crash.
+#
+# Four classes are reported:
+#
+#   UNSCOPED     a declared metric's label list is an inline []opmetrics.Label{...} that names the
+#                NodePool dimension, and the constructor is not wrapped in NodePoolScoped(.
+#   OPAQUE       a declared metric's label list is not an inline slice, so the dimension cannot be
+#                decided from source. Treated as a finding rather than a pass: an opaque label
+#                list evades a source check in exactly the shape this script exists to close.
+#   UNREAPED     a status controller is given the NodePool label key and the construction is not
+#                wrapped in metrics.NodePoolScoped(Generic)StatusMetrics.
+#   OPAQUE_KEYS  an unwrapped status controller's options cannot be read from source, so its
+#                NodePool dimension cannot be decided. Three shapes: WithLabels or WithFields
+#                names no *LabelKey constant, it spells a key out as a string literal, or an
+#                option past the client and recorder is not spelled at the call at all -- a
+#                variable, or a slice of options spread with ... -- which would otherwise read as
+#                a construction with no object-derived dimension and pass. Same treatment as
+#                OPAQUE. Reported only when unwrapped, since a wrapper verifies its own dimension
+#                by panicking at construction when the reaped metrics do not carry it.
 #
 # String literals, rune literals and comments are stripped before the call is parsed. Both
 # hazards are live in the tree: Help strings contain the word NodePool, and Help strings contain
 # parentheses that would otherwise desync the paren matcher. Stripping is load-bearing, not
 # defensive: fed raw lines the parser loses every declaration that follows an unbalanced paren.
 #
-# The NodePoolScoped( wrapper is recognised on the constructor's own line only. Spread over two
-# lines it reads as unwrapped, which is a false FAIL rather than a false pass, so the check stays
-# fail-closed and the fix is to join the lines.
+# Both wrappers are recognised on the constructor's own line only. Spread over two lines they read
+# as unwrapped, which is a false FAIL rather than a false pass, so the check stays fail-closed and
+# the fix is to join the lines. Only the status wrapper's presence is checked, never its label key
+# argument: a wrapper given a key the reaped metrics do not carry panics at construction, which
+# needs no gate.
 #
-# Exemptions are keyed "<path>:<metric Name literal>" and each carries its reason. An exemption
-# that matches no finding is itself an error, so the list cannot rot into a blanket.
+# Exemptions are keyed "<path>:<name>", where name is a declared metric's Name literal or a status
+# controller's constructor with its type parameter, and each carries its reason. An exemption that
+# matches no finding is itself an error, so the list cannot rot into a blanket.
 
 # --census prints the class of every metric declaration the parser saw, including the ones it
 # passed, so that a green run can be audited rather than trusted. The gate itself prints only
@@ -117,6 +145,69 @@ FINDINGS=$(
 
     function names(s,   t) { t = "#" s "#"; return (t ~ /[^A-Za-z0-9_]NodePool[^A-Za-z0-9_]/) }
 
+    function word(s, w,   t) { t = "#" s "#"; return (t ~ "[^A-Za-z0-9_]" w "[^A-Za-z0-9_]") }
+
+    # Whether any paren matched argument list of a call to fn( in s names the identifier key.
+    # Sets opaquekeys when some call names no *LabelKey constant at all, or carries a string
+    # literal sanitize has already emptied, so that a key reached through a variable or spelled
+    # out is a finding rather than a pass even alongside a readable one.
+    function optionkeys(s, fn, key,   needle, from, at, i, c, depth, args, n, found) {
+      needle = fn "("
+      n = length(s); from = 1; found = 0
+      while ((at = index(substr(s, from), needle)) > 0) {
+        i = from + at + length(needle) - 2
+        depth = 0; args = ""
+        for (; i <= n; i++) {
+          c = substr(s, i, 1)
+          if (c == "(") { depth++; if (depth == 1) continue }
+          else if (c == ")") { depth--; if (depth == 0) break }
+          if (depth >= 1) args = args c
+        }
+        if (word(args, key)) found = 1
+        else if (args !~ /LabelKey/ || index(args, "\"\"") > 0) opaquekeys = 1
+        from = i + 1
+        if (from > n) break
+      }
+      return found
+    }
+
+    # Whether every option the construction s takes past its client and its event recorder is
+    # spelled out at the call as an <ident>.With*/<ident>.Emit* constant or call. An option
+    # reached through a variable, or a slice of options spread with ..., is not readable, and
+    # without this it would leave WithLabels( absent from the body and so read as a construction
+    # with no object-derived dimension at all -- the shape the two live unwrapped constructions
+    # legitimately have.
+    function optsreadable(s,   i, c, depth, n, arg, idx, at) {
+      at = index(s, "(")
+      if (at == 0) return 1
+      n = length(s); depth = 0; arg = ""; idx = 0
+      for (i = at; i <= n; i++) {
+        c = substr(s, i, 1)
+        if (c == "(" || c == "[" || c == "{") { depth++; if (depth == 1) continue }
+        else if (c == ")" || c == "]" || c == "}") {
+          depth--
+          if (depth == 0) { return argreadable(arg, idx + 1) }
+        }
+        if (depth == 1 && c == ",") { idx++; if (!argreadable(arg, idx)) return 0; arg = ""; continue }
+        if (depth >= 1) arg = arg c
+      }
+      return 1
+    }
+
+    function argreadable(a, idx) {
+      gsub(/^[ \t]+|[ \t]+$/, "", a)
+      if (a == "") return 1
+      if (idx <= 2) return 1
+      if (a ~ /\.\.\.$/) return 0
+      return (a ~ /^[A-Za-z_][A-Za-z0-9_]*\.(With|Emit)[A-Za-z0-9_]*/)
+    }
+
+    function controllername(s, at,   t) {
+      t = substr(s, at)
+      if (match(t, /^[A-Za-z_][A-Za-z0-9_]*\.New[A-Za-z]*Controller\[[^]]*\]/)) return substr(t, RSTART, RLENGTH)
+      return "<unnamed>"
+    }
+
     function metricname(startln, stopln,   ln, m) {
       for (ln = startln; ln <= stopln; ln++) {
         if (match(raw[ln], /Name: *"[^"]*"/)) {
@@ -137,28 +228,53 @@ FINDINGS=$(
     { nlines++; raw[nlines] = $0; san[nlines] = sanitize($0) }
     END { if (NR > 0) process() }
 
-    function process(   ln, s, at, pre, b, slice, cls, nm) {
+    function process(   ln, s, at, pre, b, slice, cls, nm, wrapped) {
       for (ln = 1; ln <= nlines; ln++) {
         s = san[ln]
         at = match(s, /opmetrics\.NewPrometheus(Counter|Gauge|Histogram|Summary)/)
-        if (at == 0) continue
-        pre = substr(s, 1, at - 1)
-        b = body(ln, at)
-        if (endln == -1) {
-          printf "UNPARSED\t%s\t%d\t%s\t%s\n", file, ln, "<unparsed>", "paren matching ran off the end of the file"
+        if (at > 0) {
+          pre = substr(s, 1, at - 1)
+          b = body(ln, at)
+          if (endln == -1) {
+            printf "UNPARSED\t%s\t%d\t%s\t%s\n", file, ln, "<unparsed>", "paren matching ran off the end of the file"
+            continue
+          }
+          nm = metricname(ln, endln)
+          slice = labelslice(b)
+          if (!inline) {
+            cls = "OPAQUE"
+          } else if (names(slice)) {
+            cls = (pre ~ /NodePoolScoped\([ \t]*$/) ? "OK" : "UNSCOPED"
+          } else {
+            cls = "OK"
+          }
+          if (cls != "OK" || census) printf "%s\t%s\t%d\t%s\t%s\n", cls, file, ln, nm, (pre ~ /NodePoolScoped\([ \t]*$/ ? "scoped" : "unwrapped")
+          ln = endln
           continue
         }
-        nm = metricname(ln, endln)
-        slice = labelslice(b)
-        if (!inline) {
-          cls = "OPAQUE"
-        } else if (names(slice)) {
-          cls = (pre ~ /NodePoolScoped\([ \t]*$/) ? "OK" : "UNSCOPED"
-        } else {
-          cls = "OK"
+        at = match(s, /[A-Za-z_][A-Za-z0-9_]*\.New[A-Za-z]*Controller\[/)
+        if (at > 0) {
+          pre = substr(s, 1, at - 1)
+          b = body(ln, at)
+          if (endln == -1) {
+            printf "UNPARSED\t%s\t%d\t%s\t%s\n", file, ln, "<unparsed>", "paren matching ran off the end of the file"
+            continue
+          }
+          nm = controllername(s, at)
+          opaquekeys = 0
+          wrapped = (pre ~ /NodePoolScoped(Generic)?StatusMetrics\([^()]*,[ \t]*$/)
+          if (!optsreadable(b)) opaquekeys = 1
+          if (optionkeys(b, "WithLabels", "NodePoolLabelKey") || optionkeys(b, "WithFields", "NodePoolLabelKey")) {
+            cls = wrapped ? "OK" : "UNREAPED"
+          } else if (opaquekeys && !wrapped) {
+            cls = "OPAQUE_KEYS"
+          } else {
+            cls = "OK"
+          }
+          if (cls != "OK" || census) printf "%s\t%s\t%d\t%s\t%s\n", cls, file, ln, nm, (wrapped ? "wrapped" : "unwrapped")
+          ln = endln
+          continue
         }
-        if (cls != "OK" || census) printf "%s\t%s\t%d\t%s\t%s\n", cls, file, ln, nm, (pre ~ /NodePoolScoped\([ \t]*$/ ? "scoped" : "unwrapped")
-        ln = endln
       }
     }
   ' {} +
@@ -189,6 +305,14 @@ while IFS=$'\t' read -r class path line name _detail; do
   OPAQUE)
     echo "FAIL ${path}:${line} metric \"${name}\" passes a label list this check cannot read, so its NodePool dimension cannot be decided from source."
     echo "     Use an inline []opmetrics.Label{...}, or add \"${key}\" to the exemption list in $0 with a reason."
+    ;;
+  UNREAPED)
+    echo "FAIL ${path}:${line} ${name} gives the NodePool label key to status.WithLabels or status.WithFields but is not wrapped in metrics.NodePoolScopedStatusMetrics."
+    echo "     operatorpkg reaps only its three gauges, and only on the object's own deletion, so its condition and termination series will outlive a deleted NodePool. Wrap the construction, or add \"${key}\" to the exemption list in $0 with a reason."
+    ;;
+  OPAQUE_KEYS)
+    echo "FAIL ${path}:${line} ${name} passes options this check cannot read, so its NodePool dimension cannot be decided from source."
+    echo "     Name every label key with its constant, as in v1.NodePoolLabelKey, and spell each option out at the call rather than reaching it through a variable or spreading a slice with \"...\". Or add \"${key}\" to the exemption list in $0 with a reason."
     ;;
   *)
     echo "FAIL ${path}:${line} metric \"${name}\": ${class}."
