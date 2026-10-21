@@ -169,6 +169,7 @@ verify: ## Verify code. Includes codegen, docgen, dependencies, linting, formatt
 	hack/validation/requirements.sh
 	hack/validation/labels.sh
 	hack/validation/status.sh
+	hack/validation/metrics.sh
 	cp -r pkg/apis/crds kwok/charts
 	hack/kwok/requirements.sh
 	hack/dependabot.sh
